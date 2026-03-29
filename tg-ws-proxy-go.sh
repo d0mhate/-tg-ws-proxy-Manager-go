@@ -27,6 +27,9 @@ LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
 REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
 BINARY_NAME="${BINARY_NAME:-tg-ws-proxy-openwrt}"
+LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
+LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
+VERBOSE_FROM_ENV="${VERBOSE+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
 RELEASE_URL="${RELEASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/$BINARY_NAME}"
 RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
@@ -46,12 +49,14 @@ PERSIST_MANAGER_NAME="${PERSIST_MANAGER_NAME:-tg-ws-proxy-go.sh}"
 PERSISTENT_DIR_CANDIDATES="${PERSISTENT_DIR_CANDIDATES:-/root/tg-ws-proxy-go /opt/tg-ws-proxy-go /etc/tg-ws-proxy-go}"
 RC_COMMON_PATH="${RC_COMMON_PATH:-/etc/rc.common}"
 RC_D_DIR="${RC_D_DIR:-/etc/rc.d}"
+PROC_ROOT="${PROC_ROOT:-/proc}"
 LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-1080}"
 VERBOSE="${VERBOSE:-0}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
 PERSISTENT_SPACE_HEADROOM_KB="${PERSISTENT_SPACE_HEADROOM_KB:-2048}"
+PID_FILE="${PID_FILE:-$INSTALL_DIR/pid}"
 COMMAND_MODE="0"
 
 if [ "$#" -gt 0 ]; then
@@ -136,6 +141,31 @@ normalize_version() {
     return 1
 }
 
+read_config_value() {
+    key="$1"
+    [ -f "$PERSIST_CONFIG_FILE" ] || return 1
+    sed -n "s/^${key}='\(.*\)'$/\1/p" "$PERSIST_CONFIG_FILE" 2>/dev/null | head -n 1
+}
+
+load_saved_settings() {
+    [ -f "$PERSIST_CONFIG_FILE" ] || return 0
+
+    if [ -z "$LISTEN_HOST_FROM_ENV" ]; then
+        host="$(read_config_value HOST 2>/dev/null || true)"
+        [ -n "$host" ] && LISTEN_HOST="$host"
+    fi
+
+    if [ -z "$LISTEN_PORT_FROM_ENV" ]; then
+        port="$(read_config_value PORT 2>/dev/null || true)"
+        [ -n "$port" ] && LISTEN_PORT="$port"
+    fi
+
+    if [ -z "$VERBOSE_FROM_ENV" ]; then
+        verbose_value="$(read_config_value VERBOSE 2>/dev/null || true)"
+        [ -n "$verbose_value" ] && VERBOSE="$verbose_value"
+    fi
+}
+
 installed_version() {
     value="$(read_first_line "$VERSION_FILE" 2>/dev/null || true)"
     normalize_version "$value"
@@ -206,7 +236,11 @@ runtime_bin_path() {
 
 autostart_enabled() {
     [ -f "$INIT_SCRIPT_PATH" ] || return 1
-    ls "$RC_D_DIR"/*"$(basename "$INIT_SCRIPT_PATH")" >/dev/null 2>&1
+    ls "$RC_D_DIR"/*"$(basename "$INIT_SCRIPT_PATH")" >/dev/null 2>&1 || return 1
+    bin_path="$(persistent_bin_path 2>/dev/null || true)"
+    [ -n "$bin_path" ] || return 1
+    [ -x "$bin_path" ] || return 1
+    [ -r "$PERSIST_CONFIG_FILE" ]
 }
 
 select_persistent_dir() {
@@ -251,24 +285,69 @@ pause() {
     read dummy
 }
 
+canonical_path() {
+    path="$1"
+    readlink -f "$path" 2>/dev/null || printf "%s" "$path"
+}
+
+pid_matches_binary() {
+    pid="$1"
+    path="$2"
+    [ -n "$pid" ] || return 1
+    [ -n "$path" ] || return 1
+
+    canonical_bin="$(canonical_path "$path")"
+    proc_exe="$PROC_ROOT/$pid/exe"
+
+    if [ -e "$proc_exe" ]; then
+        proc_path="$(canonical_path "$proc_exe" 2>/dev/null || true)"
+        [ -n "$proc_path" ] || return 1
+        [ "$proc_path" = "$canonical_bin" ]
+        return $?
+    fi
+
+    if command -v ps >/dev/null 2>&1; then
+        ps -p "$pid" -o command= 2>/dev/null | grep -F -- "$path" >/dev/null 2>&1
+        return $?
+    fi
+
+    kill -0 "$pid" 2>/dev/null
+}
+
 is_running() {
     if ! command -v pgrep >/dev/null 2>&1; then
-        return 1
+        pid="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
+        [ -n "$pid" ] || return 1
+        runtime_path="$(runtime_bin_path 2>/dev/null || true)"
+        [ -n "$runtime_path" ] || return 1
+        pid_matches_binary "$pid" "$runtime_path"
+        return $?
     fi
     current_pids >/dev/null 2>&1
 }
 
 current_pids() {
-    if ! command -v pgrep >/dev/null 2>&1; then
-        return 1
-    fi
     all_pids=""
     for path in "$BIN_PATH" "$(persistent_bin_path 2>/dev/null || true)"; do
         [ -n "$path" ] || continue
+        pid_from_file="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
+        if [ -n "$pid_from_file" ] && pid_matches_binary "$pid_from_file" "$path"; then
+            all_pids="$all_pids
+$pid_from_file"
+            continue
+        fi
+
+        if ! command -v pgrep >/dev/null 2>&1; then
+            continue
+        fi
+
         pids="$(pgrep -f "$path" 2>/dev/null || true)"
         [ -n "$pids" ] || continue
-        all_pids="$all_pids
-$pids"
+        for pid in $pids; do
+            pid_matches_binary "$pid" "$path" || continue
+            all_pids="$all_pids
+$pid"
+        done
     done
 
     [ -n "$all_pids" ] || return 1
@@ -898,9 +977,12 @@ start_proxy() {
     interrupted="0"
     run_binary &
     child_pid="$!"
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
     trap 'interrupted="1"; kill -INT "$child_pid" 2>/dev/null' INT
     wait "$child_pid"
     code="$?"
+    rm -f "$PID_FILE"
     trap - INT
     printf "\n%s%s exited with code %s%s\n" "$C_YELLOW" "$APP_NAME" "$code" "$C_RESET"
     if [ "$interrupted" = "1" ]; then
@@ -993,6 +1075,7 @@ disable_autostart() {
 
 stop_running() {
     if ! is_running; then
+        rm -f "$PID_FILE"
         return 1
     fi
 
@@ -1009,6 +1092,7 @@ stop_running() {
             kill -9 "$pid" 2>/dev/null
         fi
     done
+    rm -f "$PID_FILE"
     return 0
 }
 
@@ -1054,6 +1138,7 @@ remove_all() {
     fi
     rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
     rm -f "$SOURCE_MANAGER_SCRIPT"
+    rm -f "$PID_FILE"
     rm -rf "$PERSIST_STATE_DIR"
     rm -f "$INIT_SCRIPT_PATH"
     rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
@@ -1073,7 +1158,7 @@ toggle_verbose() {
 }
 
 menu_proxy_action_label() {
-    if is_running; then
+    if [ "$1" = "1" ]; then
         printf "Stop proxy"
     else
         printf "Start proxy"
@@ -1081,7 +1166,7 @@ menu_proxy_action_label() {
 }
 
 menu_autostart_action_label() {
-    if autostart_enabled; then
+    if [ "$1" = "1" ]; then
         printf "Disable autostart"
     else
         printf "Enable autostart"
@@ -1089,13 +1174,13 @@ menu_autostart_action_label() {
 }
 
 show_menu_summary() {
-    if is_running; then
+    if [ "$1" = "1" ]; then
         proxy_state="${C_GREEN}running${C_RESET}"
     else
         proxy_state="${C_RED}stopped${C_RESET}"
     fi
 
-    if autostart_enabled; then
+    if [ "$2" = "1" ]; then
         autostart_state="${C_GREEN}enabled${C_RESET}"
     else
         autostart_state="${C_RED}disabled${C_RESET}"
@@ -1171,16 +1256,26 @@ show_help() {
 }
 
 menu() {
+    running_now="0"
+    if is_running; then
+        running_now="1"
+    fi
+
+    autostart_now="0"
+    if autostart_enabled; then
+        autostart_now="1"
+    fi
+
     show_header
     show_current_version
     printf "\n"
     show_telegram_settings
     printf "\n"
-    show_menu_summary
+    show_menu_summary "$running_now" "$autostart_now"
     printf "\n%sActions%s\n" "$C_BOLD" "$C_RESET"
     printf "  1) Setup / Update\n"
-    printf "  2) %s\n" "$(menu_proxy_action_label)"
-    printf "  3) %s\n" "$(menu_autostart_action_label)"
+    printf "  2) %s\n" "$(menu_proxy_action_label "$running_now")"
+    printf "  3) %s\n" "$(menu_autostart_action_label "$autostart_now")"
     printf "  4) Show Telegram SOCKS5 settings\n"
     printf "  5) Advanced\n"
     printf "  Enter) Exit\n\n"
@@ -1190,14 +1285,14 @@ menu() {
     case "$choice" in
         1) update_binary ;;
         2)
-            if is_running; then
+            if [ "$running_now" = "1" ]; then
                 stop_proxy
             else
                 start_proxy
             fi
             ;;
         3)
-            if autostart_enabled; then
+            if [ "$autostart_now" = "1" ]; then
                 disable_autostart
             else
                 enable_autostart
@@ -1208,6 +1303,8 @@ menu() {
         *) exit 0 ;;
     esac
 }
+
+load_saved_settings
 
 if [ "$COMMAND_MODE" = "1" ]; then
     case "$1" in

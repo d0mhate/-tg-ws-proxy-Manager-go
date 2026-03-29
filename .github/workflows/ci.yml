@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
@@ -19,8 +23,16 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: test
-        run: go test ./...
+      - name: test with coverage
+        run: go test -coverprofile=coverage.out ./...
+
+      - name: upload coverage to codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage.out
+          use_oidc: true
+          fail_ci_if_error: true
+          verbose: true
 
       - name: build local binary
         run: go build ./cmd/tg-ws-proxy

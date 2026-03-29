@@ -1,6 +1,8 @@
 # Go build outputs
 /tg-ws-proxy
 /build/
+/coverage.out
+/.gocache/
 
 # IDE
 .vscode/

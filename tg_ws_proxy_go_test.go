@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, path, content string, mode os.FileMode) {
@@ -109,6 +112,97 @@ func runManagerMenu(t *testing.T, env []string, input string) (string, error) {
 	cmd.Stdin = strings.NewReader(input)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+func envValue(env []string, key string) string {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix)
+		}
+	}
+	return ""
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	replaced := false
+	updated := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			if !replaced {
+				updated = append(updated, prefix+value)
+				replaced = true
+			}
+			continue
+		}
+		updated = append(updated, item)
+	}
+	if !replaced {
+		updated = append(updated, prefix+value)
+	}
+	return updated
+}
+
+func unsetEnvValue(env []string, key string) []string {
+	prefix := key + "="
+	updated := make([]string, 0, len(env))
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			continue
+		}
+		updated = append(updated, item)
+	}
+	return updated
+}
+
+func buildFakeProxyBinary(t *testing.T, path string) {
+	t.Helper()
+
+	source := filepath.Join(t.TempDir(), "main.go")
+	writeFile(t, source, `package main
+
+import (
+	"os"
+	"os/signal"
+	"syscall"
+)
+
+func main() {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	<-sigCh
+}
+`, 0o644)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir fake proxy dir: %v", err)
+	}
+
+	cmd := exec.Command("go", "build", "-o", path, source)
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build fake proxy binary: %v\n%s", err, string(out))
+	}
+}
+
+func waitForMenuText(t *testing.T, env []string, want string) string {
+	t.Helper()
+
+	deadline := time.Now().Add(5 * time.Second)
+	lastOut := ""
+	for time.Now().Before(deadline) {
+		out, err := runManagerMenu(t, env, "\n")
+		if err == nil && strings.Contains(out, want) {
+			return out
+		}
+		lastOut = out
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for menu text %q\nlast output:\n%s", want, lastOut)
+	return ""
 }
 
 func TestManagerEnableAutostartInstallsPersistentCopy(t *testing.T) {
@@ -263,7 +357,7 @@ func TestManagerEnableAutostartFailsWithoutPersistentSpace(t *testing.T) {
 func TestManagerUpdateRefreshesLauncherScriptFromRelease(t *testing.T) {
 	env := managerEnv(t)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/release.json":
 			w.Header().Set("Content-Type", "application/json")
@@ -275,8 +369,19 @@ func TestManagerUpdateRefreshesLauncherScriptFromRelease(t *testing.T) {
 		default:
 			http.NotFound(w, r)
 		}
-	}))
-	defer server.Close()
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+	serverURL := "http://" + listener.Addr().String()
 
 	var launcherPath, installDir string
 	for _, item := range env {
@@ -288,9 +393,9 @@ func TestManagerUpdateRefreshesLauncherScriptFromRelease(t *testing.T) {
 		}
 	}
 	env = append(env,
-		"RELEASE_API_URL="+server.URL+"/release.json",
-		"RELEASE_URL="+server.URL+"/binary",
-		"SCRIPT_RELEASE_BASE_URL="+server.URL,
+		"RELEASE_API_URL="+serverURL+"/release.json",
+		"RELEASE_URL="+serverURL+"/binary",
+		"SCRIPT_RELEASE_BASE_URL="+serverURL,
 	)
 
 	out, err := runManager(t, env, "update")
@@ -307,7 +412,55 @@ func TestManagerUpdateRefreshesLauncherScriptFromRelease(t *testing.T) {
 	}
 }
 
-func TestMainMenuShowsSimplifiedActions(t *testing.T) {
+func TestManagerStatusIgnoresFalsePositivePgrepMatches(t *testing.T) {
+	env := managerEnv(t)
+
+	root := t.TempDir()
+	fakeBinDir := filepath.Join(root, "fake-bin")
+	procRoot := filepath.Join(root, "proc")
+	binPath := ""
+	otherBin := filepath.Join(root, "other", "unrelated")
+
+	for _, item := range env {
+		if strings.HasPrefix(item, "BIN_PATH=") {
+			binPath = strings.TrimPrefix(item, "BIN_PATH=")
+			break
+		}
+	}
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	writeFile(t, binPath, "#!/bin/sh\nexit 0\n", 0o755)
+	writeFile(t, otherBin, "#!/bin/sh\nexit 0\n", 0o755)
+	if err := os.MkdirAll(filepath.Join(procRoot, "222"), 0o755); err != nil {
+		t.Fatalf("mkdir proc 222: %v", err)
+	}
+	if err := os.Symlink(otherBin, filepath.Join(procRoot, "222", "exe")); err != nil {
+		t.Fatalf("symlink proc 222 exe: %v", err)
+	}
+
+	writeFile(t, filepath.Join(fakeBinDir, "pgrep"), "#!/bin/sh\nprintf '222\n'\n", 0o755)
+	writeFile(t, filepath.Join(fakeBinDir, "readlink"), "#!/bin/sh\nif [ \"$1\" = \"-f\" ]; then\n  shift\nfi\ntarget=\"$1\"\nif [ -L \"$target\" ]; then\n  link=\"$(/bin/readlink \"$target\")\"\n  case \"$link\" in\n    /*) printf '%s\\n' \"$link\" ;;\n    *) dir=\"$(cd \"$(dirname \"$target\")\" && pwd -P)\"; printf '%s/%s\\n' \"$dir\" \"$link\" ;;\n  esac\n  exit 0\nfi\ndir=\"$(cd \"$(dirname \"$target\")\" 2>/dev/null && pwd -P)\" || exit 1\nprintf '%s/%s\\n' \"$dir\" \"$(basename \"$target\")\"\n", 0o755)
+
+	env = append(env,
+		"PATH="+fakeBinDir+":"+os.Getenv("PATH"),
+		"PROC_ROOT="+procRoot,
+	)
+
+	out, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "process   : stopped") || !strings.Contains(out, "pid       : -") {
+		t.Fatalf("expected unrelated pgrep hit to be ignored, got:\n%s", out)
+	}
+	if strings.Contains(out, "222") {
+		t.Fatalf("expected false pgrep match to be filtered out, got:\n%s", out)
+	}
+}
+
+func TestManagerMainMenuShowsSimplifiedActions(t *testing.T) {
 	env := managerEnv(t)
 
 	out, err := runManagerMenu(t, env, "\n")
@@ -327,7 +480,7 @@ func TestMainMenuShowsSimplifiedActions(t *testing.T) {
 	}
 }
 
-func TestMainMenuReflectsAutostartState(t *testing.T) {
+func TestManagerMainMenuReflectsAutostartState(t *testing.T) {
 	env := managerEnv(t)
 
 	if out, err := runManager(t, env, "enable-autostart"); err != nil {
@@ -341,5 +494,407 @@ func TestMainMenuReflectsAutostartState(t *testing.T) {
 
 	if !strings.Contains(out, "3) Disable autostart") {
 		t.Fatalf("expected menu to reflect enabled autostart, got:\n%s", out)
+	}
+}
+
+func TestManagerMainMenuReflectsRunningProxyStateTransitions(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	buildFakeProxyBinary(t, binPath)
+
+	startCmd := exec.Command("sh", "tg-ws-proxy-go.sh", "start")
+	startCmd.Dir = "."
+	startCmd.Env = env
+	var startOut bytes.Buffer
+	startCmd.Stdout = &startOut
+	startCmd.Stderr = &startOut
+	if err := startCmd.Start(); err != nil {
+		t.Fatalf("start command failed to launch: %v", err)
+	}
+
+	waitForMenuText(t, env, "2) Stop proxy")
+
+	stopOut, err := runManager(t, env, "stop")
+	if err != nil {
+		t.Fatalf("stop failed: %v\n%s", err, stopOut)
+	}
+	if !strings.Contains(stopOut, "Proxy stopped") {
+		t.Fatalf("expected stop confirmation, got:\n%s", stopOut)
+	}
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- startCmd.Wait()
+	}()
+
+	select {
+	case err := <-waitCh:
+		if err != nil {
+			t.Fatalf("start command exited with error: %v\n%s", err, startOut.String())
+		}
+	case <-time.After(5 * time.Second):
+		_ = startCmd.Process.Kill()
+		t.Fatalf("timed out waiting for started proxy command to exit\n%s", startOut.String())
+	}
+
+	out := waitForMenuText(t, env, "2) Start proxy")
+	if !strings.Contains(out, "proxy     : stopped") {
+		t.Fatalf("expected stopped summary after stop, got:\n%s", out)
+	}
+}
+
+func TestManagerMainMenuReflectsAutostartStateTransitions(t *testing.T) {
+	env := managerEnv(t)
+
+	enableOut, err := runManagerMenu(t, env, "3\n\n\n")
+	if err != nil {
+		t.Fatalf("menu enable-autostart failed: %v\n%s", err, enableOut)
+	}
+	if !strings.Contains(enableOut, "Autostart enabled") {
+		t.Fatalf("expected autostart enable output, got:\n%s", enableOut)
+	}
+
+	out := waitForMenuText(t, env, "3) Disable autostart")
+	if !strings.Contains(out, "autostart : enabled") {
+		t.Fatalf("expected enabled autostart summary, got:\n%s", out)
+	}
+
+	disableOut, err := runManagerMenu(t, env, "3\n\n\n")
+	if err != nil {
+		t.Fatalf("menu disable-autostart failed: %v\n%s", err, disableOut)
+	}
+	if !strings.Contains(disableOut, "Autostart disabled and persistent copy removed") {
+		t.Fatalf("expected autostart disable output, got:\n%s", disableOut)
+	}
+
+	out = waitForMenuText(t, env, "3) Enable autostart")
+	if !strings.Contains(out, "autostart : disabled") {
+		t.Fatalf("expected disabled autostart summary, got:\n%s", out)
+	}
+}
+
+func TestManagerStartFailsWithoutBinary(t *testing.T) {
+	env := managerEnv(t)
+
+	out, err := runManager(t, env, "start")
+	if err == nil {
+		t.Fatalf("expected start to fail without binary:\n%s", out)
+	}
+	if !strings.Contains(out, "binary is not installed") {
+		t.Fatalf("expected missing binary message, got:\n%s", out)
+	}
+}
+
+func TestManagerStartFailsWhenPortBusy(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer listener.Close()
+
+	env := managerEnv(t)
+	env = append(env,
+		"LISTEN_HOST=127.0.0.1",
+		fmt.Sprintf("LISTEN_PORT=%d", listener.Addr().(*net.TCPAddr).Port),
+	)
+
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+	buildFakeProxyBinary(t, binPath)
+
+	out, err := runManager(t, env, "start")
+	if err == nil {
+		t.Fatalf("expected start to fail when port is busy:\n%s", out)
+	}
+	if !strings.Contains(out, "Port") || !strings.Contains(out, "is already busy") {
+		t.Fatalf("expected busy port message, got:\n%s", out)
+	}
+}
+
+func TestManagerAdvancedRemoveResetsMenuState(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	buildFakeProxyBinary(t, binPath)
+	if out, err := runManager(t, env, "enable-autostart"); err != nil {
+		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
+	}
+
+	removeOut, err := runManagerMenu(t, env, "5\n5\n\n\n\n")
+	if err != nil {
+		t.Fatalf("advanced remove failed: %v\n%s", err, removeOut)
+	}
+	if !strings.Contains(removeOut, "Binary launcher autostart and downloaded files removed") {
+		t.Fatalf("expected remove confirmation, got:\n%s", removeOut)
+	}
+
+	out := waitForMenuText(t, env, "2) Start proxy")
+	if !strings.Contains(out, "3) Enable autostart") {
+		t.Fatalf("expected clean top-level menu after remove, got:\n%s", out)
+	}
+
+	statusOut, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+	if !strings.Contains(statusOut, "tmp bin   : not installed") || !strings.Contains(statusOut, "persist   : not installed") {
+		t.Fatalf("expected removed state in status, got:\n%s", statusOut)
+	}
+}
+
+func TestManagerToggleVerboseUpdatesSummaryStatusAndAutostartConfig(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "VERBOSE", "0")
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	if out, err := runManager(t, env, "enable-autostart"); err != nil {
+		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
+	}
+
+	menuOut, err := runManagerMenu(t, env, "5\n2\n\n\n")
+	if err != nil {
+		t.Fatalf("toggle verbose via menu failed: %v\n%s", err, menuOut)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "VERBOSE='1'") {
+		t.Fatalf("expected autostart config to switch verbose on, got:\n%s", config)
+	}
+
+	checkEnv := unsetEnvValue(env, "VERBOSE")
+
+	statusOut, err := runManager(t, checkEnv, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+	if !strings.Contains(statusOut, "verbose   : on") {
+		t.Fatalf("expected status to show verbose on, got:\n%s", statusOut)
+	}
+
+	out := waitForMenuText(t, checkEnv, "verbose   : on")
+	if !strings.Contains(out, "3) Disable autostart") {
+		t.Fatalf("expected menu to keep autostart enabled after verbose toggle, got:\n%s", out)
+	}
+}
+
+func TestManagerEnableAutostartFailureLeavesCleanState(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "PERSISTENT_SPACE_HEADROOM_KB", "999999999")
+	initScriptPath := envValue(env, "INIT_SCRIPT_PATH")
+	persistPathFile := envValue(env, "PERSIST_PATH_FILE")
+
+	out, err := runManager(t, env, "enable-autostart")
+	if err == nil {
+		t.Fatalf("expected enable-autostart failure:\n%s", out)
+	}
+	if _, err := os.Stat(initScriptPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no init script after failed enable, stat err=%v", err)
+	}
+	if _, err := os.Stat(persistPathFile); !os.IsNotExist(err) {
+		t.Fatalf("expected no persistent state after failed enable, stat err=%v", err)
+	}
+
+	menuOut := waitForMenuText(t, env, "3) Enable autostart")
+	if !strings.Contains(menuOut, "autostart : disabled") {
+		t.Fatalf("expected menu to stay disabled after failed enable, got:\n%s", menuOut)
+	}
+}
+
+func TestManagerDisableAutostartNoopWhenNotConfigured(t *testing.T) {
+	env := managerEnv(t)
+
+	out, err := runManager(t, env, "disable-autostart")
+	if err != nil {
+		t.Fatalf("disable-autostart no-op failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Autostart is not configured") {
+		t.Fatalf("expected no-op autostart message, got:\n%s", out)
+	}
+}
+
+func TestManagerRestartStartsStoppedProxyAndMenuShowsStop(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	buildFakeProxyBinary(t, binPath)
+
+	restartCmd := exec.Command("sh", "tg-ws-proxy-go.sh", "restart")
+	restartCmd.Dir = "."
+	restartCmd.Env = env
+	var restartOut bytes.Buffer
+	restartCmd.Stdout = &restartOut
+	restartCmd.Stderr = &restartOut
+	if err := restartCmd.Start(); err != nil {
+		t.Fatalf("restart command failed to launch: %v", err)
+	}
+
+	out := waitForMenuText(t, env, "2) Stop proxy")
+	if !strings.Contains(out, "proxy     : running") {
+		t.Fatalf("expected menu to show running proxy after restart, got:\n%s", out)
+	}
+
+	stopOut, err := runManager(t, env, "stop")
+	if err != nil {
+		t.Fatalf("stop after restart failed: %v\n%s", err, stopOut)
+	}
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- restartCmd.Wait()
+	}()
+
+	select {
+	case err := <-waitCh:
+		if err != nil {
+			t.Fatalf("restart command exited with error: %v\n%s", err, restartOut.String())
+		}
+	case <-time.After(5 * time.Second):
+		_ = restartCmd.Process.Kill()
+		t.Fatalf("timed out waiting for restart command to exit\n%s", restartOut.String())
+	}
+}
+
+func TestManagerStatusAndMenuStayInSync(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	buildFakeProxyBinary(t, binPath)
+	if out, err := runManager(t, env, "enable-autostart"); err != nil {
+		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
+	}
+
+	startCmd := exec.Command("sh", "tg-ws-proxy-go.sh", "start")
+	startCmd.Dir = "."
+	startCmd.Env = env
+	var startOut bytes.Buffer
+	startCmd.Stdout = &startOut
+	startCmd.Stderr = &startOut
+	if err := startCmd.Start(); err != nil {
+		t.Fatalf("start command failed: %v", err)
+	}
+	defer func() {
+		_, _ = runManager(t, env, "stop")
+		_ = startCmd.Wait()
+	}()
+
+	menuOut := waitForMenuText(t, env, "2) Stop proxy")
+	statusOut, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+
+	if !strings.Contains(menuOut, "proxy     : running") || !strings.Contains(statusOut, "process   : running") {
+		t.Fatalf("menu/status disagree on running state\nmenu:\n%s\nstatus:\n%s", menuOut, statusOut)
+	}
+	if !strings.Contains(menuOut, "autostart : enabled") || !strings.Contains(statusOut, "autostart : enabled") {
+		t.Fatalf("menu/status disagree on autostart state\nmenu:\n%s\nstatus:\n%s", menuOut, statusOut)
+	}
+	if !strings.Contains(menuOut, "verbose   : on") || !strings.Contains(statusOut, "verbose   : on") {
+		t.Fatalf("menu/status disagree on verbose state\nmenu:\n%s\nstatus:\n%s", menuOut, statusOut)
+	}
+}
+
+func TestManagerRecoveryWithLauncherButNoBinaryKeepsMenuSane(t *testing.T) {
+	env := managerEnv(t)
+	launcherPath := envValue(env, "LAUNCHER_PATH")
+	if launcherPath == "" {
+		t.Fatal("LAUNCHER_PATH not found in env")
+	}
+	writeFile(t, launcherPath, "#!/bin/sh\nexit 0\n", 0o755)
+
+	menuOut := waitForMenuText(t, env, "2) Start proxy")
+	if !strings.Contains(menuOut, "3) Enable autostart") {
+		t.Fatalf("expected clean menu with launcher-only state, got:\n%s", menuOut)
+	}
+
+	statusOut, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+	if !strings.Contains(statusOut, "tmp bin   : not installed") || !strings.Contains(statusOut, "launcher  : "+launcherPath) {
+		t.Fatalf("expected status to show launcher without binary, got:\n%s", statusOut)
+	}
+}
+
+func TestManagerRecoveryWithInitScriptButNoPersistentBinaryCanReenableAutostart(t *testing.T) {
+	env := managerEnv(t)
+	initScriptPath := envValue(env, "INIT_SCRIPT_PATH")
+	rcDir := envValue(env, "RC_D_DIR")
+	if initScriptPath == "" || rcDir == "" {
+		t.Fatal("missing init script paths in env")
+	}
+
+	writeFile(t, initScriptPath, "#!/bin/sh\nexit 0\n", 0o755)
+	linkPath := filepath.Join(rcDir, "S95"+filepath.Base(initScriptPath))
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o755); err != nil {
+		t.Fatalf("mkdir rc.d: %v", err)
+	}
+	if err := os.Symlink(initScriptPath, linkPath); err != nil {
+		t.Fatalf("symlink rc.d: %v", err)
+	}
+
+	menuOut := waitForMenuText(t, env, "3) Enable autostart")
+	if !strings.Contains(menuOut, "autostart : disabled") {
+		t.Fatalf("expected broken autostart not to look enabled, got:\n%s", menuOut)
+	}
+
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+	buildFakeProxyBinary(t, binPath)
+
+	out, err := runManager(t, env, "enable-autostart")
+	if err != nil {
+		t.Fatalf("enable-autostart repair failed: %v\n%s", err, out)
+	}
+
+	menuOut = waitForMenuText(t, env, "3) Disable autostart")
+	if !strings.Contains(menuOut, "autostart : enabled") {
+		t.Fatalf("expected repaired autostart to look enabled, got:\n%s", menuOut)
+	}
+}
+
+func TestManagerRecoveryWithPersistentCopyButAutostartDisabled(t *testing.T) {
+	env := managerEnv(t)
+	persistDir := strings.Split(envValue(env, "PERSISTENT_DIR_CANDIDATES"), " ")[0]
+	persistPathFile := envValue(env, "PERSIST_PATH_FILE")
+	persistVersionFile := envValue(env, "PERSIST_VERSION_FILE")
+	if persistDir == "" || persistPathFile == "" || persistVersionFile == "" {
+		t.Fatal("missing persistent env paths")
+	}
+
+	buildFakeProxyBinary(t, filepath.Join(persistDir, "tg-ws-proxy"))
+	writeFile(t, filepath.Join(persistDir, "tg-ws-proxy-go.sh"), "#!/bin/sh\nexit 0\n", 0o755)
+	writeFile(t, persistPathFile, persistDir+"\n", 0o644)
+	writeFile(t, persistVersionFile, "v9.9.9\n", 0o644)
+
+	menuOut := waitForMenuText(t, env, "3) Enable autostart")
+	if !strings.Contains(menuOut, "autostart : disabled") {
+		t.Fatalf("expected persistent copy without rc enable to stay disabled, got:\n%s", menuOut)
+	}
+
+	statusOut, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+	if !strings.Contains(statusOut, "persist   : installed") || !strings.Contains(statusOut, "autostart : not configured") {
+		t.Fatalf("expected status to show persistent-only state, got:\n%s", statusOut)
 	}
 }

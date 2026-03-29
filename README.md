@@ -1,6 +1,7 @@
 # TG WS Proxy Go
 
 [![CI](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/actions/workflows/ci.yml/badge.svg)](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/actions/workflows/ci.yml)
+![Codecov](https://codecov.io/github/d0mhate/-tg-ws-proxy-Manager-go/graph/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.22-00ADD8)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenWrt](https://img.shields.io/badge/OpenWrt-ramips%2Fmt7621-blue)
