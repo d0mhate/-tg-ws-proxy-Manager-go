@@ -151,8 +151,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	dstIP := net.ParseIP(req.DstHost)
 	isIPv6 := dstIP != nil && dstIP.To4() == nil
 	isTelegramCandidate := telegram.IsTelegramIP(req.DstHost) || isLikelyTelegramIPv6(req, isIPv6)
+	shouldProbeMTProto := !isTelegramCandidate && shouldProbeTelegramByPort(req)
+	routeByInitOnly := false
 
-	if !isTelegramCandidate {
+	if !isTelegramCandidate && !shouldProbeMTProto {
 		s.stats.incPassthrough()
 		s.debugf("[%s] route=passthrough destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
 		if err := writeReply(conn, 0x00); err != nil {
@@ -170,12 +172,50 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	init := make([]byte, 64)
-	if err := readFullWithContext(ctx, conn, init, s.cfg.InitTimeout); err != nil {
+	n, err := readWithContext(ctx, conn, init, s.cfg.InitTimeout)
+	if err != nil {
+		if !isTelegramCandidate {
+			s.stats.incPassthrough()
+			s.debugf("[%s] route=passthrough reason=probe-read-failed destination=%s:%d err=%v", clientAddr, req.DstHost, req.DstPort, err)
+			if n == 0 {
+				if ptErr := s.proxyTCP(ctx, conn, req.DstHost, req.DstPort); ptErr != nil && !errors.Is(ptErr, io.EOF) {
+					s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+				}
+				return
+			}
+			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init[:n]); ptErr != nil && !errors.Is(ptErr, io.EOF) {
+				s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+			}
+			return
+		}
 		s.logger.Printf("[%s] failed to read mtproto init: %v", clientAddr, err)
 		return
 	}
 
+	if !isTelegramCandidate {
+		info, parseErr := mtproto.ParseInit(init)
+		if parseErr != nil {
+			s.stats.incPassthrough()
+			s.debugf("[%s] route=passthrough reason=mtproto-probe-miss destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
+			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); ptErr != nil && !errors.Is(ptErr, io.EOF) {
+				s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+			}
+			return
+		}
+		isTelegramCandidate = true
+		routeByInitOnly = true
+		s.debugf("[%s] telegram route inferred from mtproto init on destination %s:%d dc=%d media=%v", clientAddr, req.DstHost, req.DstPort, info.DC, info.IsMedia)
+	}
+
 	if mtproto.IsHTTPTransport(init) {
+		if routeByInitOnly {
+			s.stats.incPassthrough()
+			s.debugf("[%s] route=passthrough reason=http-probe destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
+			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); ptErr != nil && !errors.Is(ptErr, io.EOF) {
+				s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+			}
+			return
+		}
 		s.stats.incHTTPRejected()
 		s.logger.Printf("[%s] http transport rejected for %s:%d", clientAddr, req.DstHost, req.DstPort)
 		return
@@ -229,7 +269,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	fallbackHost := req.DstHost
-	if isIPv6 || effectiveDC != dc {
+	if isIPv6 || effectiveDC != dc || routeByInitOnly {
 		fallbackHost = targetIP
 		s.debugf("[%s] telegram route will fallback via dc target %s", clientAddr, targetIP)
 	}
@@ -475,23 +515,27 @@ func writeReply(conn net.Conn, status byte) error {
 	return err
 }
 
-func readFullWithContext(ctx context.Context, conn net.Conn, buf []byte, timeout time.Duration) error {
+func readWithContext(ctx context.Context, conn net.Conn, buf []byte, timeout time.Duration) (int, error) {
 	if timeout > 0 {
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 		defer conn.SetReadDeadline(time.Time{})
 	}
 
-	done := make(chan error, 1)
+	type readResult struct {
+		n   int
+		err error
+	}
+	done := make(chan readResult, 1)
 	go func() {
-		_, err := io.ReadFull(conn, buf)
-		done <- err
+		n, err := io.ReadFull(conn, buf)
+		done <- readResult{n: n, err: err}
 	}()
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-done:
-		return err
+		return 0, ctx.Err()
+	case result := <-done:
+		return result.n, result.err
 	}
 }
 
@@ -513,6 +557,15 @@ func isLikelyTelegramIPv6(req request, isIPv6 bool) bool {
 	if !isIPv6 {
 		return false
 	}
+	switch req.DstPort {
+	case 80, 443, 5222:
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldProbeTelegramByPort(req request) bool {
 	switch req.DstPort {
 	case 80, 443, 5222:
 		return true

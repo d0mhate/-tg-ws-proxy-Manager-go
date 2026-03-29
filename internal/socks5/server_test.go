@@ -161,6 +161,39 @@ func TestHandleConnTelegramFallbackAfterWSFailure(t *testing.T) {
 	}
 }
 
+func TestHandleConnUnknownIPWithMTProtoInitRoutesAsTelegram(t *testing.T) {
+	var got struct {
+		host string
+		port int
+		init []byte
+	}
+
+	srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+		return nil, io.EOF
+	}
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		got.host = host
+		got.port = port
+		got.init = append([]byte(nil), init...)
+		return nil
+	}
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	runHandleConnFlow(t, srv, ipv4ConnectRequest("203.0.113.10", 443), init, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	if got.host != "149.154.167.220" || got.port != 443 {
+		t.Fatalf("unexpected tcp fallback target for mtproto probe route: %s:%d", got.host, got.port)
+	}
+	if !bytes.Equal(got.init, init) {
+		t.Fatal("expected mtproto init to be forwarded on telegram route inferred by probe")
+	}
+}
+
 func TestHandleConnRejectsHTTPTransport(t *testing.T) {
 	var called bool
 
@@ -183,6 +216,36 @@ func TestHandleConnRejectsHTTPTransport(t *testing.T) {
 
 	if called {
 		t.Fatal("did not expect proxying paths to be called for http transport")
+	}
+}
+
+func TestHandleConnUnknownIPHTTPProbeFallsBackToPassthrough(t *testing.T) {
+	var got struct {
+		host string
+		port int
+		init []byte
+	}
+
+	srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		got.host = host
+		got.port = port
+		got.init = append([]byte(nil), init...)
+		return nil
+	}
+
+	httpProbe := append([]byte("GET / HTTP/1.1"), bytes.Repeat([]byte{0}, 64-len("GET / HTTP/1.1"))...)
+	runHandleConnFlow(t, srv, ipv4ConnectRequest("203.0.113.10", 443), httpProbe, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	if got.host != "203.0.113.10" || got.port != 443 {
+		t.Fatalf("unexpected passthrough target after http probe: %s:%d", got.host, got.port)
+	}
+	if !bytes.Equal(got.init, httpProbe) {
+		t.Fatal("expected probe bytes to be forwarded to passthrough target")
 	}
 }
 
