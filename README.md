@@ -4,7 +4,7 @@
 ![Codecov](https://codecov.io/github/d0mhate/-tg-ws-proxy-Manager-go/graph/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.22-00ADD8)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![OpenWrt](https://img.shields.io/badge/OpenWrt-mipsel__24kc%20%7C%20aarch64-blue)
+![OpenWrt](https://img.shields.io/badge/OpenWrt-mipsel__24kc%20%7C%20mips__24kc%20%7C%20armv7%20%7C%20aarch64%20%7C%20x86__64-blue)
 
 > [!IMPORTANT]
 > Данный способ **не гарантирует 100% работу** !!!
@@ -13,7 +13,7 @@
 
 > [!WARNING]
 > Этот вариант сделан для OpenWrt и проверен на `mipsel_24kc`
-> Manager script автоматически выбирает release asset для `mipsel_24kc` и `aarch64`
+> Manager script автоматически выбирает release asset для `mipsel_24kc`, `mips_24kc`, `armv7`, `aarch64` и `x86_64`
 > На других архитектурах или сборках OpenWrt бинарник может не подойти
 > Перед установкой script проверяет архитектуру, свободное место в `/tmp` и доступность release
 
@@ -113,10 +113,14 @@ go build ./cmd/tg-ws-proxy
 ./tg-ws-proxy --host 127.0.0.1 --port 1080 --verbose
 ```
 
-Целевая OpenWrt сборка:
+Целевые OpenWrt сборки:
 
 ```bash
 GOOS=linux GOARCH=mipsle GOMIPS=softfloat
+GOOS=linux GOARCH=mips GOMIPS=softfloat
+GOOS=linux GOARCH=arm GOARM=7
+GOOS=linux GOARCH=arm64
+GOOS=linux GOARCH=amd64
 ```
 
 Проверенная цель:

@@ -83,8 +83,17 @@ binary_name_for_arch() {
         mipsel_24kc)
             printf "tg-ws-proxy-openwrt-mipsel_24kc"
             ;;
+        mips_24kc)
+            printf "tg-ws-proxy-openwrt-mips_24kc"
+            ;;
         aarch64*)
             printf "tg-ws-proxy-openwrt-aarch64"
+            ;;
+        x86_64)
+            printf "tg-ws-proxy-openwrt-x86_64"
+            ;;
+        arm_cortex-a7|arm_cortex-a9|arm_cortex-a15_neon-vfpv4)
+            printf "tg-ws-proxy-openwrt-armv7"
             ;;
         *)
             printf "%s" "$DEFAULT_BINARY_NAME"
@@ -95,7 +104,7 @@ binary_name_for_arch() {
 is_supported_openwrt_arch() {
     arch="$1"
     case "$arch" in
-        mipsel_24kc|aarch64*)
+        mipsel_24kc|mips_24kc|aarch64*|x86_64|arm_cortex-a7|arm_cortex-a9|arm_cortex-a15_neon-vfpv4)
             return 0
             ;;
     esac
