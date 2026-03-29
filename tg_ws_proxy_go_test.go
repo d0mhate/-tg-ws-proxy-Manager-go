@@ -986,9 +986,10 @@ func TestManagerMainMenuShowsSimplifiedActions(t *testing.T) {
 	}
 
 	if !strings.Contains(out, "1) Setup / Update") ||
-		!strings.Contains(out, "2) Start proxy") ||
+		!strings.Contains(out, "2) Run proxy in terminal") ||
 		!strings.Contains(out, "3) Enable autostart") ||
-		!strings.Contains(out, "5) Advanced") {
+		!strings.Contains(out, "5) Advanced") ||
+		!strings.Contains(out, "6) Start in background") {
 		t.Fatalf("expected simplified top-level menu, got:\n%s", out)
 	}
 
@@ -1058,7 +1059,10 @@ func TestManagerMainMenuReflectsRunningProxyStateTransitions(t *testing.T) {
 		t.Fatalf("timed out waiting for started proxy command to exit\n%s", startOut.String())
 	}
 
-	out := waitForMenuText(t, env, "2) Start proxy")
+	out := waitForMenuText(t, env, "2) Run proxy in terminal")
+	if !strings.Contains(out, "2) Run proxy in terminal") {
+		t.Fatalf("expected stopped terminal action label, got:\n%s", out)
+	}
 	if !strings.Contains(out, "proxy     : stopped") {
 		t.Fatalf("expected stopped summary after stop, got:\n%s", out)
 	}
@@ -1134,6 +1138,42 @@ func TestManagerStartFailsWhenPortBusy(t *testing.T) {
 	}
 }
 
+func TestManagerStartBackgroundStartsProxyAndMenuShowsStop(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	buildFakeProxyBinary(t, binPath)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Starting tg-ws-proxy in background") {
+		t.Fatalf("expected background start output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Background process pid:") {
+		t.Fatalf("expected background pid output, got:\n%s", out)
+	}
+
+	menuOut := waitForMenuText(t, env, "2) Stop proxy")
+	if !strings.Contains(menuOut, "proxy     : running") {
+		t.Fatalf("expected menu to show running proxy after background start, got:\n%s", menuOut)
+	}
+
+	stopOut, err := runManager(t, env, "stop")
+	if err != nil {
+		t.Fatalf("stop after background start failed: %v\n%s", err, stopOut)
+	}
+
+	menuOut = waitForMenuText(t, env, "2) Run proxy in terminal")
+	if !strings.Contains(menuOut, "proxy     : stopped") {
+		t.Fatalf("expected menu to show stopped proxy after background stop, got:\n%s", menuOut)
+	}
+}
+
 func TestManagerAdvancedRemoveResetsMenuState(t *testing.T) {
 	env := managerEnv(t)
 	binPath := envValue(env, "BIN_PATH")
@@ -1154,7 +1194,7 @@ func TestManagerAdvancedRemoveResetsMenuState(t *testing.T) {
 		t.Fatalf("expected remove confirmation, got:\n%s", removeOut)
 	}
 
-	out := waitForMenuText(t, env, "2) Start proxy")
+	out := waitForMenuText(t, env, "2) Run proxy in terminal")
 	if !strings.Contains(out, "3) Enable autostart") {
 		t.Fatalf("expected clean top-level menu after remove, got:\n%s", out)
 	}
@@ -1335,7 +1375,7 @@ func TestManagerRecoveryWithLauncherButNoBinaryKeepsMenuSane(t *testing.T) {
 	}
 	writeFile(t, launcherPath, "#!/bin/sh\nexit 0\n", 0o755)
 
-	menuOut := waitForMenuText(t, env, "2) Start proxy")
+	menuOut := waitForMenuText(t, env, "2) Run proxy in terminal")
 	if !strings.Contains(menuOut, "3) Enable autostart") {
 		t.Fatalf("expected clean menu with launcher-only state, got:\n%s", menuOut)
 	}

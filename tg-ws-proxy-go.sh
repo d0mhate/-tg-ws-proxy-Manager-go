@@ -1051,6 +1051,27 @@ run_binary() {
     fi
 }
 
+run_binary_background() {
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    [ -n "$bin_path" ] || return 1
+
+    if command -v nohup >/dev/null 2>&1; then
+        if [ "$VERBOSE" = "1" ]; then
+            nohup "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --verbose >/dev/null 2>&1 &
+        else
+            nohup "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" >/dev/null 2>&1 &
+        fi
+    else
+        if [ "$VERBOSE" = "1" ]; then
+            "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --verbose >/dev/null 2>&1 &
+        else
+            "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT" >/dev/null 2>&1 &
+        fi
+    fi
+
+    printf "%s" "$!"
+}
+
 start_proxy() {
     bin_path="$(runtime_bin_path 2>/dev/null || true)"
     if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
@@ -1100,6 +1121,58 @@ start_proxy() {
         printf "Returned to menu after Ctrl+C\n"
     fi
     pause
+}
+
+start_proxy_background() {
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        show_header
+        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    if is_running; then
+        show_header
+        printf "%s%s is already running%s\n\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
+        printf "Stop it first from this or another shell.\n"
+        pause
+        return 0
+    fi
+
+    if port_in_use; then
+        show_header
+        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+        printf "Free the port first or change LISTEN_PORT\n"
+        pause
+        return 1
+    fi
+
+    show_header
+    show_environment_checks
+    printf "\n"
+    printf "%sStarting %s in background%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
+    printf "Logs will not be printed in this session.\n"
+    printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
+
+    child_pid="$(run_binary_background)" || return 1
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    sleep 1
+
+    if kill -0 "$child_pid" 2>/dev/null; then
+        printf "Background process pid:\n  %s\n" "$child_pid"
+        pause
+        return 0
+    fi
+
+    wait "$child_pid" 2>/dev/null
+    code="$?"
+    rm -f "$PID_FILE"
+    printf "%sBackground start failed%s\n\n" "$C_RED" "$C_RESET"
+    printf "Process exited with code: %s\n" "$code"
+    pause
+    return 1
 }
 
 enable_autostart() {
@@ -1287,7 +1360,7 @@ menu_proxy_action_label() {
     if [ "$1" = "1" ]; then
         printf "Stop proxy"
     else
-        printf "Start proxy"
+        printf "Run proxy in terminal"
     fi
 }
 
@@ -1371,6 +1444,7 @@ show_help() {
     printf "  sh %s enable-autostart   enable OpenWrt autostart\n" "$0"
     printf "  sh %s disable-autostart  disable OpenWrt autostart\n" "$0"
     printf "  sh %s start          run proxy in terminal\n" "$0"
+    printf "  sh %s start-background start proxy in background\n" "$0"
     printf "  sh %s stop           stop running proxy\n" "$0"
     printf "  sh %s restart        restart proxy in terminal\n" "$0"
     printf "  sh %s status         show status\n" "$0"
@@ -1404,6 +1478,7 @@ menu() {
     printf "  3) %s\n" "$(menu_autostart_action_label "$autostart_now")"
     printf "  4) Show Telegram SOCKS5 settings\n"
     printf "  5) Advanced\n"
+    printf "  6) Start in background\n"
     printf "  Enter) Exit\n\n"
     printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
     read choice
@@ -1426,6 +1501,7 @@ menu() {
             ;;
         4) show_telegram_only ;;
         5) advanced_menu ;;
+        6) start_proxy_background ;;
         *) exit 0 ;;
     esac
 }
@@ -1449,6 +1525,7 @@ if [ "$COMMAND_MODE" = "1" ]; then
         enable-autostart) enable_autostart; rc=$? ;;
         disable-autostart) disable_autostart; rc=$? ;;
         start) start_proxy; rc=$? ;;
+        start-background|start-bg) start_proxy_background; rc=$? ;;
         stop) stop_proxy; rc=$? ;;
         restart) restart_proxy; rc=$? ;;
         status) show_header; show_status; rc=$? ;;
