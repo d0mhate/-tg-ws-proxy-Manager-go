@@ -69,22 +69,35 @@ read_first_line() {
     printf "%s" "$line"
 }
 
+normalize_version() {
+    value="$1"
+    case "$value" in
+        v[0-9]*)
+            printf "%s" "$value"
+            return 0
+            ;;
+    esac
+    return 1
+}
+
 installed_version() {
-    read_first_line "$VERSION_FILE"
+    value="$(read_first_line "$VERSION_FILE" 2>/dev/null || true)"
+    normalize_version "$value"
 }
 
 cached_source_version() {
-    read_first_line "$SOURCE_VERSION_FILE"
+    value="$(read_first_line "$SOURCE_VERSION_FILE" 2>/dev/null || true)"
+    normalize_version "$value"
 }
 
 latest_release_tag() {
     if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$RELEASE_API_URL" 2>/dev/null | awk -F'"' '/"tag_name"/ {print $4; exit}'
+        wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
         return 0
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | awk -F'"' '/"tag_name"/ {print $4; exit}'
+        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
         return 0
     fi
 
@@ -161,6 +174,13 @@ show_telegram_settings() {
     printf "  port     : %s\n" "$LISTEN_PORT"
     printf "  username : <empty>\n"
     printf "  password : <empty>\n"
+}
+
+show_current_version() {
+    version="$(installed_version 2>/dev/null || true)"
+    [ -n "$version" ] || version="-"
+    printf "%sCurrent version%s\n" "$C_BOLD" "$C_RESET"
+    printf "  %s\n" "$version"
 }
 
 show_quick_commands() {
@@ -629,6 +649,8 @@ show_help() {
 
 menu() {
     show_header
+    show_current_version
+    printf "\n"
     show_telegram_settings
     printf "\n"
     show_status
