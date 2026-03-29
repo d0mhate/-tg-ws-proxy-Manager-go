@@ -374,9 +374,19 @@ start_proxy() {
     printf "Logs will be printed here.\n"
     printf "Stop with Ctrl+C\n"
     printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
-    run_binary
+    show_telegram_settings
+    printf "\n"
+    interrupted="0"
+    run_binary &
+    child_pid="$!"
+    trap 'interrupted="1"; kill -INT "$child_pid" 2>/dev/null' INT
+    wait "$child_pid"
     code="$?"
+    trap - INT
     printf "\n%s%s exited with code %s%s\n" "$C_YELLOW" "$APP_NAME" "$code" "$C_RESET"
+    if [ "$interrupted" = "1" ]; then
+        printf "Returned to menu after Ctrl+C\n"
+    fi
     pause
 }
 
