@@ -56,7 +56,7 @@ func managerEnv(t *testing.T) []string {
 	writeFile(t, sourceBin, "#!/bin/sh\nexit 0\n", 0o755)
 	writeFile(t, sourceVersion, "v9.9.9\n", 0o644)
 	writeFile(t, releaseAPI, "{\"tag_name\":\"v9.9.9\"}\n", 0o644)
-	writeFile(t, rcCommonPath, "#!/bin/sh\nscript=\"$1\"\ncmd=\"$2\"\nname=\"$(basename \"$script\")\"\nrc_dir=\"${RC_D_DIR:-/etc/rc.d}\"\nmkdir -p \"$rc_dir\"\ncase \"$cmd\" in\nenable)\n  ln -sf \"$script\" \"$rc_dir/S95$name\"\n  ;;\ndisable)\n  rm -f \"$rc_dir\"/*\"$name\"\n  ;;\nstop)\n  exit 0\n  ;;\n*)\n  exit 0\n  ;;\nesac\n", 0o755)
+	writeFile(t, rcCommonPath, "#!/bin/sh\nscript=\"$1\"\ncmd=\"$2\"\nname=\"$(basename \"$script\")\"\nrc_dir=\"${RC_D_DIR:-/etc/rc.d}\"\nmkdir -p \"$rc_dir\"\ncase \"$cmd\" in\nenable)\n  ln -sf \"$script\" \"$rc_dir/S95$name\"\n  ;;\ndisable)\n  rm -f \"$rc_dir\"/*\"$name\"\n  ;;\nstart|restart)\n  marker=\"${FAKE_INIT_START_MARKER:-}\"\n  if [ -n \"$marker\" ]; then\n    mkdir -p \"$(dirname \"$marker\")\"\n    : > \"$marker\"\n  fi\n  ;;\nstop)\n  exit 0\n  ;;\n*)\n  exit 0\n  ;;\nesac\n", 0o755)
 	writeFile(t, openwrtRelease, "DISTRIB_ID='OpenWrt'\nDISTRIB_ARCH='mipsel_24kc'\n", 0o644)
 	managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
 	if err != nil {
@@ -228,6 +228,8 @@ func waitForMenuText(t *testing.T, env []string, want string) string {
 
 func TestManagerEnableAutostartInstallsPersistentCopy(t *testing.T) {
 	env := managerEnv(t)
+	startMarker := filepath.Join(t.TempDir(), "service-started")
+	env = append(env, "FAKE_INIT_START_MARKER="+startMarker)
 
 	out, err := runManager(t, env, "enable-autostart")
 	if err != nil {
@@ -235,6 +237,9 @@ func TestManagerEnableAutostartInstallsPersistentCopy(t *testing.T) {
 	}
 	if !strings.Contains(out, "Persistent copy installed automatically") || !strings.Contains(out, "Autostart enabled") {
 		t.Fatalf("expected success output, got:\n%s", out)
+	}
+	if _, err := os.Stat(startMarker); err != nil {
+		t.Fatalf("expected init.d service start marker to be created: %v", err)
 	}
 
 	var persistDir, managerPath, launcherPath, statePath, versionPath string

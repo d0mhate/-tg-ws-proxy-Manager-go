@@ -1092,6 +1092,8 @@ start_proxy() {
 
 enable_autostart() {
     show_header
+    started_now="0"
+    start_note=""
 
     if ! is_openwrt; then
         printf "%sAutostart is only supported on OpenWrt%s\n" "$C_RED" "$C_RESET"
@@ -1136,9 +1138,22 @@ enable_autostart() {
         return 1
     fi
 
+    if ! is_running; then
+        if "$INIT_SCRIPT_PATH" start >/dev/null 2>&1; then
+            started_now="1"
+        else
+            start_note="Autostart was enabled, but the service did not start immediately"
+        fi
+    fi
+
     printf "%sAutostart enabled%s\n\n" "$C_GREEN" "$C_RESET"
     printf "Service:\n  %s\n" "$INIT_SCRIPT_PATH"
     printf "Binary:\n  %s\n" "$bin_path"
+    if [ "$started_now" = "1" ]; then
+        printf "\nCurrent state:\n  service started now\n"
+    elif [ -n "$start_note" ]; then
+        printf "\n%s%s%s\n" "$C_YELLOW" "$start_note" "$C_RESET"
+    fi
     pause
 }
 
