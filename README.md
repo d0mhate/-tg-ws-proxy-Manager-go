@@ -4,7 +4,7 @@
 ![Codecov](https://codecov.io/github/d0mhate/-tg-ws-proxy-Manager-go/graph/badge.svg)
 ![Go Version](https://img.shields.io/badge/go-1.22-00ADD8)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![OpenWrt](https://img.shields.io/badge/OpenWrt-ramips%2Fmt7621-blue)
+![OpenWrt](https://img.shields.io/badge/OpenWrt-mipsel__24kc%20%7C%20aarch64-blue)
 
 > [!IMPORTANT]
 > Данный способ **не гарантирует 100% работу** !!!
