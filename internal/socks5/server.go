@@ -143,7 +143,11 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	if !telegram.IsTelegramIP(req.DstHost) {
+	dstIP := net.ParseIP(req.DstHost)
+	isIPv6 := dstIP != nil && dstIP.To4() == nil
+	isTelegramCandidate := telegram.IsTelegramIP(req.DstHost) || isLikelyTelegramIPv6(req, isIPv6)
+
+	if !isTelegramCandidate {
 		s.stats.incPassthrough()
 		s.debugf("[%s] route=passthrough destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
 		if err := writeReply(conn, 0x00); err != nil {
@@ -209,12 +213,18 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	fallbackHost := req.DstHost
+	if isIPv6 {
+		fallbackHost = targetIP
+		s.debugf("[%s] ipv6 telegram route will fallback via dc target %s", clientAddr, targetIP)
+	}
+
 	ws, err := s.connectWS(ctx, targetIP, dc, isMedia)
 	if err != nil {
 		s.logger.Printf("[%s] ws connect failed for DC%d via %s: %v", clientAddr, dc, targetIP, err)
 		s.stats.incTCPFallback()
 		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d target=%s", clientAddr, fallbackReason(err), dc, targetIP)
-		if fbErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); fbErr != nil && !errors.Is(fbErr, io.EOF) {
+		if fbErr := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); fbErr != nil && !errors.Is(fbErr, io.EOF) {
 			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, fbErr)
 		}
 		return
@@ -470,6 +480,18 @@ func normalizeEOF(err error) error {
 		return nil
 	}
 	return err
+}
+
+func isLikelyTelegramIPv6(req request, isIPv6 bool) bool {
+	if !isIPv6 {
+		return false
+	}
+	switch req.DstPort {
+	case 80, 443, 5222:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) debugf(format string, args ...any) {

@@ -186,7 +186,7 @@ func TestHandleConnRejectsHTTPTransport(t *testing.T) {
 	}
 }
 
-func TestHandleConnPassesThroughIPv6Destination(t *testing.T) {
+func TestHandleConnPassesThroughNonTelegramIPv6Destination(t *testing.T) {
 	var called struct {
 		host string
 		port int
@@ -199,14 +199,47 @@ func TestHandleConnPassesThroughIPv6Destination(t *testing.T) {
 		return nil
 	}
 
-	runHandleConnFlow(t, srv, ipv6ConnectRequest(net.ParseIP("2001:db8::1")), nil, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv6ConnectRequestWithPort(net.ParseIP("2001:db8::1"), 8443), nil, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if called.host != "2001:db8::1" || called.port != 443 {
+	if called.host != "2001:db8::1" || called.port != 8443 {
 		t.Fatalf("unexpected ipv6 passthrough target: %s:%d", called.host, called.port)
+	}
+}
+
+func TestHandleConnTelegramIPv6FallbackUsesIPv4DCTarget(t *testing.T) {
+	var got struct {
+		host string
+		port int
+		init []byte
+	}
+
+	srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+		return nil, io.EOF
+	}
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		got.host = host
+		got.port = port
+		got.init = append([]byte(nil), init...)
+		return nil
+	}
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	runHandleConnFlow(t, srv, ipv6ConnectRequest(net.ParseIP("2001:db8::1")), init, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	if got.host != "149.154.167.220" || got.port != 443 {
+		t.Fatalf("unexpected tcp fallback target for telegram ipv6: %s:%d", got.host, got.port)
+	}
+	if !bytes.Equal(got.init, init) {
+		t.Fatal("expected init packet to be forwarded to ipv4 dc target")
 	}
 }
 
@@ -405,9 +438,15 @@ func ipv4ConnectRequest(ip string, port int) []byte {
 }
 
 func ipv6ConnectRequest(ip net.IP) []byte {
+	return ipv6ConnectRequestWithPort(ip, 443)
+}
+
+func ipv6ConnectRequestWithPort(ip net.IP, port int) []byte {
 	out := []byte{0x05, 0x01, 0x00, 0x04}
 	out = append(out, ip.To16()...)
-	out = append(out, 0x01, 0xbb)
+	var portBuf [2]byte
+	binary.BigEndian.PutUint16(portBuf[:], uint16(port))
+	out = append(out, portBuf[:]...)
 	return out
 }
 
