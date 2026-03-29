@@ -1,20 +1,106 @@
-name: 🐛 Проблема
-title: '[Проблема] '
-description: Сообщить о проблеме
-labels: ['type: проблема', 'status: нуждается в сортировке']
+name: 🐛 Bug report
+description: Сообщить о проблеме с manager script, установкой, запуском или маршрутизацией
+title: "[Bug] "
+labels:
+  - type: bug
+  - status: triage
 
 body:
-  - type: textarea
-    id: description
+  - type: markdown
     attributes:
-      label: Опишите вашу проблему
-      description: Чётко опишите проблему с которой вы столкнулись
-      placeholder: Описание проблемы
+      value: |
+        Перед созданием issue:
+
+        - проверьте, что используете последнюю версию release
+        - приложите точную команду запуска или шаги из меню
+        - если проблема связана с OpenWrt, приложите диагностику из формы ниже
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Область проблемы
+      description: Где именно воспроизводится проблема
+      options:
+        - manager script / menu
+        - install / update
+        - start / stop / autostart
+        - Telegram messages / media
+        - Telegram calls
+        - CI / release
+        - другое
     validations:
       required: true
 
   - type: textarea
-    id: additions
+    id: problem
     attributes:
-      label: Дополнительные детали
-      description: Если у вас проблемы с работой прокси, то приложите файл логов в момент возникновения проблемы.
+      label: Что именно сломано
+      description: Коротко опишите ожидаемое и фактическое поведение
+      placeholder: |
+        Ожидал:
+        Получил:
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Как воспроизвести
+      description: Приведите точные шаги, включая команду запуска или действия в меню
+      placeholder: |
+        1. Подключился по SSH
+        2. Запустил `tgm`
+        3. Выбрал `Start proxy`
+        4. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: Версия release или тега, на которой воспроизводится проблема
+      placeholder: v1.1.18
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Устройство / система
+      description: Роутер, OpenWrt сборка или другая среда запуска
+      placeholder: Xiaomi AX3600, OpenWrt 23.x, ramips/mt7621
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Диагностика
+      description: Если проблема связана с OpenWrt, приложите вывод этих команд
+      value: |
+        ```sh
+        cat /etc/openwrt_release
+        ubus call system board
+        uname -m
+        file /tmp/tg-ws-proxy-go/tg-ws-proxy
+        ls -l /tmp/tg-ws-proxy-go/tg-ws-proxy
+        ```
+      render: shell
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи / вывод ошибок
+      description: Вставьте релевантный фрагмент лога или вывода команды
+      placeholder: |
+        tg-ws-proxy ...
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительно
+      description: Любые детали, которые могут помочь с разбором

@@ -1,0 +1,29 @@
+name: ✨ Feature request
+description: Предложить улучшение для manager script, proxy logic или release flow
+title: "[Feature] "
+labels:
+  - type: feature
+  - status: triage
+
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: Что хотите добавить
+      description: Опишите идею или улучшение
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Зачем это нужно
+      description: Какую проблему это решает или что упрощает
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Контекст / детали
+      description: Дополнительные примеры, ограничения или варианты реализации
