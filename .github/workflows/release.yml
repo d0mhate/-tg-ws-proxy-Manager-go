@@ -33,4 +33,6 @@ jobs:
       - name: publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/tg-ws-proxy-openwrt
+          files: |
+            build/tg-ws-proxy-openwrt
+            tg-ws-proxy-go.sh

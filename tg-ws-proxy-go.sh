@@ -33,7 +33,7 @@ VERBOSE_FROM_ENV="${VERBOSE+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
 RELEASE_URL="${RELEASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download/$BINARY_NAME}"
 RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
-SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME}"
+SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/download}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
 SOURCE_MANAGER_SCRIPT="${SOURCE_MANAGER_SCRIPT:-$SOURCE_BIN.manager}"
@@ -646,9 +646,14 @@ refresh_current_manager_script_from_source() {
 
 ensure_source_manager_current() {
     ref="$1"
+    strict="${2:-0}"
 
     if [ -n "$ref" ] && download_manager_script "$ref"; then
         return 0
+    fi
+
+    if [ "$strict" = "1" ] && [ -n "$ref" ]; then
+        return 1
     fi
 
     if [ -x "$SOURCE_MANAGER_SCRIPT" ]; then
@@ -932,7 +937,7 @@ update_binary() {
         return 1
     fi
     write_source_version_file "$latest_tag" || return 1
-    if ! ensure_source_manager_current "$latest_tag"; then
+    if ! ensure_source_manager_current "$latest_tag" "1"; then
         printf "%sManager script update failed%s\n" "$C_RED" "$C_RESET"
         pause
         return 1

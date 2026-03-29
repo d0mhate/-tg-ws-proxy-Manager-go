@@ -497,6 +497,56 @@ func TestManagerUpdateRefreshesLegacyCurrentScriptPath(t *testing.T) {
 	}
 }
 
+func TestManagerUpdateFailsWhenTaggedManagerScriptCannotBeDownloaded(t *testing.T) {
+	env := managerEnv(t)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.9\"}\n"))
+		case "/binary":
+			_, _ = w.Write([]byte("#!/bin/sh\nexit 0\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+	serverURL := "http://" + listener.Addr().String()
+
+	launcherPath := envValue(env, "LAUNCHER_PATH")
+	if launcherPath == "" {
+		t.Fatal("missing launcher path in env")
+	}
+
+	env = append(env,
+		"RELEASE_API_URL="+serverURL+"/release.json",
+		"RELEASE_URL="+serverURL+"/binary",
+		"SCRIPT_RELEASE_BASE_URL="+serverURL,
+	)
+
+	out, err := runManager(t, env, "update")
+	if err == nil {
+		t.Fatalf("expected update to fail when tagged manager script cannot be downloaded:\n%s", out)
+	}
+	if !strings.Contains(out, "Manager script update failed") {
+		t.Fatalf("expected manager script download failure message, got:\n%s", out)
+	}
+	if _, statErr := os.Stat(launcherPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected launcher to stay absent after failed manager update, stat err=%v", statErr)
+	}
+}
+
 func TestManagerStatusIgnoresFalsePositivePgrepMatches(t *testing.T) {
 	env := managerEnv(t)
 
