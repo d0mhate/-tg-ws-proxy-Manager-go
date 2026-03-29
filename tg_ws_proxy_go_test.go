@@ -39,6 +39,7 @@ func managerEnv(t *testing.T) []string {
 	sourceBin := filepath.Join(root, "source", "tg-ws-proxy-openwrt")
 	sourceVersion := sourceBin + ".version"
 	sourceManager := filepath.Join(root, "source", "tg-ws-proxy-go.sh")
+	managerScriptPath := filepath.Join(root, "manager", "tg-ws-proxy-go.sh")
 	releaseAPI := filepath.Join(root, "release.json")
 	installDir := filepath.Join(root, "tmp-install")
 	persistStateDir := filepath.Join(root, "persist-state")
@@ -61,6 +62,7 @@ func managerEnv(t *testing.T) []string {
 	if err != nil {
 		t.Fatalf("read manager script: %v", err)
 	}
+	writeFile(t, managerScriptPath, string(managerScript), 0o755)
 	writeFile(t, scriptReleasePath, string(managerScript), 0o755)
 
 	env := append([]string{}, os.Environ()...)
@@ -71,6 +73,7 @@ func managerEnv(t *testing.T) []string {
 		"SOURCE_BIN="+sourceBin,
 		"SOURCE_VERSION_FILE="+sourceVersion,
 		"SOURCE_MANAGER_SCRIPT="+sourceManager,
+		"MANAGER_SCRIPT_PATH="+managerScriptPath,
 		"INSTALL_DIR="+installDir,
 		"BIN_PATH="+filepath.Join(installDir, "tg-ws-proxy"),
 		"VERSION_FILE="+filepath.Join(installDir, "version"),
@@ -93,10 +96,28 @@ func managerEnv(t *testing.T) []string {
 	return env
 }
 
+func managerScriptPath(env []string) string {
+	scriptPath := envValue(env, "MANAGER_SCRIPT_PATH")
+	if scriptPath != "" {
+		return scriptPath
+	}
+	return "tg-ws-proxy-go.sh"
+}
+
 func runManager(t *testing.T, env []string, args ...string) (string, error) {
 	t.Helper()
 
-	cmd := exec.Command("sh", append([]string{"tg-ws-proxy-go.sh"}, args...)...)
+	cmd := exec.Command("sh", append([]string{managerScriptPath(env)}, args...)...)
+	cmd.Dir = "."
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func runManagerAtPath(t *testing.T, env []string, scriptPath string, args ...string) (string, error) {
+	t.Helper()
+
+	cmd := exec.Command("sh", append([]string{scriptPath}, args...)...)
 	cmd.Dir = "."
 	cmd.Env = env
 	out, err := cmd.CombinedOutput()
@@ -106,7 +127,7 @@ func runManager(t *testing.T, env []string, args ...string) (string, error) {
 func runManagerMenu(t *testing.T, env []string, input string) (string, error) {
 	t.Helper()
 
-	cmd := exec.Command("sh", "tg-ws-proxy-go.sh")
+	cmd := exec.Command("sh", managerScriptPath(env))
 	cmd.Dir = "."
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(input)
@@ -409,6 +430,70 @@ func TestManagerUpdateRefreshesLauncherScriptFromRelease(t *testing.T) {
 	}
 	if launcher := readTrimmed(t, launcherPath); !strings.Contains(launcher, tmpManagerPath) {
 		t.Fatalf("launcher does not point to installed manager:\n%s", launcher)
+	}
+}
+
+func TestManagerUpdateRefreshesLegacyCurrentScriptPath(t *testing.T) {
+	env := managerEnv(t)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.9\"}\n"))
+		case "/binary":
+			_, _ = w.Write([]byte("#!/bin/sh\nexit 0\n"))
+		case "/v9.9.9/tg-ws-proxy-go.sh":
+			_, _ = w.Write([]byte("#!/bin/sh\necho manager-release-marker\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+	serverURL := "http://" + listener.Addr().String()
+
+	legacyScript := filepath.Join(t.TempDir(), "legacy", "tg-ws-proxy-go.sh")
+	managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+	if err != nil {
+		t.Fatalf("read manager script: %v", err)
+	}
+	writeFile(t, legacyScript, string(managerScript), 0o755)
+
+	launcherPath := envValue(env, "LAUNCHER_PATH")
+	installDir := envValue(env, "INSTALL_DIR")
+	if launcherPath == "" || installDir == "" {
+		t.Fatal("missing launcher or install dir in env")
+	}
+	writeFile(t, launcherPath, "#!/bin/sh\nsh "+legacyScript+" \"$@\"\n", 0o755)
+
+	env = append(env,
+		"RELEASE_API_URL="+serverURL+"/release.json",
+		"RELEASE_URL="+serverURL+"/binary",
+		"SCRIPT_RELEASE_BASE_URL="+serverURL,
+	)
+
+	out, err := runManagerAtPath(t, env, legacyScript, "update")
+	if err != nil {
+		t.Fatalf("update from legacy script path failed: %v\n%s", err, out)
+	}
+
+	if got := readTrimmed(t, legacyScript); !strings.Contains(got, "manager-release-marker") {
+		t.Fatalf("expected current legacy script path to be refreshed from release, got:\n%s", got)
+	}
+
+	tmpManagerPath := filepath.Join(installDir, "tg-ws-proxy-go.sh")
+	if launcher := readTrimmed(t, launcherPath); !strings.Contains(launcher, tmpManagerPath) {
+		t.Fatalf("launcher does not point to refreshed installed manager:\n%s", launcher)
 	}
 }
 

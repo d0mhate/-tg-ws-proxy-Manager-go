@@ -290,6 +290,14 @@ canonical_path() {
     readlink -f "$path" 2>/dev/null || printf "%s" "$path"
 }
 
+current_script_path() {
+    if [ -n "${0:-}" ]; then
+        canonical_path "$0"
+        return 0
+    fi
+    return 1
+}
+
 pid_matches_binary() {
     pid="$1"
     path="$2"
@@ -619,6 +627,23 @@ download_manager_script() {
     return 1
 }
 
+refresh_current_manager_script_from_source() {
+    current_script="$(current_script_path 2>/dev/null || true)"
+    [ -n "$current_script" ] || return 0
+    [ -f "$SOURCE_MANAGER_SCRIPT" ] || return 0
+
+    source_script="$(canonical_path "$SOURCE_MANAGER_SCRIPT")"
+    [ "$current_script" = "$source_script" ] && return 0
+
+    tmp_manager="$(canonical_path "$INSTALL_DIR/$PERSIST_MANAGER_NAME")"
+    [ "$current_script" = "$tmp_manager" ] && return 0
+
+    [ -w "$current_script" ] || return 0
+
+    cp "$SOURCE_MANAGER_SCRIPT" "$current_script" || return 1
+    chmod +x "$current_script" || return 1
+}
+
 ensure_source_manager_current() {
     ref="$1"
 
@@ -912,6 +937,7 @@ update_binary() {
         pause
         return 1
     fi
+    refresh_current_manager_script_from_source || true
     launcher_path="$(install_from_source)" || return 1
     if has_persistent_install; then
         persist_dir="$(persistent_install_dir 2>/dev/null || true)"
