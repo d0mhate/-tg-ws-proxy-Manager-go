@@ -67,6 +67,11 @@ wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-
 sh /tmp/tg-ws-proxy-go.sh start-background
 ```
 
+Остановка после фонового запуска:
+
+- через пункт меню `Stop proxy`
+- или командой `tgm stop`
+
 Script создаёт короткий launcher `tgm`. Обычно это `/usr/bin/tgm`, если туда нельзя писать, будет fallback в `/tmp/tgm`.
 
 ## Настройки Telegram
