@@ -31,6 +31,8 @@ func parseArgs(args []string) (config.Config, error) {
 	fs := flag.NewFlagSet("tg-ws-proxy", flag.ContinueOnError)
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "SOCKS5 listen host")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "SOCKS5 listen port")
+	fs.StringVar(&cfg.Username, "username", cfg.Username, "SOCKS5 username auth")
+	fs.StringVar(&cfg.Password, "password", cfg.Password, "SOCKS5 password auth")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
 	fs.IntVar(&cfg.BufferKB, "buf-kb", cfg.BufferKB, "socket buffer size in KB")
 	fs.IntVar(&cfg.PoolSize, "pool-size", cfg.PoolSize, "number of pre-opened idle WebSocket connections per active DC bucket")
@@ -47,6 +49,9 @@ func parseArgs(args []string) (config.Config, error) {
 			return config.Config{}, fmt.Errorf("invalid --dc-ip: %w", err)
 		}
 		cfg.DCIPs = parsed
+	}
+	if (cfg.Username == "") != (cfg.Password == "") {
+		return config.Config{}, fmt.Errorf("--username and --password must be used together")
 	}
 	return cfg, nil
 }

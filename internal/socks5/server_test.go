@@ -91,6 +91,123 @@ func TestHandshakeRejectsUnsupportedCommand(t *testing.T) {
 	}
 }
 
+func TestHandshakeUsernamePasswordConnect(t *testing.T) {
+	cfg := config.Default()
+	cfg.Username = "alice"
+	cfg.Password = "secret"
+
+	req, err := runHandshakeClientWithConfig(t, cfg,
+		[]byte{0x05, 0x02, socksAuthNoAuth, socksAuthUserPass},
+		buildUserPassAuthPayload("alice", "secret"),
+		ipv4ConnectRequest("149.154.167.220", 443),
+	)
+	if err != nil {
+		t.Fatalf("handshake returned error: %v", err)
+	}
+	if req.DstHost != "149.154.167.220" || req.DstPort != 443 {
+		t.Fatalf("unexpected request parsed after auth: %s:%d", req.DstHost, req.DstPort)
+	}
+}
+
+func TestHandshakeAcceptsNoAuthWhenServerDoesNotRequireCredentials(t *testing.T) {
+	req, err := runHandshakeClientWithConfig(t, config.Default(),
+		[]byte{0x05, 0x02, socksAuthNoAuth, socksAuthUserPass},
+		nil,
+		ipv4ConnectRequest("149.154.167.220", 443),
+	)
+	if err != nil {
+		t.Fatalf("handshake returned error: %v", err)
+	}
+	if req.DstHost != "149.154.167.220" || req.DstPort != 443 {
+		t.Fatalf("unexpected request parsed without auth: %s:%d", req.DstHost, req.DstPort)
+	}
+}
+
+func TestHandshakeRejectsMissingUsernamePasswordMethod(t *testing.T) {
+	cfg := config.Default()
+	cfg.Username = "alice"
+	cfg.Password = "secret"
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(errCh)
+		if _, err := clientConn.Write([]byte{0x05, 0x01, socksAuthNoAuth}); err != nil {
+			errCh <- err
+			return
+		}
+		reply := make([]byte, 2)
+		if _, err := io.ReadFull(clientConn, reply); err != nil {
+			errCh <- err
+			return
+		}
+		if !bytes.Equal(reply, []byte{0x05, 0xff}) {
+			errCh <- errors.New("unexpected auth method rejection reply")
+			return
+		}
+	}()
+
+	_, err := handshake(serverConn, cfg)
+	if err == nil {
+		t.Fatal("expected handshake to reject missing username/password method")
+	}
+	if clientErr := <-errCh; clientErr != nil {
+		t.Fatalf("client side of handshake failed: %v", clientErr)
+	}
+}
+
+func TestHandshakeRejectsInvalidUsernamePassword(t *testing.T) {
+	cfg := config.Default()
+	cfg.Username = "alice"
+	cfg.Password = "secret"
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(errCh)
+		if _, err := clientConn.Write([]byte{0x05, 0x01, socksAuthUserPass}); err != nil {
+			errCh <- err
+			return
+		}
+		reply := make([]byte, 2)
+		if _, err := io.ReadFull(clientConn, reply); err != nil {
+			errCh <- err
+			return
+		}
+		if !bytes.Equal(reply, []byte{0x05, socksAuthUserPass}) {
+			errCh <- errors.New("unexpected auth method selection reply")
+			return
+		}
+		if _, err := clientConn.Write(buildUserPassAuthPayload("alice", "wrong")); err != nil {
+			errCh <- err
+			return
+		}
+		authReply := make([]byte, 2)
+		if _, err := io.ReadFull(clientConn, authReply); err != nil {
+			errCh <- err
+			return
+		}
+		if !bytes.Equal(authReply, []byte{0x01, 0x01}) {
+			errCh <- errors.New("unexpected auth rejection reply")
+			return
+		}
+	}()
+
+	_, err := handshake(serverConn, cfg)
+	if err == nil {
+		t.Fatal("expected handshake to reject invalid username/password")
+	}
+	if clientErr := <-errCh; clientErr != nil {
+		t.Fatalf("client side of handshake failed: %v", clientErr)
+	}
+}
+
 func TestHandleConnPassthroughRoute(t *testing.T) {
 	var called struct {
 		host string
@@ -711,6 +828,11 @@ func TestConnectWSUsesFailFastDialTimeoutForAllDCs(t *testing.T) {
 
 func runHandshakeClient(t *testing.T, request []byte) (requestOut request, err error) {
 	t.Helper()
+	return runHandshakeClientWithConfig(t, config.Default(), request[:3], nil, request[3:])
+}
+
+func runHandshakeClientWithConfig(t *testing.T, cfg config.Config, greeting []byte, authPayload []byte, requestPayload []byte) (requestOut request, err error) {
+	t.Helper()
 
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
@@ -720,7 +842,7 @@ func runHandshakeClient(t *testing.T, request []byte) (requestOut request, err e
 	go func() {
 		defer close(clientErrCh)
 
-		if _, writeErr := clientConn.Write(request[:3]); writeErr != nil {
+		if _, writeErr := clientConn.Write(greeting); writeErr != nil {
 			clientErrCh <- writeErr
 			return
 		}
@@ -730,18 +852,38 @@ func runHandshakeClient(t *testing.T, request []byte) (requestOut request, err e
 			clientErrCh <- readErr
 			return
 		}
-		if !bytes.Equal(reply, []byte{0x05, 0x00}) {
+		expectedMethod := byte(socksAuthNoAuth)
+		if cfg.Username != "" || cfg.Password != "" {
+			expectedMethod = socksAuthUserPass
+		}
+		if !bytes.Equal(reply, []byte{0x05, expectedMethod}) {
 			clientErrCh <- io.ErrUnexpectedEOF
 			return
 		}
 
-		if _, writeErr := clientConn.Write(request[3:]); writeErr != nil {
+		if expectedMethod == socksAuthUserPass {
+			if _, writeErr := clientConn.Write(authPayload); writeErr != nil {
+				clientErrCh <- writeErr
+				return
+			}
+			authReply := make([]byte, 2)
+			if _, readErr := io.ReadFull(clientConn, authReply); readErr != nil {
+				clientErrCh <- readErr
+				return
+			}
+			if !bytes.Equal(authReply, []byte{0x01, 0x00}) {
+				clientErrCh <- io.ErrUnexpectedEOF
+				return
+			}
+		}
+
+		if _, writeErr := clientConn.Write(requestPayload); writeErr != nil {
 			clientErrCh <- writeErr
 			return
 		}
 	}()
 
-	requestOut, err = handshake(serverConn)
+	requestOut, err = handshake(serverConn, cfg)
 	if clientErr := <-clientErrCh; clientErr != nil {
 		t.Fatalf("client side of handshake failed: %v", clientErr)
 	}
@@ -749,6 +891,11 @@ func runHandshakeClient(t *testing.T, request []byte) (requestOut request, err e
 }
 
 func runHandleConnFlow(t *testing.T, srv *Server, connectReq []byte, init []byte, assertReply func([]byte)) {
+	t.Helper()
+	runHandleConnFlowWithAuth(t, srv, connectReq, init, "", "", assertReply)
+}
+
+func runHandleConnFlowWithAuth(t *testing.T, srv *Server, connectReq []byte, init []byte, username string, password string, assertReply func([]byte)) {
 	t.Helper()
 
 	clientConn, serverConn := net.Pipe()
@@ -764,7 +911,13 @@ func runHandleConnFlow(t *testing.T, srv *Server, connectReq []byte, init []byte
 		srv.handleConn(ctx, serverConn)
 	}()
 
-	if _, err := clientConn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+	greeting := []byte{0x05, 0x01, 0x00}
+	expectedMethod := byte(socksAuthNoAuth)
+	if username != "" || password != "" {
+		greeting = []byte{0x05, 0x02, socksAuthNoAuth, socksAuthUserPass}
+		expectedMethod = socksAuthUserPass
+	}
+	if _, err := clientConn.Write(greeting); err != nil {
 		t.Fatalf("failed to send auth greeting: %v", err)
 	}
 
@@ -772,8 +925,20 @@ func runHandleConnFlow(t *testing.T, srv *Server, connectReq []byte, init []byte
 	if _, err := io.ReadFull(clientConn, authReply); err != nil {
 		t.Fatalf("failed to read auth reply: %v", err)
 	}
-	if !bytes.Equal(authReply, []byte{0x05, 0x00}) {
+	if !bytes.Equal(authReply, []byte{0x05, expectedMethod}) {
 		t.Fatalf("unexpected auth reply: %v", authReply)
+	}
+	if expectedMethod == socksAuthUserPass {
+		if _, err := clientConn.Write(buildUserPassAuthPayload(username, password)); err != nil {
+			t.Fatalf("failed to send username/password auth payload: %v", err)
+		}
+		userPassReply := make([]byte, 2)
+		if _, err := io.ReadFull(clientConn, userPassReply); err != nil {
+			t.Fatalf("failed to read username/password auth reply: %v", err)
+		}
+		if !bytes.Equal(userPassReply, []byte{0x01, 0x00}) {
+			t.Fatalf("unexpected username/password auth reply: %v", userPassReply)
+		}
 	}
 
 	if _, err := clientConn.Write(connectReq); err != nil {
@@ -800,6 +965,63 @@ func runHandleConnFlow(t *testing.T, srv *Server, connectReq []byte, init []byte
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("handleConn did not complete")
+	}
+}
+
+func buildUserPassAuthPayload(username, password string) []byte {
+	out := []byte{0x01, byte(len(username))}
+	out = append(out, []byte(username)...)
+	out = append(out, byte(len(password)))
+	out = append(out, []byte(password)...)
+	return out
+}
+
+func runHandleConnInvalidAuthAttempt(t *testing.T, srv *Server, username string, password string) {
+	t.Helper()
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleConn(ctx, serverConn)
+	}()
+
+	if _, err := clientConn.Write([]byte{0x05, 0x02, socksAuthNoAuth, socksAuthUserPass}); err != nil {
+		t.Fatalf("failed to send auth greeting: %v", err)
+	}
+
+	authReply := make([]byte, 2)
+	if _, err := io.ReadFull(clientConn, authReply); err != nil {
+		t.Fatalf("failed to read auth reply: %v", err)
+	}
+	if !bytes.Equal(authReply, []byte{0x05, socksAuthUserPass}) {
+		t.Fatalf("unexpected auth reply: %v", authReply)
+	}
+
+	if _, err := clientConn.Write(buildUserPassAuthPayload(username, password)); err != nil {
+		t.Fatalf("failed to send invalid username/password auth payload: %v", err)
+	}
+
+	userPassReply := make([]byte, 2)
+	if _, err := io.ReadFull(clientConn, userPassReply); err != nil {
+		t.Fatalf("failed to read invalid username/password auth reply: %v", err)
+	}
+	if !bytes.Equal(userPassReply, []byte{0x01, 0x01}) {
+		t.Fatalf("unexpected invalid username/password auth reply: %v", userPassReply)
+	}
+
+	_ = clientConn.Close()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleConn did not complete after invalid auth attempt")
 	}
 }
 

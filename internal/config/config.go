@@ -11,6 +11,8 @@ import (
 type Config struct {
 	Host          string
 	Port          int
+	Username      string
+	Password      string
 	Verbose       bool
 	BufferKB      int
 	PoolSize      int

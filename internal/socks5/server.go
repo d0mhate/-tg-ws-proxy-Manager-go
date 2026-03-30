@@ -31,6 +31,8 @@ var errUDPFragmentUnsupported = errors.New("udp fragmentation is not supported")
 const (
 	socksCmdConnect      = 0x01
 	socksCmdUDPAssociate = 0x03
+	socksAuthNoAuth      = 0x00
+	socksAuthUserPass    = 0x02
 	wsFailCooldown       = 30 * time.Second
 	wsFailFastDial       = 2 * time.Second
 	statsLogEvery        = 30 * time.Second
@@ -145,7 +147,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	clientAddr := remoteAddr(conn)
 
-	req, err := handshake(conn)
+	req, err := handshake(conn, s.cfg)
 	if err != nil {
 		s.logger.Printf("[%s] handshake failed: %v", clientAddr, err)
 		return
@@ -472,7 +474,7 @@ func bridgeTCP(ctx context.Context, a net.Conn, b net.Conn) error {
 	}
 }
 
-func handshake(conn net.Conn) (request, error) {
+func handshake(conn net.Conn, cfg config.Config) (request, error) {
 	var req request
 	buf := make([]byte, 262)
 
@@ -490,8 +492,18 @@ func handshake(conn net.Conn) (request, error) {
 	if _, err := io.ReadFull(conn, buf[:nMethods]); err != nil {
 		return req, err
 	}
-	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+	method, err := negotiateAuthMethod(buf[:nMethods], cfg)
+	if err != nil {
+		_, _ = conn.Write([]byte{0x05, 0xff})
 		return req, err
+	}
+	if _, err := conn.Write([]byte{0x05, method}); err != nil {
+		return req, err
+	}
+	if method == socksAuthUserPass {
+		if err := authenticateUserPass(conn, cfg.Username, cfg.Password); err != nil {
+			return req, err
+		}
 	}
 
 	if _, err := io.ReadFull(conn, buf[:4]); err != nil {
@@ -534,6 +546,57 @@ func handshake(conn net.Conn) (request, error) {
 	}
 	req.DstPort = int(binary.BigEndian.Uint16(buf[:2]))
 	return req, nil
+}
+
+func negotiateAuthMethod(methods []byte, cfg config.Config) (byte, error) {
+	required := byte(socksAuthNoAuth)
+	if cfg.Username != "" || cfg.Password != "" {
+		required = byte(socksAuthUserPass)
+	}
+	for _, method := range methods {
+		if method == required {
+			return required, nil
+		}
+	}
+	if required == socksAuthUserPass {
+		return 0xff, errors.New("username/password auth is required")
+	}
+	return 0xff, errors.New("no supported auth methods provided")
+}
+
+func authenticateUserPass(conn net.Conn, username, password string) error {
+	buf := make([]byte, 513)
+	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
+		return err
+	}
+	if buf[0] != 0x01 {
+		_, _ = conn.Write([]byte{0x01, 0x01})
+		return errors.New("unsupported username/password auth version")
+	}
+
+	userLen := int(buf[1])
+	if _, err := io.ReadFull(conn, buf[:userLen]); err != nil {
+		return err
+	}
+	gotUser := string(buf[:userLen])
+
+	if _, err := io.ReadFull(conn, buf[:1]); err != nil {
+		return err
+	}
+	passLen := int(buf[0])
+	if _, err := io.ReadFull(conn, buf[:passLen]); err != nil {
+		return err
+	}
+	gotPass := string(buf[:passLen])
+
+	if gotUser != username || gotPass != password {
+		_, _ = conn.Write([]byte{0x01, 0x01})
+		return errors.New("invalid username/password")
+	}
+	if _, err := conn.Write([]byte{0x01, 0x00}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeReply(conn net.Conn, status byte) error {

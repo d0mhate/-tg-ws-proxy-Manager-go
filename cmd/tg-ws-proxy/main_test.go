@@ -48,3 +48,26 @@ func TestParseArgsOverridesHostAndPort(t *testing.T) {
 		t.Fatalf("unexpected overridden port: %d", cfg.Port)
 	}
 }
+
+func TestParseArgsUsernamePassword(t *testing.T) {
+	cfg, err := parseArgs([]string{"--username", "alice", "--password", "secret"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	if cfg.Username != "alice" {
+		t.Fatalf("unexpected username: %q", cfg.Username)
+	}
+	if cfg.Password != "secret" {
+		t.Fatalf("unexpected password: %q", cfg.Password)
+	}
+}
+
+func TestParseArgsRejectsPartialUsernamePassword(t *testing.T) {
+	if _, err := parseArgs([]string{"--username", "alice"}); err == nil {
+		t.Fatal("expected parseArgs to reject username without password")
+	}
+	if _, err := parseArgs([]string{"--password", "secret"}); err == nil {
+		t.Fatal("expected parseArgs to reject password without username")
+	}
+}
