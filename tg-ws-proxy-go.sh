@@ -435,6 +435,10 @@ pid_matches_binary() {
         return $?
     fi
 
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -nP -a -p "$pid" -iTCP:"$LISTEN_PORT" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+    fi
+
     if command -v ps >/dev/null 2>&1; then
         ps -p "$pid" -o command= 2>/dev/null | grep -F -- "$path" >/dev/null 2>&1
         return $?
@@ -1409,6 +1413,86 @@ show_telegram_only() {
     pause
 }
 
+restart_running_proxy_for_updated_settings() {
+    if autostart_enabled; then
+        "$INIT_SCRIPT_PATH" restart >/dev/null 2>&1 && return 0
+        "$INIT_SCRIPT_PATH" stop >/dev/null 2>&1 || true
+        "$INIT_SCRIPT_PATH" start >/dev/null 2>&1 && return 0
+        return 1
+    fi
+
+    stop_running >/dev/null 2>&1 || true
+    child_pid="$(run_binary_background)" || return 1
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    sleep 1
+
+    if kill -0 "$child_pid" 2>/dev/null; then
+        return 0
+    fi
+
+    wait "$child_pid" 2>/dev/null
+    rm -f "$PID_FILE"
+    return 1
+}
+
+prompt_restart_proxy_for_updated_settings() {
+    if ! is_running; then
+        return 0
+    fi
+
+    printf "\nProxy is currently running.\n"
+    printf "Restart now to apply the new settings? [y/N]: "
+    IFS= read -r restart_choice
+
+    case "$restart_choice" in
+        y|Y|yes|YES|Yes)
+            if restart_running_proxy_for_updated_settings; then
+                printf "\n%sProxy restarted with the updated settings%s\n" "$C_GREEN" "$C_RESET"
+            else
+                printf "\n%sProxy restart failed. Restart it manually to apply the new settings.%s\n" "$C_RED" "$C_RESET"
+            fi
+            ;;
+        *)
+            printf "\nRestart skipped. New settings will apply on the next start.\n"
+            ;;
+    esac
+}
+
+configure_socks_auth() {
+    show_header
+    show_telegram_settings
+    printf "\nLeave username empty to disable SOCKS5 auth.\n"
+    printf "Username: "
+    IFS= read -r new_username
+
+    if [ -z "$new_username" ]; then
+        SOCKS_USERNAME=""
+        SOCKS_PASSWORD=""
+        write_settings_config || return 1
+        printf "\n%sSOCKS5 auth disabled%s\n" "$C_GREEN" "$C_RESET"
+        prompt_restart_proxy_for_updated_settings
+        pause
+        return 0
+    fi
+
+    printf "Password: "
+    IFS= read -r new_password
+    if [ -z "$new_password" ]; then
+        printf "\n%sPassword cannot be empty when username is set%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    SOCKS_USERNAME="$new_username"
+    SOCKS_PASSWORD="$new_password"
+    write_settings_config || return 1
+
+    printf "\n%sSOCKS5 auth saved%s\n" "$C_GREEN" "$C_RESET"
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
 show_quick_only() {
     show_header
     show_quick_commands
@@ -1498,6 +1582,7 @@ advanced_menu() {
         printf "  3) Restart proxy\n"
         printf "  4) Show quick commands\n"
         printf "  5) Remove binary and runtime files\n"
+        printf "  6) Configure SOCKS5 auth\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -1519,6 +1604,9 @@ advanced_menu() {
                 ;;
             5)
                 remove_all
+                ;;
+            6)
+                configure_socks_auth
                 ;;
             *)
                 return 0

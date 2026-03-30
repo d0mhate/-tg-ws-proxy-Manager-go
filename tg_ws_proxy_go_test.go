@@ -395,6 +395,281 @@ func TestManagerAutostartConfigAutoSyncsCurrentSettings(t *testing.T) {
 	}
 }
 
+func TestManagerAutostartConfigPersistsOptionalAuthCredentials(t *testing.T) {
+	env := append(managerEnv(t), "SOCKS_USERNAME=alice", "SOCKS_PASSWORD=secret")
+
+	if out, err := runManager(t, env, "enable-autostart"); err != nil {
+		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
+	}
+
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+	initScriptPath := envValue(env, "INIT_SCRIPT_PATH")
+	if initScriptPath == "" {
+		t.Fatal("INIT_SCRIPT_PATH not found in env")
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "USERNAME='alice'") || !strings.Contains(config, "PASSWORD='secret'") {
+		t.Fatalf("expected auth credentials to be persisted in autostart config, got:\n%s", config)
+	}
+
+	initScript := readTrimmed(t, initScriptPath)
+	if !strings.Contains(initScript, `--username "$USERNAME" --password "$PASSWORD"`) {
+		t.Fatalf("expected init script to pass auth flags when configured, got:\n%s", initScript)
+	}
+}
+
+func TestManagerTelegramSettingsLoadSavedAuthCredentials(t *testing.T) {
+	env := append(managerEnv(t), "SOCKS_USERNAME=alice", "SOCKS_PASSWORD=secret")
+
+	if out, err := runManager(t, env, "enable-autostart"); err != nil {
+		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
+	}
+
+	checkEnv := unsetEnvValue(unsetEnvValue(env, "SOCKS_USERNAME"), "SOCKS_PASSWORD")
+
+	out, err := runManager(t, checkEnv, "telegram")
+	if err != nil {
+		t.Fatalf("telegram failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "username : alice") || !strings.Contains(out, "password : <set>") {
+		t.Fatalf("expected telegram settings to load saved auth credentials, got:\n%s", out)
+	}
+}
+
+func TestManagerConfigureSocksAuthViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n6\nalice\nsecret\n\n\n")
+	if err != nil {
+		t.Fatalf("configure socks auth via menu failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "SOCKS5 auth saved") {
+		t.Fatalf("expected auth saved message, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "USERNAME='alice'") || !strings.Contains(config, "PASSWORD='secret'") {
+		t.Fatalf("expected configured auth credentials in settings file, got:\n%s", config)
+	}
+
+	settingsOut, err := runManager(t, env, "telegram")
+	if err != nil {
+		t.Fatalf("telegram failed: %v\n%s", err, settingsOut)
+	}
+	if !strings.Contains(settingsOut, "username : alice") || !strings.Contains(settingsOut, "password : <set>") {
+		t.Fatalf("expected telegram settings to show configured auth, got:\n%s", settingsOut)
+	}
+}
+
+func TestManagerConfigureSocksAuthCanBeClearedViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	if out, err := runManagerMenu(t, env, "5\n6\nalice\nsecret\n\n\n"); err != nil {
+		t.Fatalf("initial configure socks auth via menu failed: %v\n%s", err, out)
+	}
+
+	out, err := runManagerMenu(t, env, "5\n6\n\n\n")
+	if err != nil {
+		t.Fatalf("clear socks auth via menu failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "SOCKS5 auth disabled") {
+		t.Fatalf("expected auth disabled message, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "USERNAME=''") || !strings.Contains(config, "PASSWORD=''") {
+		t.Fatalf("expected cleared auth credentials in settings file, got:\n%s", config)
+	}
+
+	settingsOut, err := runManager(t, env, "telegram")
+	if err != nil {
+		t.Fatalf("telegram failed: %v\n%s", err, settingsOut)
+	}
+	if !strings.Contains(settingsOut, "username : <empty>") || !strings.Contains(settingsOut, "password : <empty>") {
+		t.Fatalf("expected telegram settings to show cleared auth, got:\n%s", settingsOut)
+	}
+}
+
+func TestManagerConfigureSocksAuthRejectsEmptyPasswordViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n6\nalice\n\n\n\n")
+	if err != nil {
+		t.Fatalf("configure socks auth with empty password failed unexpectedly: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Password cannot be empty when username is set") {
+		t.Fatalf("expected empty password validation message, got:\n%s", out)
+	}
+
+	if _, statErr := os.Stat(configPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no settings file to be created after failed auth config, stat err=%v", statErr)
+	}
+}
+
+func TestManagerConfigureSocksAuthOffersRestartAndAppliesIt(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	if out, err := runManager(t, env, "start-background"); err != nil {
+		t.Fatalf("initial start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	initialArgs := readTrimmed(t, argsFile)
+	if strings.Contains(initialArgs, "--username") || strings.Contains(initialArgs, "--password") {
+		t.Fatalf("expected initial background start without auth flags, got args:\n%s", initialArgs)
+	}
+
+	out, err := runManagerMenu(t, env, "5\n6\nalice\nsecret\ny\n\n\n")
+	if err != nil {
+		t.Fatalf("configure socks auth with restart failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Restart now to apply the new settings? [y/N]:") {
+		t.Fatalf("expected restart prompt, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Proxy restarted with the updated settings") {
+		t.Fatalf("expected successful restart message, got:\n%s", out)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		args := readTrimmed(t, argsFile)
+		if strings.Contains(args, "--username") && strings.Contains(args, "alice") &&
+			strings.Contains(args, "--password") && strings.Contains(args, "secret") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--username") || !strings.Contains(args, "alice") ||
+		!strings.Contains(args, "--password") || !strings.Contains(args, "secret") {
+		t.Fatalf("expected restarted proxy to use updated auth flags, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after restarted auth background start failed: %v", err)
+	}
+}
+
+func TestManagerConfigureSocksAuthCanSkipRestartPrompt(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	if out, err := runManager(t, env, "start-background"); err != nil {
+		t.Fatalf("initial start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	out, err := runManagerMenu(t, env, "5\n6\nalice\nsecret\n\n\n\n")
+	if err != nil {
+		t.Fatalf("configure socks auth without restart failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Restart now to apply the new settings? [y/N]:") {
+		t.Fatalf("expected restart prompt, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Restart skipped. New settings will apply on the next start.") {
+		t.Fatalf("expected restart skipped message, got:\n%s", out)
+	}
+
+	args := readTrimmed(t, argsFile)
+	if strings.Contains(args, "--username") || strings.Contains(args, "--password") {
+		t.Fatalf("expected running proxy to keep old no-auth args after restart skip, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after skipped auth restart failed: %v", err)
+	}
+}
+
+func TestManagerMenuBackgroundStartThenConfigureSocksAuthOffersRestart(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManagerMenu(t, env, "6\n\n5\n6\nalice\nsecret\ny\n\n\n")
+	if err != nil {
+		t.Fatalf("menu background start then configure socks auth failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Background process pid:") {
+		t.Fatalf("expected background start output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Restart now to apply the new settings? [y/N]:") {
+		t.Fatalf("expected restart prompt after configuring auth from same menu session, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Proxy restarted with the updated settings") {
+		t.Fatalf("expected restart success message, got:\n%s", out)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		args := readTrimmed(t, argsFile)
+		if strings.Contains(args, "--username") && strings.Contains(args, "alice") &&
+			strings.Contains(args, "--password") && strings.Contains(args, "secret") {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--username") || !strings.Contains(args, "alice") ||
+		!strings.Contains(args, "--password") || !strings.Contains(args, "secret") {
+		t.Fatalf("expected restarted proxy from same menu session to use updated auth flags, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after same-session auth restart failed: %v", err)
+	}
+}
+
+func TestManagerEnableAutostartRejectsPartialAuthSettings(t *testing.T) {
+	env := append(managerEnv(t), "SOCKS_USERNAME=alice")
+
+	out, err := runManager(t, env, "enable-autostart")
+	if err == nil {
+		t.Fatalf("expected enable-autostart to reject partial auth settings:\n%s", out)
+	}
+	if !strings.Contains(out, "SOCKS5 auth settings are incomplete") {
+		t.Fatalf("expected partial auth validation error, got:\n%s", out)
+	}
+}
+
 func TestManagerEnableAutostartFailsWithoutPersistentSpace(t *testing.T) {
 	env := append([]string{}, managerEnv(t)...)
 	env = append(env, "PERSISTENT_SPACE_HEADROOM_KB=999999999")
@@ -1126,6 +1401,53 @@ func TestManagerMainMenuReflectsAutostartStateTransitions(t *testing.T) {
 	}
 }
 
+func TestManagerShowTelegramSettingsViaTopLevelMenu(t *testing.T) {
+	env := append(managerEnv(t), "SOCKS_USERNAME=alice", "SOCKS_PASSWORD=secret")
+
+	out, err := runManagerMenu(t, env, "4\n\n\n")
+	if err != nil {
+		t.Fatalf("top-level telegram settings failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Telegram SOCKS5") ||
+		!strings.Contains(out, "username : alice") ||
+		!strings.Contains(out, "password : <set>") {
+		t.Fatalf("expected telegram settings screen with auth values, got:\n%s", out)
+	}
+}
+
+func TestManagerAdvancedShowFullStatusViaMenu(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+	buildFakeProxyBinary(t, binPath)
+
+	out, err := runManagerMenu(t, env, "5\n1\n\n\n")
+	if err != nil {
+		t.Fatalf("advanced status screen failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Status") ||
+		!strings.Contains(out, "tmp bin   : installed") ||
+		!strings.Contains(out, "process   : stopped") {
+		t.Fatalf("expected full status screen from advanced menu, got:\n%s", out)
+	}
+}
+
+func TestManagerAdvancedShowQuickCommandsViaMenu(t *testing.T) {
+	env := managerEnv(t)
+
+	out, err := runManagerMenu(t, env, "5\n4\n\n\n")
+	if err != nil {
+		t.Fatalf("advanced quick commands screen failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Quick commands") ||
+		!strings.Contains(out, "sh "+managerScriptPath(env)+" quick") ||
+		!strings.Contains(out, "sh "+managerScriptPath(env)+" telegram") {
+		t.Fatalf("expected quick commands screen from advanced menu, got:\n%s", out)
+	}
+}
+
 func TestManagerStartFailsWithoutBinary(t *testing.T) {
 	env := managerEnv(t)
 
@@ -1199,6 +1521,98 @@ func TestManagerStartBackgroundStartsProxyAndMenuShowsStop(t *testing.T) {
 	menuOut = waitForMenuText(t, env, "2) Run proxy in terminal")
 	if !strings.Contains(menuOut, "proxy     : stopped") {
 		t.Fatalf("expected menu to show stopped proxy after background stop, got:\n%s", menuOut)
+	}
+}
+
+func TestManagerMenuBackgroundStartThenStopProxySameSession(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	buildFakeProxyBinary(t, binPath)
+
+	out, err := runManagerMenu(t, env, "6\n\n2\n\n\n")
+	if err != nil {
+		t.Fatalf("same-session background start then stop failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Background process pid:") {
+		t.Fatalf("expected background start output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Proxy stopped") {
+		t.Fatalf("expected stop confirmation in same menu session, got:\n%s", out)
+	}
+	if !strings.Contains(out, "2) Run proxy in terminal") {
+		t.Fatalf("expected menu to return to stopped action label, got:\n%s", out)
+	}
+}
+
+func TestManagerStartBackgroundPassesOptionalAuthFlags(t *testing.T) {
+	env := append(managerEnv(t), "SOCKS_USERNAME=alice", "SOCKS_PASSWORD=secret")
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, statErr := os.Stat(argsFile); statErr == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--username") || !strings.Contains(args, "alice") || !strings.Contains(args, "--password") || !strings.Contains(args, "secret") {
+		t.Fatalf("expected background start to pass auth flags, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after auth background start failed: %v", err)
+	}
+}
+
+func TestManagerStartBackgroundOmitsAuthFlagsWhenUnset(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, statErr := os.Stat(argsFile); statErr == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	args := readTrimmed(t, argsFile)
+	if strings.Contains(args, "--username") || strings.Contains(args, "--password") {
+		t.Fatalf("expected background start without auth to omit auth flags, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after no-auth background start failed: %v", err)
 	}
 }
 
