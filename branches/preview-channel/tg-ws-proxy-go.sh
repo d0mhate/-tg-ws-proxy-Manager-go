@@ -722,7 +722,7 @@ can_use_arrow_update_source_picker() {
     fi
 
     [ -t 0 ] || return 1
-    [ -t 1 ] || return 1
+    [ -t 2 ] || return 1
     [ "${TERM:-}" != "dumb" ] || return 1
     command -v stty >/dev/null 2>&1 || return 1
 }
@@ -733,7 +733,7 @@ can_use_numbered_update_source_picker() {
     fi
 
     [ -t 0 ] || return 1
-    [ -t 1 ] || return 1
+    [ -t 2 ] || return 1
     [ "${TERM:-}" != "dumb" ] || return 1
 }
 
