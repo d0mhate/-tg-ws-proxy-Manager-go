@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   id-token: write
@@ -120,7 +123,7 @@ jobs:
           fi
 
       - name: upload target artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset }}
           path: build/${{ matrix.asset }}
@@ -131,7 +134,7 @@ jobs:
 
     steps:
       - name: download all openwrt artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           path: build
 
@@ -149,7 +152,7 @@ jobs:
 
     steps:
       - name: download x86_64 artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: tg-ws-proxy-openwrt-x86_64
           path: build
