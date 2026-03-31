@@ -33,11 +33,20 @@ LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
 SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
 SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
+UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
+PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
 RELEASE_DOWNLOAD_BASE_URL="${RELEASE_DOWNLOAD_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download}"
 RELEASE_URL="${RELEASE_URL:-}"
 RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
+RELEASES_API_URL="${RELEASES_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases?per_page=10}"
 SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/download}"
+PREVIEW_BRANCH_NAME="${PREVIEW_BRANCH_NAME:-preview}"
+PREVIEW_BASE_URL="${PREVIEW_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$PREVIEW_BRANCH_NAME/branches}"
+RELEASE_TAG="${RELEASE_TAG:-}"
+MIN_PINNED_RELEASE_TAG="${MIN_PINNED_RELEASE_TAG:-v1.1.29}"
+FORCE_ARROW_UPDATE_SOURCE_PICKER="${FORCE_ARROW_UPDATE_SOURCE_PICKER:-}"
+FORCE_NUMBERED_UPDATE_SOURCE_PICKER="${FORCE_NUMBERED_UPDATE_SOURCE_PICKER:-}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
 SOURCE_MANAGER_SCRIPT="${SOURCE_MANAGER_SCRIPT:-$SOURCE_BIN.manager}"
@@ -48,6 +57,9 @@ PERSIST_STATE_DIR="${PERSIST_STATE_DIR:-/etc/tg-ws-proxy-go}"
 PERSIST_PATH_FILE="${PERSIST_PATH_FILE:-$PERSIST_STATE_DIR/install_dir}"
 PERSIST_VERSION_FILE="${PERSIST_VERSION_FILE:-$PERSIST_STATE_DIR/version}"
 PERSIST_CONFIG_FILE="${PERSIST_CONFIG_FILE:-$PERSIST_STATE_DIR/autostart.conf}"
+PERSIST_RELEASE_TAG_FILE="${PERSIST_RELEASE_TAG_FILE:-$PERSIST_STATE_DIR/release_tag}"
+PERSIST_UPDATE_CHANNEL_FILE="${PERSIST_UPDATE_CHANNEL_FILE:-$PERSIST_STATE_DIR/update_channel}"
+PERSIST_PREVIEW_BRANCH_FILE="${PERSIST_PREVIEW_BRANCH_FILE:-$PERSIST_STATE_DIR/preview_branch}"
 INIT_SCRIPT_PATH="${INIT_SCRIPT_PATH:-/etc/init.d/tg-ws-proxy-go}"
 PERSIST_MANAGER_NAME="${PERSIST_MANAGER_NAME:-tg-ws-proxy-go.sh}"
 PERSISTENT_DIR_CANDIDATES="${PERSISTENT_DIR_CANDIDATES:-/root/tg-ws-proxy-go /opt/tg-ws-proxy-go /etc/tg-ws-proxy-go}"
@@ -60,6 +72,8 @@ LISTEN_PORT="${LISTEN_PORT:-1080}"
 VERBOSE="${VERBOSE:-0}"
 SOCKS_USERNAME="${SOCKS_USERNAME:-}"
 SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
+UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
+PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
 PERSISTENT_SPACE_HEADROOM_KB="${PERSISTENT_SPACE_HEADROOM_KB:-2048}"
 PID_FILE="${PID_FILE:-$INSTALL_DIR/pid}"
@@ -138,6 +152,18 @@ resolved_release_url() {
         return 0
     fi
 
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview_branch" ]; then
+        printf "%s/%s/%s" "$PREVIEW_BASE_URL" "$preview_branch" "$(resolved_binary_name)"
+        return 0
+    fi
+
+    tag="$(selected_release_tag 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$tag" "$(resolved_binary_name)"
+        return 0
+    fi
+
     printf "%s/%s" "$RELEASE_DOWNLOAD_BASE_URL" "$(resolved_binary_name)"
 }
 
@@ -207,6 +233,32 @@ normalize_version() {
     return 1
 }
 
+version_ge() {
+    left="$(normalize_version "$1" 2>/dev/null || true)"
+    right="$(normalize_version "$2" 2>/dev/null || true)"
+    [ -n "$left" ] || return 1
+    [ -n "$right" ] || return 1
+
+    awk -v left="${left#v}" -v right="${right#v}" '
+        BEGIN {
+            split(left, l, ".")
+            split(right, r, ".")
+            max = length(l) > length(r) ? length(l) : length(r)
+            for (i = 1; i <= max; i++) {
+                lv = (i in l) ? l[i] + 0 : 0
+                rv = (i in r) ? r[i] + 0 : 0
+                if (lv > rv) exit 0
+                if (lv < rv) exit 1
+            }
+            exit 0
+        }
+    '
+}
+
+release_tag_meets_minimum() {
+    version_ge "$1" "$MIN_PINNED_RELEASE_TAG"
+}
+
 read_config_value() {
     key="$1"
     [ -f "$PERSIST_CONFIG_FILE" ] || return 1
@@ -262,6 +314,95 @@ load_saved_settings() {
     fi
 }
 
+selected_update_channel() {
+    case "$UPDATE_CHANNEL" in
+        preview)
+            printf "preview"
+            return 0
+            ;;
+        ""|release)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    if [ "$UPDATE_CHANNEL_FROM_ENV" = x ]; then
+        printf "release"
+        return 0
+    fi
+
+    value="$(read_first_line "$PERSIST_UPDATE_CHANNEL_FILE" 2>/dev/null || true)"
+    case "$value" in
+        preview)
+            printf "preview"
+            return 0
+            ;;
+    esac
+
+    printf "release"
+}
+
+selected_preview_branch() {
+    if [ "$(selected_update_channel 2>/dev/null || true)" != "preview" ]; then
+        return 1
+    fi
+
+    selected_preview_branch_value
+}
+
+selected_preview_branch_value() {
+    if [ "$PREVIEW_BRANCH_FROM_ENV" = x ]; then
+        [ -n "$PREVIEW_BRANCH" ] || return 1
+        printf "%s" "$PREVIEW_BRANCH"
+        return 0
+    fi
+
+    value="$(read_first_line "$PERSIST_PREVIEW_BRANCH_FILE" 2>/dev/null || true)"
+    [ -n "$value" ] || return 1
+    printf "%s" "$value"
+}
+
+selected_update_ref() {
+    if [ "$(selected_update_channel 2>/dev/null || true)" = "preview" ]; then
+        selected_preview_branch
+        return $?
+    fi
+
+    tag="$(selected_release_tag 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf "%s" "$tag"
+        return 0
+    fi
+
+    printf "latest"
+}
+
+write_update_source_state() {
+    channel="$1"
+    ref="$2"
+
+    case "$channel" in
+        preview)
+            [ -n "$ref" ] || return 1
+            mkdir -p "$PERSIST_STATE_DIR" || return 1
+            printf "preview\n" > "$PERSIST_UPDATE_CHANNEL_FILE" || return 1
+            printf "%s\n" "$ref" > "$PERSIST_PREVIEW_BRANCH_FILE" || return 1
+            rm -f "$PERSIST_RELEASE_TAG_FILE"
+            return 0
+            ;;
+        release)
+            mkdir -p "$PERSIST_STATE_DIR" || return 1
+            printf "release\n" > "$PERSIST_UPDATE_CHANNEL_FILE" || return 1
+            rm -f "$PERSIST_PREVIEW_BRANCH_FILE"
+            write_release_tag_state "$ref" || return 1
+            return 0
+            ;;
+    esac
+
+    return 1
+}
+
 auth_settings_valid() {
     if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
         return 0
@@ -297,19 +438,127 @@ cached_source_version() {
     normalize_version "$value"
 }
 
+persistent_release_tag() {
+    value="$(read_first_line "$PERSIST_RELEASE_TAG_FILE" 2>/dev/null || true)"
+    normalize_version "$value"
+}
+
+release_tag_requests_latest() {
+    case "$RELEASE_TAG" in
+        latest|default|none)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+selected_release_tag() {
+    if release_tag_requests_latest; then
+        return 1
+    fi
+
+    value="$(normalize_version "$RELEASE_TAG" 2>/dev/null || true)"
+    if [ -n "$value" ]; then
+        printf "%s" "$value"
+        return 0
+    fi
+
+    persistent_release_tag
+}
+
+resolved_release_ref() {
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview_branch" ]; then
+        printf "%s" "$preview_branch"
+        return 0
+    fi
+
+    tag="$(selected_release_tag 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf "%s" "$tag"
+        return 0
+    fi
+
+    latest_release_tag
+}
+
+write_release_tag_state() {
+    value="$(normalize_version "$1" 2>/dev/null || true)"
+    if [ -z "$value" ]; then
+        rm -f "$PERSIST_RELEASE_TAG_FILE"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$PERSIST_RELEASE_TAG_FILE")" || return 1
+    printf "%s\n" "$value" > "$PERSIST_RELEASE_TAG_FILE" || return 1
+}
+
 persistent_installed_version() {
     value="$(read_first_line "$PERSIST_VERSION_FILE" 2>/dev/null || true)"
     normalize_version "$value"
 }
 
 latest_release_tag() {
+    case "$RELEASE_API_URL" in
+        file://*)
+            local_path="${RELEASE_API_URL#file://}"
+            tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+            return 0
+            ;;
+    esac
+
     if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+        wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
         return 0
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+        return 0
+    fi
+
+    return 1
+}
+
+recent_release_tags() {
+    max_items="${1:-10}"
+
+    case "$RELEASES_API_URL" in
+        file://*)
+            local_path="${RELEASES_API_URL#file://}"
+            tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+                normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
+                [ -n "$normalized_tag" ] || continue
+                release_tag_meets_minimum "$normalized_tag" || continue
+                printf "%s\n" "$normalized_tag"
+            done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
+            return 0
+            ;;
+    esac
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO - "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+            normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
+            [ -n "$normalized_tag" ] || continue
+            release_tag_meets_minimum "$normalized_tag" || continue
+            printf "%s\n" "$normalized_tag"
+        done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+            normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
+            [ -n "$normalized_tag" ] || continue
+            release_tag_meets_minimum "$normalized_tag" || continue
+            printf "%s\n" "$normalized_tag"
+        done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
         return 0
     fi
 
@@ -544,6 +793,291 @@ show_current_version() {
     printf "  %s\n" "$version"
 }
 
+show_update_source_settings() {
+    channel="$(selected_update_channel 2>/dev/null || printf release)"
+    ref="$(selected_update_ref 2>/dev/null || printf latest)"
+    printf "%sUpdate source%s\n" "$C_BOLD" "$C_RESET"
+    printf "  mode     : %s\n" "$channel"
+    printf "  ref      : %s\n" "$ref"
+}
+
+can_use_arrow_update_source_picker() {
+    if [ -n "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+        return 0
+    fi
+
+    [ -t 0 ] || return 1
+    [ -t 2 ] || return 1
+    [ "${TERM:-}" != "dumb" ] || return 1
+    command -v stty >/dev/null 2>&1 || return 1
+}
+
+can_use_numbered_update_source_picker() {
+    if [ -n "$FORCE_NUMBERED_UPDATE_SOURCE_PICKER" ]; then
+        return 0
+    fi
+
+    [ -t 0 ] || return 1
+    [ -t 2 ] || return 1
+    [ "${TERM:-}" != "dumb" ] || return 1
+}
+
+read_picker_hex_byte() {
+    dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'
+}
+
+draw_update_source_picker() {
+    current="$1"
+    if [ "$current" = "preview" ]; then
+        release_prefix="  "
+        preview_prefix="> "
+    else
+        release_prefix="> "
+        preview_prefix="  "
+    fi
+
+    printf "Mode (use arrows, Enter to confirm):\n" >&2
+    printf "%srelease\n" "$release_prefix" >&2
+    printf "%spreview\n" "$preview_prefix" >&2
+}
+
+choose_update_source_mode_numbered() {
+    current="${1:-release}"
+
+    printf "Mode:\n" >&2
+    printf "  1) release\n" >&2
+    printf "  2) preview\n" >&2
+    printf "Select mode [1-2] (Enter for %s): " "$current" >&2
+    IFS= read -r selected_mode
+
+    case "$selected_mode" in
+        "" )
+            selected_mode="$current"
+            ;;
+        1|release)
+            selected_mode="release"
+            ;;
+        2|preview)
+            selected_mode="preview"
+            ;;
+    esac
+
+    printf "%s" "$selected_mode"
+}
+
+prompt_manual_release_tag() {
+    current_tag="$(normalize_version "${1:-}" 2>/dev/null || true)"
+
+    if [ -n "$current_tag" ]; then
+        printf "Release tag (Enter to keep %s): " "$current_tag" >&2
+    else
+        printf "Release tag (for example: v1.1.28): " >&2
+    fi
+
+    IFS= read -r typed_tag
+    if [ -z "$typed_tag" ]; then
+        if [ -n "$current_tag" ]; then
+            printf "%s" "$current_tag"
+            return 0
+        fi
+        printf "\n%sRelease tag cannot be empty here%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+
+    normalized_tag="$(normalize_version "$typed_tag" 2>/dev/null || true)"
+    if [ -z "$normalized_tag" ]; then
+        printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+    if ! release_tag_meets_minimum "$normalized_tag"; then
+        printf "\n%sRelease tag must be %s or newer%s\n" "$C_RED" "$MIN_PINNED_RELEASE_TAG" "$C_RESET" >&2
+        return 1
+    fi
+
+    printf "%s" "$normalized_tag"
+}
+
+choose_release_ref_numbered() {
+    current_ref="${1:-latest}"
+    current_tag="$(normalize_version "$current_ref" 2>/dev/null || true)"
+    tags="$(recent_release_tags 8 2>/dev/null || true)"
+
+    if [ -n "$current_tag" ] && ! printf "%s\n" "$tags" | grep -Fx "$current_tag" >/dev/null 2>&1; then
+        if [ -n "$tags" ]; then
+            tags="$current_tag
+$tags"
+        else
+            tags="$current_tag"
+        fi
+    fi
+
+    printf "Release ref:\n" >&2
+    printf "  1) latest\n" >&2
+
+    option_count=1
+    old_ifs="$IFS"
+    IFS='
+'
+    for tag in $tags; do
+        [ -n "$tag" ] || continue
+        option_count=$((option_count + 1))
+        printf "  %s) %s\n" "$option_count" "$tag" >&2
+    done
+    IFS="$old_ifs"
+
+    manual_option=$((option_count + 1))
+    printf "  %s) enter tag manually\n" "$manual_option" >&2
+    printf "Select release ref [1-%s] (Enter for %s): " "$manual_option" "$current_ref" >&2
+    IFS= read -r selected_ref
+
+    case "$selected_ref" in
+        "" )
+            case "$current_ref" in
+                latest|"")
+                    printf ""
+                    return 0
+                    ;;
+                *)
+                    printf "%s" "$current_ref"
+                    return 0
+                    ;;
+            esac
+            ;;
+        1|latest)
+            printf ""
+            return 0
+            ;;
+        "$manual_option"|m|M|manual)
+            prompt_manual_release_tag "$current_tag"
+            return $?
+            ;;
+    esac
+
+    chosen_tag="$(printf "latest\n%s\n" "$tags" | sed -n "${selected_ref}p" 2>/dev/null || true)"
+    case "$chosen_tag" in
+        "" )
+            printf "\n%sUnknown release ref selection%s\n" "$C_RED" "$C_RESET" >&2
+            return 1
+            ;;
+        latest)
+            printf ""
+            return 0
+            ;;
+        *)
+            printf "%s" "$chosen_tag"
+            return 0
+            ;;
+    esac
+}
+
+choose_release_ref() {
+    current_ref="${1:-latest}"
+
+    if can_use_numbered_update_source_picker; then
+        choose_release_ref_numbered "$current_ref"
+        return $?
+    fi
+
+    printf "Release ref (empty/latest for latest, or tag like v1.1.28): " >&2
+    IFS= read -r new_ref
+    case "$new_ref" in
+        ""|latest)
+            printf ""
+            return 0
+            ;;
+        *)
+            normalized_tag="$(normalize_version "$new_ref" 2>/dev/null || true)"
+            if [ -z "$normalized_tag" ]; then
+                printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
+                return 1
+            fi
+            printf "%s" "$normalized_tag"
+            return 0
+            ;;
+    esac
+}
+
+choose_update_source_mode() {
+    current="${1:-release}"
+
+    if can_use_arrow_update_source_picker; then
+        :
+    elif can_use_numbered_update_source_picker; then
+        choose_update_source_mode_numbered "$current"
+        return 0
+    else
+        printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+        IFS= read -r selected_mode
+        if [ -z "$selected_mode" ]; then
+            selected_mode="$current"
+        fi
+        printf "%s" "$selected_mode"
+        return 0
+    fi
+
+    restore_stty=""
+    if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+        restore_stty="$(stty -g 2>/dev/null || true)"
+        if [ -z "$restore_stty" ]; then
+            printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+            IFS= read -r selected_mode
+            if [ -z "$selected_mode" ]; then
+                selected_mode="$current"
+            fi
+            printf "%s" "$selected_mode"
+            return 0
+        fi
+        stty -echo -icanon min 1 time 0 2>/dev/null || true
+    fi
+
+    redraw="0"
+    while true; do
+        if [ "$redraw" = "1" ]; then
+            printf '\033[3A\033[J' >&2
+        fi
+        draw_update_source_picker "$current"
+        redraw="1"
+
+        first_hex="$(read_picker_hex_byte)"
+        case "$first_hex" in
+            0a|0d)
+                break
+                ;;
+            1b)
+                second_hex="$(read_picker_hex_byte)"
+                third_hex="$(read_picker_hex_byte)"
+                case "$second_hex$third_hex" in
+                    5b41|5b44)
+                        current="release"
+                        ;;
+                    5b42|5b43)
+                        current="preview"
+                        ;;
+                esac
+                ;;
+        esac
+    done
+
+    if [ -n "$restore_stty" ]; then
+        stty "$restore_stty" 2>/dev/null || true
+    fi
+
+    printf "\n" >&2
+    printf "%s" "$current"
+}
+
+main_menu_track_label() {
+    channel="$(selected_update_channel 2>/dev/null || printf release)"
+    ref="$(selected_update_ref 2>/dev/null || printf latest)"
+
+    if [ "$channel" = "preview" ]; then
+        printf "preview/%s" "$ref"
+        return 0
+    fi
+
+    printf "release/%s" "$ref"
+}
+
 show_quick_commands() {
     printf "%sQuick commands%s\n" "$C_BOLD" "$C_RESET"
     printf "  sh %s install\n" "$0"
@@ -575,6 +1109,101 @@ port_in_use() {
     fi
 
     return 1
+}
+
+named_proxy_pids() {
+    path="$(runtime_bin_path 2>/dev/null || true)"
+    [ -n "$path" ] || return 1
+    name="$(basename "$path")"
+    [ -n "$name" ] || return 1
+
+    if command -v pidof >/dev/null 2>&1; then
+        pids="$(pidof "$name" 2>/dev/null || true)"
+        [ -n "$pids" ] || return 1
+        printf "%s\n" "$pids"
+        return 0
+    fi
+
+    if command -v pgrep >/dev/null 2>&1; then
+        pids="$(pgrep -x "$name" 2>/dev/null || true)"
+        [ -n "$pids" ] || return 1
+        printf "%s\n" "$pids"
+        return 0
+    fi
+
+    return 1
+}
+
+prompt_stop_detected_proxy_for_busy_port() {
+    pids="$(named_proxy_pids 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+    if [ -z "$pids" ]; then
+        show_header
+        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+        printf "Free the port first or change LISTEN_PORT\n"
+        pause
+        return 1
+    fi
+
+    show_header
+    printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+    printf "Detected running %s process: %s\n" "$APP_NAME" "$pids"
+    printf "Stop it and try again? [y/N]: "
+    IFS= read -r busy_choice
+
+    case "$busy_choice" in
+        y|Y|yes|YES)
+            for pid in $pids; do
+                kill "$pid" 2>/dev/null || true
+            done
+            sleep 1
+            for pid in $pids; do
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
+            done
+
+            if port_in_use; then
+                printf "\n%sPort %s is still busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+                printf "Free the port first or change LISTEN_PORT\n"
+                pause
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            printf "\n"
+            printf "Free the port first or change LISTEN_PORT\n"
+            pause
+            return 1
+            ;;
+    esac
+}
+
+prompt_restart_running_proxy() {
+    pids="$(current_pids 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+    [ -n "$pids" ] || return 1
+
+    show_header
+    printf "%s%s is already running%s\n\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
+    printf "Detected running process: %s\n" "$pids"
+    printf "Stop it and start again? [y/N]: "
+    IFS= read -r running_choice
+
+    case "$running_choice" in
+        y|Y|yes|YES)
+            stop_running >/dev/null 2>&1 || true
+            if is_running; then
+                printf "\n%sFailed to stop the running process%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            pause
+            return 1
+            ;;
+    esac
 }
 
 release_url_reachable() {
@@ -677,6 +1306,8 @@ show_status() {
     printf "  bin ver   : %s\n" "$version"
     printf "  source    : %s\n" "$SOURCE_BIN"
     printf "  asset     : %s\n" "$(resolved_binary_name)"
+    printf "  src mode  : %s\n" "$(selected_update_channel 2>/dev/null || printf release)"
+    printf "  ref       : %s\n" "$(selected_update_ref 2>/dev/null || printf latest)"
     printf "  release   : %s\n" "$(resolved_release_url)"
     printf "  tmp path  : %s\n" "$BIN_PATH"
     printf "  persist dir: %s\n" "$persistent_dir"
@@ -742,6 +1373,12 @@ download_binary() {
 }
 
 script_release_url() {
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview_branch" ]; then
+        printf "%s/%s/%s" "$PREVIEW_BASE_URL" "$preview_branch" "$PERSIST_MANAGER_NAME"
+        return 0
+    fi
+
     ref="$1"
     printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$ref" "$PERSIST_MANAGER_NAME"
 }
@@ -928,22 +1565,29 @@ write_init_script() {
 }
 
 ensure_source_binary_current() {
-    latest_tag="$(latest_release_tag 2>/dev/null || true)"
+    desired_ref="$(resolved_release_ref 2>/dev/null || true)"
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
 
-    if [ -n "$latest_tag" ]; then
+    if [ -n "$desired_ref" ]; then
         cached_tag="$(cached_source_version 2>/dev/null || true)"
         need_download="0"
 
         if [ ! -f "$SOURCE_BIN" ]; then
             printf "%sLocal binary not found%s\n\n" "$C_YELLOW" "$C_RESET"
             need_download="1"
+        elif [ -n "$preview_branch" ]; then
+            need_download="1"
         elif [ -z "$cached_tag" ]; then
             printf "%sLocal binary version is unknown%s\n\n" "$C_YELLOW" "$C_RESET"
             need_download="1"
-        elif [ "$cached_tag" != "$latest_tag" ]; then
+        elif [ "$cached_tag" != "$desired_ref" ]; then
             printf "%sLocal binary is outdated%s\n\n" "$C_YELLOW" "$C_RESET"
             printf "Cached version: %s\n" "$cached_tag"
-            printf "Latest version: %s\n\n" "$latest_tag"
+            if [ -n "$(selected_release_tag 2>/dev/null || true)" ]; then
+                printf "Selected version: %s\n\n" "$desired_ref"
+            else
+                printf "Latest version: %s\n\n" "$desired_ref"
+            fi
             need_download="1"
         fi
 
@@ -968,7 +1612,7 @@ ensure_source_binary_current() {
                     printf "  %s\n" "$SOURCE_BIN"
                     return 1
                 fi
-                write_source_version_file "$latest_tag" || return 1
+                write_source_version_file "$desired_ref" || return 1
             fi
         fi
     elif [ ! -f "$SOURCE_BIN" ]; then
@@ -996,12 +1640,14 @@ install_binary() {
         pause
         return 1
     fi
-    if ! ensure_source_manager_current "$(cached_source_version 2>/dev/null || true)"; then
+    release_ref="$(resolved_release_ref 2>/dev/null || true)"
+    if ! ensure_source_manager_current "$release_ref"; then
         pause
         return 1
     fi
 
     launcher_path="$(install_from_source)" || return 1
+    write_update_source_state "$(selected_update_channel 2>/dev/null || printf release)" "$(selected_update_ref 2>/dev/null || printf latest)" || return 1
 
     show_header
     printf "%sBinary installed%s\n\n" "$C_GREEN" "$C_RESET"
@@ -1018,7 +1664,7 @@ install_binary() {
 }
 
 install_persistent_binary() {
-    if ! ensure_source_manager_current "$(cached_source_version 2>/dev/null || true)"; then
+    if ! ensure_source_manager_current "$(resolved_release_ref 2>/dev/null || true)"; then
         return 1
     fi
 
@@ -1054,10 +1700,15 @@ update_binary() {
         return 1
     fi
 
-    latest_tag="$(latest_release_tag)"
-    if [ -z "$latest_tag" ]; then
-        printf "%sCould not detect latest release version%s\n\n" "$C_RED" "$C_RESET"
-        printf "Check GitHub API access or network access\n"
+    release_ref="$(resolved_release_ref 2>/dev/null || true)"
+    if [ -z "$release_ref" ]; then
+        if [ "$(selected_update_channel 2>/dev/null || true)" = "preview" ]; then
+            printf "%sPreview branch is not configured%s\n\n" "$C_RED" "$C_RESET"
+            printf "Set a preview branch first in Advanced -> Configure update source\n"
+        else
+            printf "%sCould not detect latest release version%s\n\n" "$C_RED" "$C_RESET"
+            printf "Check GitHub API access or network access\n"
+        fi
         pause
         return 1
     fi
@@ -1066,19 +1717,33 @@ update_binary() {
     if [ -z "$current_tag" ]; then
         current_tag="$(persistent_installed_version 2>/dev/null || true)"
     fi
-    if [ -n "$current_tag" ] && [ "$current_tag" = "$latest_tag" ] && [ -x "$BIN_PATH" ] && ! has_persistent_install; then
-        printf "%sAlready on the latest version%s\n\n" "$C_GREEN" "$C_RESET"
+    if [ "$(selected_update_channel 2>/dev/null || true)" != "preview" ] && [ -n "$current_tag" ] && [ "$current_tag" = "$release_ref" ] && [ -x "$BIN_PATH" ] && ! has_persistent_install; then
+        if [ -n "$(selected_release_tag 2>/dev/null || true)" ]; then
+            printf "%sAlready on the selected version%s\n\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "%sAlready on the latest version%s\n\n" "$C_GREEN" "$C_RESET"
+        fi
         printf "Current version: %s\n" "$current_tag"
         pause
         return 0
     fi
 
     printf "Current version: %s\n" "${current_tag:-unknown}"
-    printf "Latest version: %s\n\n" "$latest_tag"
+    if [ "$(selected_update_channel 2>/dev/null || true)" = "preview" ]; then
+        printf "Preview branch: %s\n\n" "$release_ref"
+    elif [ -n "$(selected_release_tag 2>/dev/null || true)" ]; then
+        printf "Selected version: %s\n\n" "$release_ref"
+    else
+        printf "Latest version: %s\n\n" "$release_ref"
+    fi
 
     if ! release_url_reachable; then
         printf "%sRelease URL is not reachable%s\n\n" "$C_RED" "$C_RESET"
-        printf "Check GitHub Release visibility or network access\n"
+        if [ "$(selected_update_channel 2>/dev/null || true)" = "preview" ]; then
+            printf "Check preview branch artifacts or network access\n"
+        else
+            printf "Check GitHub Release visibility or network access\n"
+        fi
         pause
         return 1
     fi
@@ -1089,14 +1754,15 @@ update_binary() {
         pause
         return 1
     fi
-    write_source_version_file "$latest_tag" || return 1
-    if ! ensure_source_manager_current "$latest_tag" "1"; then
+    write_source_version_file "$release_ref" || return 1
+    if ! ensure_source_manager_current "$release_ref" "1"; then
         printf "%sManager script update failed%s\n" "$C_RED" "$C_RESET"
         pause
         return 1
     fi
     refresh_current_manager_script_from_source || true
     launcher_path="$(install_from_source)" || return 1
+    write_update_source_state "$(selected_update_channel 2>/dev/null || printf release)" "$(selected_update_ref 2>/dev/null || printf latest)" || return 1
     if has_persistent_install; then
         persist_dir="$(persistent_install_dir 2>/dev/null || true)"
         if [ -n "$persist_dir" ]; then
@@ -1105,7 +1771,7 @@ update_binary() {
     fi
 
     show_header
-    printf "%sUpdated to %s%s\n\n" "$C_GREEN" "$latest_tag" "$C_RESET"
+    printf "%sUpdated to %s%s\n\n" "$C_GREEN" "$release_ref" "$C_RESET"
     printf "Installed to:\n  %s\n" "$BIN_PATH"
     if [ -n "$launcher_path" ]; then
         printf "\nLauncher:\n  %s\n" "$launcher_path"
@@ -1165,19 +1831,11 @@ start_proxy() {
     fi
 
     if is_running; then
-        show_header
-        printf "%s%s is already running%s\n\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
-        printf "Stop it first from this or another shell.\n"
-        pause
-        return 0
+        prompt_restart_running_proxy || return 1
     fi
 
     if port_in_use; then
-        show_header
-        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
-        printf "Free the port first or change LISTEN_PORT\n"
-        pause
-        return 1
+        prompt_stop_detected_proxy_for_busy_port || return 1
     fi
 
     show_header
@@ -1223,19 +1881,11 @@ start_proxy_background() {
     fi
 
     if is_running; then
-        show_header
-        printf "%s%s is already running%s\n\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
-        printf "Stop it first from this or another shell.\n"
-        pause
-        return 0
+        prompt_restart_running_proxy || return 1
     fi
 
     if port_in_use; then
-        show_header
-        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
-        printf "Free the port first or change LISTEN_PORT\n"
-        pause
-        return 1
+        prompt_stop_detected_proxy_for_busy_port || return 1
     fi
 
     show_header
@@ -1341,6 +1991,8 @@ enable_autostart() {
 disable_autostart() {
     show_header
 
+    preserved_update_channel="$(selected_update_channel 2>/dev/null || printf release)"
+    preserved_update_ref="$(selected_update_ref 2>/dev/null || printf latest)"
     persist_dir="$(persistent_install_dir 2>/dev/null || true)"
     if [ ! -f "$INIT_SCRIPT_PATH" ] && [ -z "$persist_dir" ]; then
         printf "%sAutostart is not configured%s\n" "$C_YELLOW" "$C_RESET"
@@ -1356,6 +2008,16 @@ disable_autostart() {
         rm -rf "$persist_dir"
     fi
     rm -rf "$PERSIST_STATE_DIR"
+    case "$preserved_update_channel:$preserved_update_ref" in
+        preview:*)
+            write_update_source_state "preview" "$preserved_update_ref" >/dev/null 2>&1 || true
+            ;;
+        release:latest|release:)
+            ;;
+        release:*)
+            write_update_source_state "release" "$preserved_update_ref" >/dev/null 2>&1 || true
+            ;;
+    esac
     rm -f "$INIT_SCRIPT_PATH"
 
     if [ -x "$BIN_PATH" ]; then
@@ -1493,6 +2155,63 @@ configure_socks_auth() {
     pause
 }
 
+configure_update_source() {
+    show_header
+    show_update_source_settings
+    printf "\nChoose update source.\n"
+    new_channel="$(choose_update_source_mode "$(selected_update_channel 2>/dev/null || printf release)")"
+
+    case "$new_channel" in
+        release)
+            new_ref="$(choose_release_ref "$(selected_update_ref 2>/dev/null || printf latest)")" || {
+                pause
+                return 1
+            }
+
+            UPDATE_CHANNEL="release"
+            PREVIEW_BRANCH=""
+            RELEASE_TAG="$new_ref"
+            write_update_source_state "release" "$new_ref" || return 1
+            if [ -n "$new_ref" ]; then
+                printf "\n%sUpdate source saved: release %s%s\n" "$C_GREEN" "$new_ref" "$C_RESET"
+            else
+                printf "\n%sUpdate source saved: latest release%s\n" "$C_GREEN" "$C_RESET"
+            fi
+            ;;
+        preview)
+            current_preview_branch="$(selected_preview_branch_value 2>/dev/null || true)"
+            if [ -n "$current_preview_branch" ]; then
+                printf "Preview branch name (Enter to keep %s): " "$current_preview_branch"
+            else
+                printf "Preview branch name (for example: preview-channel): "
+            fi
+            IFS= read -r new_ref
+            if [ -z "$new_ref" ]; then
+                if [ -n "$current_preview_branch" ]; then
+                    new_ref="$current_preview_branch"
+                else
+                    printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET"
+                    pause
+                    return 1
+                fi
+            fi
+
+            UPDATE_CHANNEL="preview"
+            PREVIEW_BRANCH="$new_ref"
+            RELEASE_TAG=""
+            write_update_source_state "preview" "$new_ref" || return 1
+            printf "\n%sUpdate source saved: preview %s%s\n" "$C_GREEN" "$new_ref" "$C_RESET"
+            ;;
+        *)
+            printf "\n%sUpdate mode must be release or preview%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+            ;;
+    esac
+
+    pause
+}
+
 show_quick_only() {
     show_header
     show_quick_commands
@@ -1571,6 +2290,7 @@ show_menu_summary() {
     printf "  proxy     : %s\n" "$proxy_state"
     printf "  autostart : %s\n" "$autostart_state"
     printf "  verbose   : %s\n" "$verbose_state"
+    printf "  track     : %s\n" "$(main_menu_track_label)"
 }
 
 advanced_menu() {
@@ -1583,6 +2303,7 @@ advanced_menu() {
         printf "  4) Show quick commands\n"
         printf "  5) Remove binary and runtime files\n"
         printf "  6) Configure SOCKS5 auth\n"
+        printf "  7) Configure update source\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -1608,6 +2329,9 @@ advanced_menu() {
             6)
                 configure_socks_auth
                 ;;
+            7)
+                configure_update_source
+                ;;
             *)
                 return 0
                 ;;
@@ -1620,7 +2344,7 @@ show_help() {
     printf "%sUsage%s\n" "$C_BOLD" "$C_RESET"
     printf "  sh %s                start menu mode\n" "$0"
     printf "  sh %s install        install or update binary\n" "$0"
-    printf "  sh %s update         update from latest release\n" "$0"
+    printf "  sh %s update         update from configured source\n" "$0"
     printf "  sh %s enable-autostart   enable OpenWrt autostart\n" "$0"
     printf "  sh %s disable-autostart  disable OpenWrt autostart\n" "$0"
     printf "  sh %s start          run proxy in terminal\n" "$0"

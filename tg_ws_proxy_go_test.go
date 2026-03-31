@@ -41,6 +41,7 @@ func managerEnv(t *testing.T) []string {
 	sourceManager := filepath.Join(root, "source", "tg-ws-proxy-go.sh")
 	managerScriptPath := filepath.Join(root, "manager", "tg-ws-proxy-go.sh")
 	releaseAPI := filepath.Join(root, "release.json")
+	releasesAPI := filepath.Join(root, "releases.json")
 	installDir := filepath.Join(root, "tmp-install")
 	persistStateDir := filepath.Join(root, "persist-state")
 	initScriptPath := filepath.Join(root, "init.d", "tg-ws-proxy-go")
@@ -56,6 +57,7 @@ func managerEnv(t *testing.T) []string {
 	writeFile(t, sourceBin, "#!/bin/sh\nexit 0\n", 0o755)
 	writeFile(t, sourceVersion, "v9.9.9\n", 0o644)
 	writeFile(t, releaseAPI, "{\"tag_name\":\"v9.9.9\"}\n", 0o644)
+	writeFile(t, releasesAPI, "[{\"tag_name\":\"v1.1.30\"},{\"tag_name\":\"v1.1.29\"},{\"tag_name\":\"v1.1.28\"},{\"tag_name\":\"v1.1.27\"},{\"tag_name\":\"v1.1.25\"}]\n", 0o644)
 	writeFile(t, rcCommonPath, "#!/bin/sh\nscript=\"$1\"\ncmd=\"$2\"\nname=\"$(basename \"$script\")\"\nrc_dir=\"${RC_D_DIR:-/etc/rc.d}\"\nmkdir -p \"$rc_dir\"\ncase \"$cmd\" in\nenable)\n  ln -sf \"$script\" \"$rc_dir/S95$name\"\n  ;;\ndisable)\n  rm -f \"$rc_dir\"/*\"$name\"\n  ;;\nstart|restart)\n  marker=\"${FAKE_INIT_START_MARKER:-}\"\n  if [ -n \"$marker\" ]; then\n    mkdir -p \"$(dirname \"$marker\")\"\n    : > \"$marker\"\n  fi\n  ;;\nstop)\n  exit 0\n  ;;\n*)\n  exit 0\n  ;;\nesac\n", 0o755)
 	writeFile(t, openwrtRelease, "DISTRIB_ID='OpenWrt'\nDISTRIB_ARCH='mipsel_24kc'\n", 0o644)
 	managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
@@ -68,6 +70,7 @@ func managerEnv(t *testing.T) []string {
 	env := append([]string{}, os.Environ()...)
 	env = append(env,
 		"RELEASE_API_URL=file://"+releaseAPI,
+		"RELEASES_API_URL=file://"+releasesAPI,
 		"RELEASE_URL=file://"+sourceBin,
 		"SCRIPT_RELEASE_BASE_URL=file://"+scriptBase,
 		"SOURCE_BIN="+sourceBin,
@@ -81,6 +84,9 @@ func managerEnv(t *testing.T) []string {
 		"PERSIST_PATH_FILE="+filepath.Join(persistStateDir, "install_dir"),
 		"PERSIST_VERSION_FILE="+filepath.Join(persistStateDir, "version"),
 		"PERSIST_CONFIG_FILE="+filepath.Join(persistStateDir, "autostart.conf"),
+		"PERSIST_RELEASE_TAG_FILE="+filepath.Join(persistStateDir, "release_tag"),
+		"PERSIST_UPDATE_CHANNEL_FILE="+filepath.Join(persistStateDir, "update_channel"),
+		"PERSIST_PREVIEW_BRANCH_FILE="+filepath.Join(persistStateDir, "preview_branch"),
 		"INIT_SCRIPT_PATH="+initScriptPath,
 		"LAUNCHER_PATH="+launcherPath,
 		"OPENWRT_RELEASE_FILE="+openwrtRelease,
@@ -128,6 +134,17 @@ func runManagerMenu(t *testing.T, env []string, input string) (string, error) {
 	t.Helper()
 
 	cmd := exec.Command("sh", managerScriptPath(env))
+	cmd.Dir = "."
+	cmd.Env = env
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func runManagerWithInput(t *testing.T, env []string, input string, args ...string) (string, error) {
+	t.Helper()
+
+	cmd := exec.Command("sh", append([]string{managerScriptPath(env)}, args...)...)
 	cmd.Dir = "."
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(input)
@@ -205,6 +222,85 @@ func main() {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("build fake proxy binary: %v\n%s", err, string(out))
+	}
+}
+
+func buildPortHoldingProxyBinary(t *testing.T, path string) {
+	t.Helper()
+
+	source := filepath.Join(t.TempDir(), "main.go")
+	writeFile(t, source, `package main
+
+import (
+	"log"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+)
+
+func main() {
+	addr := os.Getenv("HOLD_ADDR")
+	if addr == "" {
+		log.Fatal("HOLD_ADDR is required")
+	}
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ln.Close()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	<-sigCh
+}
+`, 0o644)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir fake proxy dir: %v", err)
+	}
+
+	cmd := exec.Command("go", "build", "-o", path, source)
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build port-holding fake proxy binary: %v\n%s", err, string(out))
+	}
+}
+
+func writeModeAwareProxyScript(t *testing.T, path string) {
+	t.Helper()
+
+	source := filepath.Join(t.TempDir(), "main.go")
+	writeFile(t, source, `package main
+
+import (
+	"os"
+	"os/signal"
+	"syscall"
+)
+
+func main() {
+	if os.Getenv("PROXY_TEST_MODE") == "exit" {
+		return
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	<-sigCh
+}
+`, 0o644)
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir mode-aware proxy dir: %v", err)
+	}
+
+	cmd := exec.Command("go", "build", "-o", path, source)
+	cmd.Dir = "."
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build mode-aware proxy binary: %v\n%s", err, string(out))
 	}
 }
 
@@ -1227,6 +1323,496 @@ func TestManagerUpdateFailsWhenTaggedManagerScriptCannotBeDownloaded(t *testing.
 	}
 }
 
+func TestManagerInstallUsesPinnedReleaseTag(t *testing.T) {
+	env := managerEnv(t)
+
+	sourceBin := envValue(env, "SOURCE_BIN")
+	sourceVersion := envValue(env, "SOURCE_VERSION_FILE")
+	binPath := envValue(env, "BIN_PATH")
+	releaseTagPath := envValue(env, "PERSIST_RELEASE_TAG_FILE")
+	if sourceBin == "" || sourceVersion == "" || binPath == "" || releaseTagPath == "" {
+		t.Fatal("missing required env paths")
+	}
+
+	writeFile(t, sourceVersion, "v0.0.1\n", 0o644)
+	writeFile(t, sourceBin, "#!/bin/sh\necho stale\n", 0o755)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.10\"}\n"))
+		case "/download/tg-ws-proxy-openwrt-mipsel_24kc":
+			_, _ = w.Write([]byte("#!/bin/sh\necho latest-asset\n"))
+		case "/scripts/v1.1.25/tg-ws-proxy-openwrt-mipsel_24kc":
+			_, _ = w.Write([]byte("#!/bin/sh\necho pinned-asset\n"))
+		case "/scripts/v1.1.25/tg-ws-proxy-go.sh":
+			managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(managerScript)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+	serverURL := "http://" + listener.Addr().String()
+
+	env = unsetEnvValue(env, "RELEASE_URL")
+	env = append(env,
+		"RELEASE_TAG=v1.1.25",
+		"RELEASE_API_URL="+serverURL+"/release.json",
+		"RELEASE_DOWNLOAD_BASE_URL="+serverURL+"/download",
+		"SCRIPT_RELEASE_BASE_URL="+serverURL+"/scripts",
+	)
+
+	out, err := runManager(t, env, "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Binary installed") {
+		t.Fatalf("unexpected install output:\n%s", out)
+	}
+	if got := readTrimmed(t, binPath); !strings.Contains(got, "pinned-asset") {
+		t.Fatalf("expected pinned asset to be installed, got:\n%s", got)
+	}
+	if got := readTrimmed(t, releaseTagPath); got != "v1.1.25" {
+		t.Fatalf("expected pinned release tag state, got %q", got)
+	}
+}
+
+func TestManagerUpdateUsesPersistedPinnedReleaseTag(t *testing.T) {
+	env := managerEnv(t)
+
+	sourceBin := envValue(env, "SOURCE_BIN")
+	sourceVersion := envValue(env, "SOURCE_VERSION_FILE")
+	binPath := envValue(env, "BIN_PATH")
+	versionPath := envValue(env, "VERSION_FILE")
+	releaseTagPath := envValue(env, "PERSIST_RELEASE_TAG_FILE")
+	if sourceBin == "" || sourceVersion == "" || binPath == "" || versionPath == "" || releaseTagPath == "" {
+		t.Fatal("missing required env paths")
+	}
+
+	writeFile(t, sourceVersion, "v0.0.1\n", 0o644)
+	writeFile(t, sourceBin, "#!/bin/sh\necho stale\n", 0o755)
+	writeFile(t, binPath, "#!/bin/sh\necho installed-old\n", 0o755)
+	writeFile(t, versionPath, "v0.0.1\n", 0o644)
+	writeFile(t, releaseTagPath, "v1.1.25\n", 0o644)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.99\"}\n"))
+		case "/download/tg-ws-proxy-openwrt-mipsel_24kc":
+			_, _ = w.Write([]byte("#!/bin/sh\necho latest-asset\n"))
+		case "/scripts/v1.1.25/tg-ws-proxy-openwrt-mipsel_24kc":
+			_, _ = w.Write([]byte("#!/bin/sh\necho pinned-update-asset\n"))
+		case "/scripts/v1.1.25/tg-ws-proxy-go.sh":
+			managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(managerScript)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+	serverURL := "http://" + listener.Addr().String()
+
+	env = unsetEnvValue(env, "RELEASE_URL")
+	env = append(env,
+		"RELEASE_API_URL="+serverURL+"/release.json",
+		"RELEASE_DOWNLOAD_BASE_URL="+serverURL+"/download",
+		"SCRIPT_RELEASE_BASE_URL="+serverURL+"/scripts",
+	)
+
+	out, err := runManager(t, env, "update")
+	if err != nil {
+		t.Fatalf("update failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Updated to v1.1.25") {
+		t.Fatalf("expected pinned update output, got:\n%s", out)
+	}
+	if got := readTrimmed(t, binPath); !strings.Contains(got, "pinned-update-asset") {
+		t.Fatalf("expected pinned asset to be installed during update, got:\n%s", got)
+	}
+	if got := readTrimmed(t, releaseTagPath); got != "v1.1.25" {
+		t.Fatalf("expected persisted pinned release tag to remain, got %q", got)
+	}
+}
+
+func TestManagerInstallWithReleaseTagLatestClearsPinnedReleaseTag(t *testing.T) {
+	env := managerEnv(t)
+
+	sourceBin := envValue(env, "SOURCE_BIN")
+	sourceVersion := envValue(env, "SOURCE_VERSION_FILE")
+	binPath := envValue(env, "BIN_PATH")
+	releaseTagPath := envValue(env, "PERSIST_RELEASE_TAG_FILE")
+	if sourceBin == "" || sourceVersion == "" || binPath == "" || releaseTagPath == "" {
+		t.Fatal("missing required env paths")
+	}
+
+	writeFile(t, sourceVersion, "v0.0.1\n", 0o644)
+	writeFile(t, sourceBin, "#!/bin/sh\necho stale\n", 0o755)
+	writeFile(t, releaseTagPath, "v1.1.25\n", 0o644)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.10\"}\n"))
+		case "/download/tg-ws-proxy-openwrt-mipsel_24kc":
+			_, _ = w.Write([]byte("#!/bin/sh\necho latest-asset\n"))
+		case "/scripts/v9.9.10/tg-ws-proxy-go.sh":
+			managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(managerScript)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+	serverURL := "http://" + listener.Addr().String()
+
+	env = unsetEnvValue(env, "RELEASE_URL")
+	env = append(env,
+		"RELEASE_TAG=latest",
+		"RELEASE_API_URL="+serverURL+"/release.json",
+		"RELEASE_DOWNLOAD_BASE_URL="+serverURL+"/download",
+		"SCRIPT_RELEASE_BASE_URL="+serverURL+"/scripts",
+	)
+
+	out, err := runManager(t, env, "install")
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, out)
+	}
+	if got := readTrimmed(t, binPath); !strings.Contains(got, "latest-asset") {
+		t.Fatalf("expected latest asset to be installed, got:\n%s", got)
+	}
+	if _, err := os.Stat(releaseTagPath); !os.IsNotExist(err) {
+		t.Fatalf("expected pinned release tag file to be removed, stat err=%v", err)
+	}
+}
+
+func TestManagerUpdateUsesPersistedPreviewBranch(t *testing.T) {
+	env := managerEnv(t)
+
+	sourceBin := envValue(env, "SOURCE_BIN")
+	sourceVersion := envValue(env, "SOURCE_VERSION_FILE")
+	binPath := envValue(env, "BIN_PATH")
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if sourceBin == "" || sourceVersion == "" || binPath == "" || updateChannelPath == "" || previewBranchPath == "" {
+		t.Fatal("missing required env paths")
+	}
+
+	writeFile(t, sourceVersion, "v0.0.1\n", 0o644)
+	writeFile(t, sourceBin, "#!/bin/sh\necho stale\n", 0o755)
+	writeFile(t, updateChannelPath, "preview\n", 0o644)
+	writeFile(t, previewBranchPath, "feature/auth-flow\n", 0o644)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/preview/feature/auth-flow/tg-ws-proxy-openwrt-mipsel_24kc":
+			_, _ = w.Write([]byte("#!/bin/sh\necho preview-asset\n"))
+		case "/preview/feature/auth-flow/tg-ws-proxy-go.sh":
+			managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(managerScript)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp4: %v", err)
+	}
+	server := &http.Server{Handler: handler}
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer func() {
+		_ = server.Close()
+	}()
+	serverURL := "http://" + listener.Addr().String()
+
+	env = unsetEnvValue(env, "RELEASE_URL")
+	env = append(env, "PREVIEW_BASE_URL="+serverURL+"/preview")
+
+	out, err := runManager(t, env, "update")
+	if err != nil {
+		t.Fatalf("preview update failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Preview branch: feature/auth-flow") {
+		t.Fatalf("expected preview branch output, got:\n%s", out)
+	}
+	if got := readTrimmed(t, binPath); !strings.Contains(got, "preview-asset") {
+		t.Fatalf("expected preview asset to be installed during update, got:\n%s", got)
+	}
+}
+
+func TestManagerConfigureUpdateSourceViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if updateChannelPath == "" || previewBranchPath == "" {
+		t.Fatal("missing update source state files in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\npreview\nfeature/auth-flow\n\n\n")
+	if err != nil {
+		t.Fatalf("configure update source failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
+		t.Fatalf("expected update source saved message, got:\n%s", out)
+	}
+	if got := readTrimmed(t, updateChannelPath); got != "preview" {
+		t.Fatalf("expected persisted update channel preview, got %q", got)
+	}
+	if got := readTrimmed(t, previewBranchPath); got != "feature/auth-flow" {
+		t.Fatalf("expected persisted preview branch, got %q", got)
+	}
+
+	statusOut, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+	if !strings.Contains(statusOut, "src mode  : preview") || !strings.Contains(statusOut, "ref       : feature/auth-flow") {
+		t.Fatalf("expected status to reflect preview update source, got:\n%s", statusOut)
+	}
+}
+
+func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsArrowSelection(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_ARROW_UPDATE_SOURCE_PICKER", "1")
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if updateChannelPath == "" || previewBranchPath == "" {
+		t.Fatal("missing update source state files in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\n\033[B\nfeature/auth-flow\n\n\n")
+	if err != nil {
+		t.Fatalf("configure update source with arrows failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Mode (use arrows, Enter to confirm):") {
+		t.Fatalf("expected arrow selection prompt, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
+		t.Fatalf("expected preview update source saved message, got:\n%s", out)
+	}
+	if got := readTrimmed(t, updateChannelPath); got != "preview" {
+		t.Fatalf("expected persisted update channel preview, got %q", got)
+	}
+	if got := readTrimmed(t, previewBranchPath); got != "feature/auth-flow" {
+		t.Fatalf("expected persisted preview branch, got %q", got)
+	}
+}
+
+func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsNumberedSelection(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if updateChannelPath == "" || previewBranchPath == "" {
+		t.Fatal("missing update source state files in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\n2\nfeature/auth-flow\n\n\n")
+	if err != nil {
+		t.Fatalf("configure update source with numbered picker failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Select mode [1-2] (Enter for release):") {
+		t.Fatalf("expected numbered selection prompt, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
+		t.Fatalf("expected preview update source saved message, got:\n%s", out)
+	}
+	if got := readTrimmed(t, updateChannelPath); got != "preview" {
+		t.Fatalf("expected persisted update channel preview, got %q", got)
+	}
+	if got := readTrimmed(t, previewBranchPath); got != "feature/auth-flow" {
+		t.Fatalf("expected persisted preview branch, got %q", got)
+	}
+}
+
+func TestManagerConfigureUpdateSourcePreviewBranchPromptShowsExampleAndCanReuseSavedBranch(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if updateChannelPath == "" || previewBranchPath == "" {
+		t.Fatal("missing update source state files in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\n2\nfeature/auth-flow\n\n\n")
+	if err != nil {
+		t.Fatalf("initial configure update source failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Preview branch name (for example: preview-channel):") {
+		t.Fatalf("expected example preview branch prompt, got:\n%s", out)
+	}
+
+	out, err = runManagerMenu(t, env, "5\n7\n2\n\n\n")
+	if err != nil {
+		t.Fatalf("reusing saved preview branch failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Preview branch name (Enter to keep feature/auth-flow):") {
+		t.Fatalf("expected keep-current preview branch prompt, got:\n%s", out)
+	}
+	if got := readTrimmed(t, updateChannelPath); got != "preview" {
+		t.Fatalf("expected persisted update channel preview, got %q", got)
+	}
+	if got := readTrimmed(t, previewBranchPath); got != "feature/auth-flow" {
+		t.Fatalf("expected persisted preview branch to stay unchanged, got %q", got)
+	}
+}
+
+func TestManagerConfigureUpdateSourceCanResetToLatestRelease(t *testing.T) {
+	env := managerEnv(t)
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	releaseTagPath := envValue(env, "PERSIST_RELEASE_TAG_FILE")
+	if updateChannelPath == "" || previewBranchPath == "" || releaseTagPath == "" {
+		t.Fatal("missing update source state files in env")
+	}
+
+	writeFile(t, updateChannelPath, "preview\n", 0o644)
+	writeFile(t, previewBranchPath, "feature/auth-flow\n", 0o644)
+	writeFile(t, releaseTagPath, "v1.1.25\n", 0o644)
+
+	out, err := runManagerMenu(t, env, "5\n7\nrelease\nlatest\n\n\n")
+	if err != nil {
+		t.Fatalf("reset update source failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Update source saved: latest release") {
+		t.Fatalf("expected latest release saved message, got:\n%s", out)
+	}
+	if got := readTrimmed(t, updateChannelPath); got != "release" {
+		t.Fatalf("expected persisted update channel release, got %q", got)
+	}
+	if _, err := os.Stat(previewBranchPath); !os.IsNotExist(err) {
+		t.Fatalf("expected preview branch state to be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(releaseTagPath); !os.IsNotExist(err) {
+		t.Fatalf("expected release tag pin to be removed, stat err=%v", err)
+	}
+}
+
+func TestManagerConfigureUpdateSourceCanSelectPinnedReleaseTagFromNumberedMenu(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	releaseTagPath := envValue(env, "PERSIST_RELEASE_TAG_FILE")
+	if updateChannelPath == "" || releaseTagPath == "" {
+		t.Fatal("missing release update source state files in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\n1\n3\n\n\n")
+	if err != nil {
+		t.Fatalf("configure release tag from numbered menu failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Select mode [1-2] (Enter for release):") {
+		t.Fatalf("expected numbered mode picker, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Select release ref [1-") {
+		t.Fatalf("expected numbered release ref picker, got:\n%s", out)
+	}
+	if strings.Contains(out, "v1.1.28") {
+		t.Fatalf("expected release picker to hide tags below v1.1.29, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Update source saved: release v1.1.29") {
+		t.Fatalf("expected pinned release tag saved message, got:\n%s", out)
+	}
+	if got := readTrimmed(t, updateChannelPath); got != "release" {
+		t.Fatalf("expected persisted update channel release, got %q", got)
+	}
+	if got := readTrimmed(t, releaseTagPath); got != "v1.1.29" {
+		t.Fatalf("expected persisted release tag v1.1.29, got %q", got)
+	}
+
+	statusOut, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+	if !strings.Contains(statusOut, "src mode  : release") || !strings.Contains(statusOut, "ref       : v1.1.29") {
+		t.Fatalf("expected status to reflect pinned release tag, got:\n%s", statusOut)
+	}
+
+	menuOut, err := runManagerMenu(t, env, "\n")
+	if err != nil {
+		t.Fatalf("menu failed: %v\n%s", err, menuOut)
+	}
+	if !strings.Contains(menuOut, "track     : release/v1.1.29") {
+		t.Fatalf("expected main menu track to show pinned release tag, got:\n%s", menuOut)
+	}
+}
+
+func TestManagerConfigureUpdateSourceRejectsManualReleaseTagBelowMinimum(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	releaseTagPath := envValue(env, "PERSIST_RELEASE_TAG_FILE")
+	if updateChannelPath == "" || releaseTagPath == "" {
+		t.Fatal("missing release update source state files in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\n1\n4\nv1.1.28\n\n\n")
+	if err != nil {
+		t.Fatalf("manual release tag selection should stay in menu flow, got error: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Release tag must be v1.1.29 or newer") {
+		t.Fatalf("expected minimum release tag validation message, got:\n%s", out)
+	}
+	if _, err := os.Stat(releaseTagPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no pinned release tag to be persisted, stat err=%v", err)
+	}
+
+	statusOut, err := runManager(t, env, "status")
+	if err != nil {
+		t.Fatalf("status failed: %v\n%s", err, statusOut)
+	}
+	if !strings.Contains(statusOut, "ref       : latest") {
+		t.Fatalf("expected status to stay on latest release after rejected old tag, got:\n%s", statusOut)
+	}
+}
+
 func TestManagerStatusIgnoresFalsePositivePgrepMatches(t *testing.T) {
 	env := managerEnv(t)
 
@@ -1270,7 +1856,7 @@ func TestManagerStatusIgnoresFalsePositivePgrepMatches(t *testing.T) {
 	if !strings.Contains(out, "process   : stopped") || !strings.Contains(out, "pid       : -") {
 		t.Fatalf("expected unrelated pgrep hit to be ignored, got:\n%s", out)
 	}
-	if strings.Contains(out, "222") {
+	if strings.Contains(out, "pid       : 222") {
 		t.Fatalf("expected false pgrep match to be filtered out, got:\n%s", out)
 	}
 }
@@ -1332,6 +1918,31 @@ func TestManagerMainMenuShowsSimplifiedActions(t *testing.T) {
 
 	if strings.Contains(out, "Show quick commands") || strings.Contains(out, "Remove binary and runtime files") {
 		t.Fatalf("expected advanced-only actions to be absent from top-level menu:\n%s", out)
+	}
+	if !strings.Contains(out, "track     : release/latest") {
+		t.Fatalf("expected top-level menu to show default track, got:\n%s", out)
+	}
+}
+
+func TestManagerMainMenuShowsPreviewSourceSummary(t *testing.T) {
+	env := managerEnv(t)
+
+	updateChannelFile := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchFile := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if updateChannelFile == "" || previewBranchFile == "" {
+		t.Fatal("preview source state files missing from env")
+	}
+
+	writeFile(t, updateChannelFile, "preview\n", 0o644)
+	writeFile(t, previewBranchFile, "feature/auth-flow\n", 0o644)
+
+	out, err := runManagerMenu(t, env, "\n")
+	if err != nil {
+		t.Fatalf("menu failed: %v\n%s", err, out)
+	}
+
+	if !strings.Contains(out, "track     : preview/feature/auth-flow") {
+		t.Fatalf("expected top-level menu to show preview track, got:\n%s", out)
 	}
 }
 
@@ -1519,6 +2130,90 @@ func TestManagerStartFailsWhenPortBusy(t *testing.T) {
 	}
 	if !strings.Contains(out, "Port") || !strings.Contains(out, "is already busy") {
 		t.Fatalf("expected busy port message, got:\n%s", out)
+	}
+}
+
+func TestManagerStartBackgroundCanRestartAlreadyRunningProxy(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+	buildFakeProxyBinary(t, binPath)
+
+	firstOut, firstErr := runManager(t, env, "start-background")
+	if firstErr != nil {
+		t.Fatalf("initial start-background failed: %v\n%s", firstErr, firstOut)
+	}
+	pidFile := filepath.Join(envValue(env, "INSTALL_DIR"), "pid")
+	firstPID := readTrimmed(t, pidFile)
+
+	out, err := runManagerWithInput(t, env, "y\n\n", "start-background")
+	if err != nil {
+		t.Fatalf("restarting running proxy via start-background failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "tg-ws-proxy is already running") {
+		t.Fatalf("expected already-running message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Stop it and start again? [y/N]:") {
+		t.Fatalf("expected restart prompt, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Background process pid:") {
+		t.Fatalf("expected restarted background pid output, got:\n%s", out)
+	}
+
+	secondPID := readTrimmed(t, pidFile)
+	if secondPID == "" || secondPID == firstPID {
+		t.Fatalf("expected a new background pid after restart, first=%q second=%q\n%s", firstPID, secondPID, out)
+	}
+
+	stopOut, stopErr := runManager(t, env, "stop")
+	if stopErr != nil {
+		t.Fatalf("stop failed after restart flow: %v\n%s", stopErr, stopOut)
+	}
+}
+
+func TestManagerStartCanRestartAlreadyRunningProxy(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "PROXY_TEST_MODE", "hold")
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+	writeModeAwareProxyScript(t, binPath)
+
+	firstOut, firstErr := runManager(t, env, "start-background")
+	if firstErr != nil {
+		t.Fatalf("initial start-background failed: %v\n%s", firstErr, firstOut)
+	}
+	menuOut := waitForMenuText(t, env, "2) Stop proxy")
+	if !strings.Contains(menuOut, "proxy     : running") {
+		t.Fatalf("expected proxy to be running before restart prompt test, got:\n%s", menuOut)
+	}
+
+	env = setEnvValue(env, "PROXY_TEST_MODE", "exit")
+	out, err := runManagerWithInput(t, env, "y\n\n", "start")
+	if err != nil {
+		t.Fatalf("restarting running proxy via start failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "tg-ws-proxy is already running") {
+		t.Fatalf("expected already-running message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Stop it and start again? [y/N]:") {
+		t.Fatalf("expected restart prompt, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Starting tg-ws-proxy in terminal") {
+		t.Fatalf("expected terminal start output after restart, got:\n%s", out)
+	}
+	if !strings.Contains(out, "tg-ws-proxy exited with code 0") {
+		t.Fatalf("expected restarted terminal proxy to exit cleanly, got:\n%s", out)
+	}
+
+	statusOut, statusErr := runManager(t, env, "status")
+	if statusErr != nil {
+		t.Fatalf("status failed after terminal restart flow: %v\n%s", statusErr, statusOut)
+	}
+	if !strings.Contains(statusOut, "process   : stopped") {
+		t.Fatalf("expected no running proxy after terminal restart flow, got:\n%s", statusOut)
 	}
 }
 
@@ -1755,6 +2450,28 @@ func TestManagerDisableAutostartNoopWhenNotConfigured(t *testing.T) {
 	}
 }
 
+func TestManagerDisableAutostartPreservesPinnedReleaseTag(t *testing.T) {
+	env := managerEnv(t)
+	releaseTagPath := envValue(env, "PERSIST_RELEASE_TAG_FILE")
+	if releaseTagPath == "" {
+		t.Fatal("PERSIST_RELEASE_TAG_FILE not found in env")
+	}
+
+	writeFile(t, releaseTagPath, "v1.1.25\n", 0o644)
+
+	if out, err := runManager(t, env, "enable-autostart"); err != nil {
+		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
+	}
+
+	out, err := runManager(t, env, "disable-autostart")
+	if err != nil {
+		t.Fatalf("disable-autostart failed: %v\n%s", err, out)
+	}
+	if got := readTrimmed(t, releaseTagPath); got != "v1.1.25" {
+		t.Fatalf("expected pinned release tag to survive disable-autostart, got %q", got)
+	}
+}
+
 func TestManagerRestartStartsStoppedProxyAndMenuShowsStop(t *testing.T) {
 	env := managerEnv(t)
 	binPath := envValue(env, "BIN_PATH")
@@ -1840,6 +2557,9 @@ func TestManagerStatusAndMenuStayInSync(t *testing.T) {
 	}
 	if !strings.Contains(menuOut, "verbose   : on") || !strings.Contains(statusOut, "verbose   : on") {
 		t.Fatalf("menu/status disagree on verbose state\nmenu:\n%s\nstatus:\n%s", menuOut, statusOut)
+	}
+	if !strings.Contains(menuOut, "track     : release/latest") || !strings.Contains(statusOut, "src mode  : release") || !strings.Contains(statusOut, "ref       : latest") {
+		t.Fatalf("menu/status disagree on update track\nmenu:\n%s\nstatus:\n%s", menuOut, statusOut)
 	}
 }
 

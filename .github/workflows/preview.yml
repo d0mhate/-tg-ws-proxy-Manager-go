@@ -1,0 +1,102 @@
+name: preview
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - preview
+
+permissions:
+  contents: write
+
+concurrency:
+  group: preview-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish-preview:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: setup go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
+
+      - name: run tests
+        run: go test ./...
+
+      - name: build preview binaries
+        run: |
+          mkdir -p build
+          GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-mipsel_24kc ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=mips GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-mips_24kc ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-x86_64 ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-armv7 ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-aarch64 ./cmd/tg-ws-proxy
+          cp build/tg-ws-proxy-openwrt-mipsel_24kc build/tg-ws-proxy-openwrt
+
+      - name: publish preview artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -eu
+
+          preview_dir="$(mktemp -d)"
+          remote_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git"
+
+          if git ls-remote --exit-code --heads "$remote_url" preview >/dev/null 2>&1; then
+            git clone --depth 1 --branch preview "$remote_url" "$preview_dir"
+          else
+            git clone --depth 1 "$remote_url" "$preview_dir"
+            (
+              cd "$preview_dir"
+              git checkout --orphan preview
+              git rm -rf . >/dev/null 2>&1 || true
+              printf "# preview artifacts\n" > README.md
+              git add README.md
+              git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Initialize preview branch"
+              git push origin preview
+            )
+            rm -rf "$preview_dir"
+            preview_dir="$(mktemp -d)"
+            git clone --depth 1 --branch preview "$remote_url" "$preview_dir"
+          fi
+
+          target_dir="$preview_dir/branches/$BRANCH_NAME"
+          rm -rf "$target_dir"
+          mkdir -p "$target_dir"
+
+          cp build/tg-ws-proxy-openwrt-mipsel_24kc "$target_dir/"
+          cp build/tg-ws-proxy-openwrt-mips_24kc "$target_dir/"
+          cp build/tg-ws-proxy-openwrt-x86_64 "$target_dir/"
+          cp build/tg-ws-proxy-openwrt-armv7 "$target_dir/"
+          cp build/tg-ws-proxy-openwrt-aarch64 "$target_dir/"
+          cp build/tg-ws-proxy-openwrt "$target_dir/"
+          cp tg-ws-proxy-go.sh "$target_dir/"
+
+          cat > "$target_dir/manifest.json" <<EOF
+          {
+            "branch": "$BRANCH_NAME",
+            "commit": "$COMMIT_SHA",
+            "manager_script": "tg-ws-proxy-go.sh",
+            "default_binary": "tg-ws-proxy-openwrt"
+          }
+          EOF
+
+          (
+            cd "$preview_dir"
+            git add "branches/$BRANCH_NAME"
+            if git diff --cached --quiet; then
+              exit 0
+            fi
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "Update preview for $BRANCH_NAME @ $COMMIT_SHA"
+            git push origin preview
+          )

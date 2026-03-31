@@ -37,8 +37,8 @@ wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-
 Дальше в меню обычно хватает трёх действий:
 
 1. `Setup / Update`
-2. `Run proxy in terminal`
-3. `Enable autostart`, если нужен запуск после перезагрузки
+2. запустить прокси через пункт `Run proxy in terminal`
+3. включить автозапуск через пункт `Enable autostart`, если нужен запуск после перезагрузки
 
 `Enable autostart` сам:
 
@@ -80,6 +80,26 @@ sh /tmp/tg-ws-proxy-go.sh start-background
 - или командой `tgm stop`
 
 Script создаёт короткий launcher `tgm`. Обычно это `/usr/bin/tgm`, если туда нельзя писать, будет fallback в `/tmp/tgm`.
+
+## Выбор релизной версии
+
+По умолчанию manager обновляется на `latest release`.
+
+Если нужно зафиксироваться на конкретном стабильном теге:
+
+1. `Advanced`
+2. `Configure update source`
+3. выбрать `release`
+4. выбрать `latest` или один из доступных тегов
+5. вернуться в главное меню и проверить строку `track`
+6. выполнить `Setup / Update`
+
+В меню доступны только release tags, начиная с `v1.1.29`.
+
+После выбора конкретного тега в главном меню строка `track` будет выглядеть так:
+
+- `release/latest`
+- `release/v1.1.29`
 
 ## Настройки Telegram
 
@@ -172,7 +192,7 @@ go test ./...
 
 - `go test ./...`
 - `go build ./cmd/tg-ws-proxy`
-- кросс-сборка `linux/mipsle`
+- кросс-сборка OpenWrt binaries для поддержанных архитектур
 
 ## Основа проекта
 
