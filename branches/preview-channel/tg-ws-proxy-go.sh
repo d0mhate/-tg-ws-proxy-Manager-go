@@ -898,6 +898,101 @@ port_in_use() {
     return 1
 }
 
+named_proxy_pids() {
+    path="$(runtime_bin_path 2>/dev/null || true)"
+    [ -n "$path" ] || return 1
+    name="$(basename "$path")"
+    [ -n "$name" ] || return 1
+
+    if command -v pidof >/dev/null 2>&1; then
+        pids="$(pidof "$name" 2>/dev/null || true)"
+        [ -n "$pids" ] || return 1
+        printf "%s\n" "$pids"
+        return 0
+    fi
+
+    if command -v pgrep >/dev/null 2>&1; then
+        pids="$(pgrep -x "$name" 2>/dev/null || true)"
+        [ -n "$pids" ] || return 1
+        printf "%s\n" "$pids"
+        return 0
+    fi
+
+    return 1
+}
+
+prompt_stop_detected_proxy_for_busy_port() {
+    pids="$(named_proxy_pids 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+    if [ -z "$pids" ]; then
+        show_header
+        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+        printf "Free the port first or change LISTEN_PORT\n"
+        pause
+        return 1
+    fi
+
+    show_header
+    printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+    printf "Detected running %s process: %s\n" "$APP_NAME" "$pids"
+    printf "Stop it and try again? [y/N]: "
+    IFS= read -r busy_choice
+
+    case "$busy_choice" in
+        y|Y|yes|YES)
+            for pid in $pids; do
+                kill "$pid" 2>/dev/null || true
+            done
+            sleep 1
+            for pid in $pids; do
+                if kill -0 "$pid" 2>/dev/null; then
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
+            done
+
+            if port_in_use; then
+                printf "\n%sPort %s is still busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+                printf "Free the port first or change LISTEN_PORT\n"
+                pause
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            printf "\n"
+            printf "Free the port first or change LISTEN_PORT\n"
+            pause
+            return 1
+            ;;
+    esac
+}
+
+prompt_restart_running_proxy() {
+    pids="$(current_pids 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+    [ -n "$pids" ] || return 1
+
+    show_header
+    printf "%s%s is already running%s\n\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
+    printf "Detected running process: %s\n" "$pids"
+    printf "Stop it and start again? [y/N]: "
+    IFS= read -r running_choice
+
+    case "$running_choice" in
+        y|Y|yes|YES)
+            stop_running >/dev/null 2>&1 || true
+            if is_running; then
+                printf "\n%sFailed to stop the running process%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            pause
+            return 1
+            ;;
+    esac
+}
+
 release_url_reachable() {
     url="$(resolved_release_url)"
     if command -v wget >/dev/null 2>&1; then
@@ -1523,19 +1618,11 @@ start_proxy() {
     fi
 
     if is_running; then
-        show_header
-        printf "%s%s is already running%s\n\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
-        printf "Stop it first from this or another shell.\n"
-        pause
-        return 0
+        prompt_restart_running_proxy || return 1
     fi
 
     if port_in_use; then
-        show_header
-        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
-        printf "Free the port first or change LISTEN_PORT\n"
-        pause
-        return 1
+        prompt_stop_detected_proxy_for_busy_port || return 1
     fi
 
     show_header
@@ -1581,19 +1668,11 @@ start_proxy_background() {
     fi
 
     if is_running; then
-        show_header
-        printf "%s%s is already running%s\n\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
-        printf "Stop it first from this or another shell.\n"
-        pause
-        return 0
+        prompt_restart_running_proxy || return 1
     fi
 
     if port_in_use; then
-        show_header
-        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
-        printf "Free the port first or change LISTEN_PORT\n"
-        pause
-        return 1
+        prompt_stop_detected_proxy_for_busy_port || return 1
     fi
 
     show_header
