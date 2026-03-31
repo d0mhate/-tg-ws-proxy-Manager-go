@@ -16,6 +16,8 @@ concurrency:
 jobs:
   build-and-publish-preview:
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
 
     steps:
       - name: checkout
