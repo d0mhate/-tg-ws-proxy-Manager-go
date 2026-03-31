@@ -43,6 +43,7 @@ SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://github.com/$REPO_OWN
 PREVIEW_BRANCH_NAME="${PREVIEW_BRANCH_NAME:-preview}"
 PREVIEW_BASE_URL="${PREVIEW_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$PREVIEW_BRANCH_NAME/branches}"
 RELEASE_TAG="${RELEASE_TAG:-}"
+FORCE_ARROW_UPDATE_SOURCE_PICKER="${FORCE_ARROW_UPDATE_SOURCE_PICKER:-}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
 SOURCE_MANAGER_SCRIPT="${SOURCE_MANAGER_SCRIPT:-$SOURCE_BIN.manager}"
@@ -712,6 +713,100 @@ show_update_source_settings() {
     printf "%sUpdate source%s\n" "$C_BOLD" "$C_RESET"
     printf "  mode     : %s\n" "$channel"
     printf "  ref      : %s\n" "$ref"
+}
+
+can_use_arrow_update_source_picker() {
+    if [ -n "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+        return 0
+    fi
+
+    [ -t 0 ] || return 1
+    [ -t 1 ] || return 1
+    [ "${TERM:-}" != "dumb" ] || return 1
+    command -v stty >/dev/null 2>&1 || return 1
+}
+
+read_picker_hex_byte() {
+    dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'
+}
+
+draw_update_source_picker() {
+    current="$1"
+    if [ "$current" = "preview" ]; then
+        release_prefix="  "
+        preview_prefix="> "
+    else
+        release_prefix="> "
+        preview_prefix="  "
+    fi
+
+    printf "Mode (use arrows, Enter to confirm):\n" >&2
+    printf "%srelease\n" "$release_prefix" >&2
+    printf "%spreview\n" "$preview_prefix" >&2
+}
+
+choose_update_source_mode() {
+    current="${1:-release}"
+
+    if ! can_use_arrow_update_source_picker; then
+        printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+        IFS= read -r selected_mode
+        if [ -z "$selected_mode" ]; then
+            selected_mode="$current"
+        fi
+        printf "%s" "$selected_mode"
+        return 0
+    fi
+
+    restore_stty=""
+    if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+        restore_stty="$(stty -g 2>/dev/null || true)"
+        if [ -z "$restore_stty" ]; then
+            printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+            IFS= read -r selected_mode
+            if [ -z "$selected_mode" ]; then
+                selected_mode="$current"
+            fi
+            printf "%s" "$selected_mode"
+            return 0
+        fi
+        stty -echo -icanon min 1 time 0 2>/dev/null || true
+    fi
+
+    redraw="0"
+    while true; do
+        if [ "$redraw" = "1" ]; then
+            printf '\033[3A\033[J' >&2
+        fi
+        draw_update_source_picker "$current"
+        redraw="1"
+
+        first_hex="$(read_picker_hex_byte)"
+        case "$first_hex" in
+            0a|0d)
+                break
+                ;;
+            1b)
+                second_hex="$(read_picker_hex_byte)"
+                third_hex="$(read_picker_hex_byte)"
+                case "$second_hex$third_hex" in
+                    5b41|5b44)
+                        current="release"
+                        ;;
+                    5b42|5b43)
+                        current="preview"
+                        ;;
+                esac
+                ;;
+        esac
+    done
+
+    if [ -n "$restore_stty" ]; then
+        stty "$restore_stty" 2>/dev/null || true
+    fi
+
+    printf "\n" >&2
+    printf "%s" "$current"
 }
 
 main_menu_track_label() {
@@ -1728,12 +1823,7 @@ configure_update_source() {
     show_header
     show_update_source_settings
     printf "\nChoose update source.\n"
-    printf "Mode [release/preview] (Enter for release): "
-    IFS= read -r new_channel
-
-    if [ -z "$new_channel" ]; then
-        new_channel="release"
-    fi
+    new_channel="$(choose_update_source_mode "$(selected_update_channel 2>/dev/null || printf release)")"
 
     case "$new_channel" in
         release)
