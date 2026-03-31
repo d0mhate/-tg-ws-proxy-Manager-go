@@ -44,6 +44,7 @@ PREVIEW_BRANCH_NAME="${PREVIEW_BRANCH_NAME:-preview}"
 PREVIEW_BASE_URL="${PREVIEW_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$PREVIEW_BRANCH_NAME/branches}"
 RELEASE_TAG="${RELEASE_TAG:-}"
 FORCE_ARROW_UPDATE_SOURCE_PICKER="${FORCE_ARROW_UPDATE_SOURCE_PICKER:-}"
+FORCE_NUMBERED_UPDATE_SOURCE_PICKER="${FORCE_NUMBERED_UPDATE_SOURCE_PICKER:-}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
 SOURCE_MANAGER_SCRIPT="${SOURCE_MANAGER_SCRIPT:-$SOURCE_BIN.manager}"
@@ -726,6 +727,16 @@ can_use_arrow_update_source_picker() {
     command -v stty >/dev/null 2>&1 || return 1
 }
 
+can_use_numbered_update_source_picker() {
+    if [ -n "$FORCE_NUMBERED_UPDATE_SOURCE_PICKER" ]; then
+        return 0
+    fi
+
+    [ -t 0 ] || return 1
+    [ -t 1 ] || return 1
+    [ "${TERM:-}" != "dumb" ] || return 1
+}
+
 read_picker_hex_byte() {
     dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'
 }
@@ -745,10 +756,39 @@ draw_update_source_picker() {
     printf "%spreview\n" "$preview_prefix" >&2
 }
 
+choose_update_source_mode_numbered() {
+    current="${1:-release}"
+
+    printf "Mode:\n" >&2
+    printf "  1) release\n" >&2
+    printf "  2) preview\n" >&2
+    printf "Select mode [1-2] (Enter for %s): " "$current" >&2
+    IFS= read -r selected_mode
+
+    case "$selected_mode" in
+        "" )
+            selected_mode="$current"
+            ;;
+        1|release)
+            selected_mode="release"
+            ;;
+        2|preview)
+            selected_mode="preview"
+            ;;
+    esac
+
+    printf "%s" "$selected_mode"
+}
+
 choose_update_source_mode() {
     current="${1:-release}"
 
-    if ! can_use_arrow_update_source_picker; then
+    if can_use_arrow_update_source_picker; then
+        :
+    elif can_use_numbered_update_source_picker; then
+        choose_update_source_mode_numbered "$current"
+        return 0
+    else
         printf "Mode [release/preview] (Enter for %s): " "$current" >&2
         IFS= read -r selected_mode
         if [ -z "$selected_mode" ]; then
