@@ -320,6 +320,10 @@ selected_preview_branch() {
         return 1
     fi
 
+    selected_preview_branch_value
+}
+
+selected_preview_branch_value() {
     if [ "$PREVIEW_BRANCH_FROM_ENV" = x ]; then
         [ -n "$PREVIEW_BRANCH" ] || return 1
         printf "%s" "$PREVIEW_BRANCH"
@@ -1893,12 +1897,21 @@ configure_update_source() {
             fi
             ;;
         preview)
-            printf "Preview branch: "
+            current_preview_branch="$(selected_preview_branch_value 2>/dev/null || true)"
+            if [ -n "$current_preview_branch" ]; then
+                printf "Preview branch name (Enter to keep %s): " "$current_preview_branch"
+            else
+                printf "Preview branch name (for example: preview-channel): "
+            fi
             IFS= read -r new_ref
             if [ -z "$new_ref" ]; then
-                printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET"
-                pause
-                return 1
+                if [ -n "$current_preview_branch" ]; then
+                    new_ref="$current_preview_branch"
+                else
+                    printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET"
+                    pause
+                    return 1
+                fi
             fi
 
             UPDATE_CHANNEL="preview"
