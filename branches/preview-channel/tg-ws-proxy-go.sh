@@ -39,10 +39,12 @@ OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
 RELEASE_DOWNLOAD_BASE_URL="${RELEASE_DOWNLOAD_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download}"
 RELEASE_URL="${RELEASE_URL:-}"
 RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
+RELEASES_API_URL="${RELEASES_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases?per_page=10}"
 SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/download}"
 PREVIEW_BRANCH_NAME="${PREVIEW_BRANCH_NAME:-preview}"
 PREVIEW_BASE_URL="${PREVIEW_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$PREVIEW_BRANCH_NAME/branches}"
 RELEASE_TAG="${RELEASE_TAG:-}"
+MIN_PINNED_RELEASE_TAG="${MIN_PINNED_RELEASE_TAG:-v1.1.25}"
 FORCE_ARROW_UPDATE_SOURCE_PICKER="${FORCE_ARROW_UPDATE_SOURCE_PICKER:-}"
 FORCE_NUMBERED_UPDATE_SOURCE_PICKER="${FORCE_NUMBERED_UPDATE_SOURCE_PICKER:-}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
@@ -229,6 +231,32 @@ normalize_version() {
             ;;
     esac
     return 1
+}
+
+version_ge() {
+    left="$(normalize_version "$1" 2>/dev/null || true)"
+    right="$(normalize_version "$2" 2>/dev/null || true)"
+    [ -n "$left" ] || return 1
+    [ -n "$right" ] || return 1
+
+    awk -v left="${left#v}" -v right="${right#v}" '
+        BEGIN {
+            split(left, l, ".")
+            split(right, r, ".")
+            max = length(l) > length(r) ? length(l) : length(r)
+            for (i = 1; i <= max; i++) {
+                lv = (i in l) ? l[i] + 0 : 0
+                rv = (i in r) ? r[i] + 0 : 0
+                if (lv > rv) exit 0
+                if (lv < rv) exit 1
+            }
+            exit 0
+        }
+    '
+}
+
+release_tag_meets_minimum() {
+    version_ge "$1" "$MIN_PINNED_RELEASE_TAG"
 }
 
 read_config_value() {
@@ -471,13 +499,66 @@ persistent_installed_version() {
 }
 
 latest_release_tag() {
+    case "$RELEASE_API_URL" in
+        file://*)
+            local_path="${RELEASE_API_URL#file://}"
+            tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+            return 0
+            ;;
+    esac
+
     if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+        wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
         return 0
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'
+        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
+        return 0
+    fi
+
+    return 1
+}
+
+recent_release_tags() {
+    max_items="${1:-10}"
+
+    case "$RELEASES_API_URL" in
+        file://*)
+            local_path="${RELEASES_API_URL#file://}"
+            tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+                normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
+                [ -n "$normalized_tag" ] || continue
+                release_tag_meets_minimum "$normalized_tag" || continue
+                printf "%s\n" "$normalized_tag"
+            done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
+            return 0
+            ;;
+    esac
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO - "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+            normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
+            [ -n "$normalized_tag" ] || continue
+            release_tag_meets_minimum "$normalized_tag" || continue
+            printf "%s\n" "$normalized_tag"
+        done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+            normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
+            [ -n "$normalized_tag" ] || continue
+            release_tag_meets_minimum "$normalized_tag" || continue
+            printf "%s\n" "$normalized_tag"
+        done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
         return 0
     fi
 
@@ -782,6 +863,138 @@ choose_update_source_mode_numbered() {
     esac
 
     printf "%s" "$selected_mode"
+}
+
+prompt_manual_release_tag() {
+    current_tag="$(normalize_version "${1:-}" 2>/dev/null || true)"
+
+    if [ -n "$current_tag" ]; then
+        printf "Release tag (Enter to keep %s): " "$current_tag" >&2
+    else
+        printf "Release tag (for example: v1.1.28): " >&2
+    fi
+
+    IFS= read -r typed_tag
+    if [ -z "$typed_tag" ]; then
+        if [ -n "$current_tag" ]; then
+            printf "%s" "$current_tag"
+            return 0
+        fi
+        printf "\n%sRelease tag cannot be empty here%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+
+    normalized_tag="$(normalize_version "$typed_tag" 2>/dev/null || true)"
+    if [ -z "$normalized_tag" ]; then
+        printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+    if ! release_tag_meets_minimum "$normalized_tag"; then
+        printf "\n%sRelease tag must be %s or newer%s\n" "$C_RED" "$MIN_PINNED_RELEASE_TAG" "$C_RESET" >&2
+        return 1
+    fi
+
+    printf "%s" "$normalized_tag"
+}
+
+choose_release_ref_numbered() {
+    current_ref="${1:-latest}"
+    current_tag="$(normalize_version "$current_ref" 2>/dev/null || true)"
+    tags="$(recent_release_tags 8 2>/dev/null || true)"
+
+    if [ -n "$current_tag" ] && ! printf "%s\n" "$tags" | grep -Fx "$current_tag" >/dev/null 2>&1; then
+        if [ -n "$tags" ]; then
+            tags="$current_tag
+$tags"
+        else
+            tags="$current_tag"
+        fi
+    fi
+
+    printf "Release ref:\n" >&2
+    printf "  1) latest\n" >&2
+
+    option_count=1
+    old_ifs="$IFS"
+    IFS='
+'
+    for tag in $tags; do
+        [ -n "$tag" ] || continue
+        option_count=$((option_count + 1))
+        printf "  %s) %s\n" "$option_count" "$tag" >&2
+    done
+    IFS="$old_ifs"
+
+    manual_option=$((option_count + 1))
+    printf "  %s) enter tag manually\n" "$manual_option" >&2
+    printf "Select release ref [1-%s] (Enter for %s): " "$manual_option" "$current_ref" >&2
+    IFS= read -r selected_ref
+
+    case "$selected_ref" in
+        "" )
+            case "$current_ref" in
+                latest|"")
+                    printf ""
+                    return 0
+                    ;;
+                *)
+                    printf "%s" "$current_ref"
+                    return 0
+                    ;;
+            esac
+            ;;
+        1|latest)
+            printf ""
+            return 0
+            ;;
+        "$manual_option"|m|M|manual)
+            prompt_manual_release_tag "$current_tag"
+            return $?
+            ;;
+    esac
+
+    chosen_tag="$(printf "latest\n%s\n" "$tags" | sed -n "${selected_ref}p" 2>/dev/null || true)"
+    case "$chosen_tag" in
+        "" )
+            printf "\n%sUnknown release ref selection%s\n" "$C_RED" "$C_RESET" >&2
+            return 1
+            ;;
+        latest)
+            printf ""
+            return 0
+            ;;
+        *)
+            printf "%s" "$chosen_tag"
+            return 0
+            ;;
+    esac
+}
+
+choose_release_ref() {
+    current_ref="${1:-latest}"
+
+    if can_use_numbered_update_source_picker; then
+        choose_release_ref_numbered "$current_ref"
+        return $?
+    fi
+
+    printf "Release ref (empty/latest for latest, or tag like v1.1.28): " >&2
+    IFS= read -r new_ref
+    case "$new_ref" in
+        ""|latest)
+            printf ""
+            return 0
+            ;;
+        *)
+            normalized_tag="$(normalize_version "$new_ref" 2>/dev/null || true)"
+            if [ -z "$normalized_tag" ]; then
+                printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
+                return 1
+            fi
+            printf "%s" "$normalized_tag"
+            return 0
+            ;;
+    esac
 }
 
 choose_update_source_mode() {
@@ -1950,20 +2163,10 @@ configure_update_source() {
 
     case "$new_channel" in
         release)
-            printf "Release ref (empty/latest for latest, or tag like v1.1.28): "
-            IFS= read -r new_ref
-            case "$new_ref" in
-                ""|latest)
-                    new_ref=""
-                    ;;
-                *)
-                    if ! normalize_version "$new_ref" >/dev/null 2>&1; then
-                        printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET"
-                        pause
-                        return 1
-                    fi
-                    ;;
-            esac
+            new_ref="$(choose_release_ref "$(selected_update_ref 2>/dev/null || printf latest)")" || {
+                pause
+                return 1
+            }
 
             UPDATE_CHANNEL="release"
             PREVIEW_BRANCH=""
