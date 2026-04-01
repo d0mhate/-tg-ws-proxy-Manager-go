@@ -1008,3 +1008,53 @@ func TestManagerConfigureUpdateSourceRejectsManualReleaseTagBelowMinimum(t *test
 		t.Fatalf("expected status to stay on latest release after rejected old tag, got:\n%s", statusOut)
 	}
 }
+
+func TestManagerInstallShowsRateLimitHintWhenAPIReturnsEmpty(t *testing.T) {
+	env := managerEnv(t)
+
+	sourceBin := envValue(env, "SOURCE_BIN")
+	if sourceBin == "" {
+		t.Fatal("missing SOURCE_BIN in env")
+	}
+
+	// Remove source binary so the script must download it
+	if err := os.Remove(sourceBin); err != nil {
+		t.Fatalf("remove source bin: %v", err)
+	}
+
+	// Point API to a file with a rate-limit response (no tag_name field)
+	rateLimitFile := sourceBin + ".ratelimit.json"
+	writeFile(t, rateLimitFile, "{\"message\":\"API rate limit exceeded\"}\n", 0o644)
+	env = setEnvValue(env, "RELEASE_API_URL", "file://"+rateLimitFile)
+
+	out, err := runManager(t, env, "install")
+	if err == nil {
+		t.Fatalf("expected install to fail when API returns empty tag, got output:\n%s", out)
+	}
+	if !strings.Contains(out, "Could not detect latest release version") {
+		t.Fatalf("expected version detection error, got:\n%s", out)
+	}
+	if !strings.Contains(out, "rate limit") {
+		t.Fatalf("expected rate limit hint in output, got:\n%s", out)
+	}
+}
+
+func TestManagerUpdateShowsRateLimitHintWhenAPIReturnsEmpty(t *testing.T) {
+	env := managerEnv(t)
+
+	// Point API to a file with a rate-limit response (no tag_name field)
+	rateLimitFile := t.TempDir() + "/ratelimit.json"
+	writeFile(t, rateLimitFile, "{\"message\":\"API rate limit exceeded\"}\n", 0o644)
+	env = setEnvValue(env, "RELEASE_API_URL", "file://"+rateLimitFile)
+
+	out, err := runManager(t, env, "update")
+	if err == nil {
+		t.Fatalf("expected update to fail when API returns empty tag, got output:\n%s", out)
+	}
+	if !strings.Contains(out, "Could not detect latest release version") {
+		t.Fatalf("expected version detection error, got:\n%s", out)
+	}
+	if !strings.Contains(out, "rate limit") {
+		t.Fatalf("expected rate limit hint in output, got:\n%s", out)
+	}
+}
