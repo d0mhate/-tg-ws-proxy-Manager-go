@@ -499,28 +499,29 @@ persistent_installed_version() {
 }
 
 latest_release_tag() {
+    _lrt_tag=""
     case "$RELEASE_API_URL" in
         file://*)
             local_path="${RELEASE_API_URL#file://}"
-            tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
-            return 0
+            _lrt_tag="$(tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+            ;;
+        *)
+            if command -v wget >/dev/null 2>&1; then
+                _lrt_tag="$(wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+            elif command -v curl >/dev/null 2>&1; then
+                _lrt_tag="$(curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
+"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+            else
+                return 1
+            fi
             ;;
     esac
-
-    if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
-        return 0
+    if [ -z "$_lrt_tag" ]; then
+        return 1
     fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p'
-        return 0
-    fi
-
-    return 1
+    printf "%s" "$_lrt_tag"
 }
 
 recent_release_tags() {
@@ -1617,7 +1618,9 @@ ensure_source_binary_current() {
         fi
     elif [ ! -f "$SOURCE_BIN" ]; then
         printf "%sCould not detect latest release version%s\n\n" "$C_RED" "$C_RESET"
-        printf "Check GitHub API access or network access\n"
+        printf "GitHub API rate limit may be exceeded (60 req/hour per IP)\n"
+        printf "Use Advanced > Configure update source to set version manually\n"
+        printf "Or check GitHub API access or network access\n"
         return 1
     fi
 }
@@ -1707,7 +1710,9 @@ update_binary() {
             printf "Set a preview branch first in Advanced -> Configure update source\n"
         else
             printf "%sCould not detect latest release version%s\n\n" "$C_RED" "$C_RESET"
-            printf "Check GitHub API access or network access\n"
+            printf "GitHub API rate limit may be exceeded (60 req/hour per IP)\n"
+            printf "Use Advanced > Configure update source to set version manually\n"
+            printf "Or check GitHub API access or network access\n"
         fi
         pause
         return 1
