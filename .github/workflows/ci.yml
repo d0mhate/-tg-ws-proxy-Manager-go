@@ -11,7 +11,6 @@ env:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   test:
@@ -21,24 +20,16 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: setup go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version: "1.22"
           cache: false
 
-      - name: test with coverage
-        run: go test -coverprofile=coverage.out ./...
-
-      - name: upload coverage to coveralls
-        uses: coverallsapp/github-action@v2.3.6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          file: ./coverage.out
-          format: golang
-          fail-on-error: false
+      - name: test
+        run: go test ./...
 
   build-local:
     needs: test
@@ -48,10 +39,10 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: setup go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version: "1.22"
           cache: false
@@ -89,10 +80,10 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: setup go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
           go-version: "1.22"
           cache: false
@@ -123,7 +114,7 @@ jobs:
           fi
 
       - name: upload target artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: ${{ matrix.asset }}
           path: build/${{ matrix.asset }}
@@ -134,7 +125,7 @@ jobs:
 
     steps:
       - name: download all openwrt artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
           path: build
 
@@ -152,7 +143,7 @@ jobs:
 
     steps:
       - name: download x86_64 artifact
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
           name: tg-ws-proxy-openwrt-x86_64
           path: build
