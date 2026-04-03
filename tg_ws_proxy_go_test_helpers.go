@@ -314,6 +314,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "qr" {
+		return
+	}
+
 	if argsFile := os.Getenv("ARGS_FILE"); argsFile != "" {
 		_ = os.MkdirAll(filepath.Dir(argsFile), 0o755)
 		_ = os.WriteFile(argsFile, []byte(joinArgs(os.Args[1:])), 0o644)
