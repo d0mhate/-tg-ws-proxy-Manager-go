@@ -671,6 +671,36 @@ telegram_host() {
     esac
 }
 
+mtproto_link() {
+    printf "tg://proxy?server=%s&port=%s&secret=%s" "$(telegram_host)" "$MTPROTO_PORT" "$MTPROTO_SECRET"
+}
+
+render_mtproto_qr() {
+    link="$1"
+
+    for path in "$(runtime_bin_path 2>/dev/null || true)" "$SOURCE_BIN"; do
+        [ -n "$path" ] || continue
+        [ -x "$path" ] || continue
+        qr_output="$("$path" qr "$link" 2>/dev/null || true)"
+        [ -n "$qr_output" ] || continue
+        printf "%s" "$qr_output"
+        return 0
+    done
+
+    return 1
+}
+
+show_mtproto_link_block() {
+    link="$(mtproto_link)"
+    printf "  link     : %s\n" "$link"
+
+    qr_output="$(render_mtproto_qr "$link" 2>/dev/null || true)"
+    if [ -n "$qr_output" ]; then
+        printf "  qr       :\n"
+        printf "%s\n" "$qr_output"
+    fi
+}
+
 pause() {
     if [ "$COMMAND_MODE" = "1" ]; then
         return 0
@@ -810,7 +840,7 @@ show_telegram_settings() {
         printf "  host     : %s\n" "$(telegram_host)"
         printf "  port     : %s\n" "$MTPROTO_PORT"
         printf "  secret   : %s\n" "$MTPROTO_SECRET"
-        printf "  link     : tg://proxy?server=%s&port=%s&secret=%s\n" "$(telegram_host)" "$MTPROTO_PORT" "$MTPROTO_SECRET"
+        show_mtproto_link_block
     fi
 }
 
@@ -2273,7 +2303,12 @@ configure_mtproto() {
                 printf "\n%sMTProto proxy enabled%s\n" "$C_GREEN" "$C_RESET"
                 printf "  port   : %s\n" "$MTPROTO_PORT"
                 printf "  secret : %s\n" "$MTPROTO_SECRET"
-                printf "  link   : tg://proxy?server=%s&port=%s&secret=%s\n" "$(telegram_host)" "$MTPROTO_PORT" "$MTPROTO_SECRET"
+                printf "  link   : %s\n" "$(mtproto_link)"
+                qr_output="$(render_mtproto_qr "$(mtproto_link)" 2>/dev/null || true)"
+                if [ -n "$qr_output" ]; then
+                    printf "  qr     :\n"
+                    printf "%s\n" "$qr_output"
+                fi
                 prompt_restart_proxy_for_updated_settings
                 pause
                 ;;
