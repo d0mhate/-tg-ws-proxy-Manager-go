@@ -11,6 +11,7 @@ import (
 type Config struct {
 	Host          string
 	Port          int
+	SOCKS5Enabled bool
 	Username      string
 	Password      string
 	Verbose       bool
@@ -30,6 +31,7 @@ func Default() Config {
 	return Config{
 		Host:          "127.0.0.1",
 		Port:          1080,
+		SOCKS5Enabled: true,
 		Verbose:       false,
 		BufferKB:      256,
 		PoolSize:      1,

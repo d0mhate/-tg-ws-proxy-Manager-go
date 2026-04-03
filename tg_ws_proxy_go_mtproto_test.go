@@ -217,13 +217,44 @@ func TestManagerMTProtoRunBinaryOmitsFlagsWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestManagerMTProtoOnlyRunBinaryPassesModeFlags(t *testing.T) {
+	env := append(managerEnv(t),
+		"MTPROTO_ENABLED=1",
+		"MTPROTO_PORT=8443",
+		"MTPROTO_SECRET=ee0123456789abcdef0123456789abcdef",
+	)
+
+	binPath := envValue(env, "BIN_PATH")
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	if out, err := runManager(t, env, "start-mtproto-background"); err != nil {
+		t.Fatalf("start-mtproto-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+
+	if !strings.Contains(args, "--socks5=false") {
+		t.Fatalf("expected --socks5=false in mtproto-only args, got:\n%s", args)
+	}
+	if !strings.Contains(args, "--mtproto") {
+		t.Fatalf("expected --mtproto in mtproto-only args, got:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop failed: %v", err)
+	}
+}
+
 func TestManagerConfigureMTProtoEnableViaMenu(t *testing.T) {
 	env := managerEnv(t)
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 	writeQRProxyScript(t, envValue(env, "BIN_PATH"))
 
-	// Menu: 5 (Advanced) → 8 (Configure MTProto) → y (enable) → Enter (default port) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "5\n8\ny\n\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → y (enable) → Enter (default port) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\ny\n\n\n\n")
 	if err != nil {
 		t.Fatalf("configure mtproto via menu failed: %v\n%s", err, out)
 	}
@@ -259,8 +290,8 @@ func TestManagerConfigureMTProtoDisableViaMenu(t *testing.T) {
 		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
 	}
 
-	// Menu: 5 (Advanced) → 8 (Configure MTProto) → 1 (Disable) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "5\n8\n1\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → 1 (Disable) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\n1\n\n\n")
 	if err != nil {
 		t.Fatalf("disable mtproto via menu failed: %v\n%s", err, out)
 	}
@@ -286,8 +317,8 @@ func TestManagerConfigureMTProtoChangePortViaMenu(t *testing.T) {
 		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
 	}
 
-	// Menu: 5 (Advanced) → 8 (Configure MTProto) → 2 (Change port) → 9443 → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "5\n8\n2\n9443\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → 2 (Change port) → 9443 → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\n2\n9443\n\n\n")
 	if err != nil {
 		t.Fatalf("change mtproto port via menu failed: %v\n%s", err, out)
 	}
@@ -313,8 +344,8 @@ func TestManagerConfigureMTProtoRegenerateSecretViaMenu(t *testing.T) {
 		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
 	}
 
-	// Menu: 5 (Advanced) → 8 (Configure MTProto) → 3 (Regenerate secret) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "5\n8\n3\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → 3 (Regenerate secret) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\n3\n\n\n")
 	if err != nil {
 		t.Fatalf("regenerate mtproto secret via menu failed: %v\n%s", err, out)
 	}
@@ -336,8 +367,8 @@ func TestManagerConfigureMTProtoEnableWithCustomPort(t *testing.T) {
 	env := managerEnv(t)
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 
-	// Menu: 5 (Advanced) → 8 (Configure MTProto) → y (enable) → 7443 (custom port) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "5\n8\ny\n7443\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → y (enable) → 7443 (custom port) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\ny\n7443\n\n\n")
 	if err != nil {
 		t.Fatalf("enable mtproto with custom port via menu failed: %v\n%s", err, out)
 	}
@@ -363,8 +394,8 @@ func TestManagerConfigureMTProtoEnableOffersRestartWhenRunning(t *testing.T) {
 	}
 	waitForFile(t, argsFile)
 
-	// Menu: 5 → 8 → y (enable) → Enter (default port) → y (restart) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "5\n8\ny\n\ny\n\n\n")
+	// Menu: 7 → 2 → y (enable) → Enter (default port) → y (restart) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\ny\n\ny\n\n\n")
 	if err != nil {
 		t.Fatalf("enable mtproto with restart via menu failed: %v\n%s", err, out)
 	}
@@ -410,16 +441,15 @@ func TestManagerTelegramCommandShowsMTProtoWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestManagerMTProtoAdvancedMenuShowsOption(t *testing.T) {
+func TestManagerMTProtoTopLevelMenuShowsOption(t *testing.T) {
 	env := managerEnv(t)
 
-	// Enter Advanced menu, then exit.
-	out, err := runManagerMenu(t, env, "5\n\n\n")
+	out, err := runManagerMenu(t, env, "\n")
 	if err != nil {
-		t.Fatalf("advanced menu failed: %v\n%s", err, out)
+		t.Fatalf("main menu failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Configure MTProto proxy") {
-		t.Fatalf("expected MTProto option in advanced menu, got:\n%s", out)
+	if !strings.Contains(out, "7) MTProto proxy") {
+		t.Fatalf("expected MTProto top-level option, got:\n%s", out)
 	}
 }
 
@@ -470,7 +500,7 @@ func TestManagerMTProtoSecretGeneratedOnEnable(t *testing.T) {
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 
 	// Enable MTProto, accept default port.
-	_, _ = runManagerMenu(t, env, "5\n8\ny\n\n\n\n")
+	_, _ = runManagerMenu(t, env, "7\n2\ny\n\n\n\n")
 
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("expected config file to exist: %v", err)

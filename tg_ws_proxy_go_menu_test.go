@@ -111,7 +111,8 @@ func TestManagerMainMenuShowsSimplifiedActions(t *testing.T) {
 		!strings.Contains(out, "2) Run proxy in terminal") ||
 		!strings.Contains(out, "3) Enable autostart") ||
 		!strings.Contains(out, "5) Advanced") ||
-		!strings.Contains(out, "6) Start in background") {
+		!strings.Contains(out, "6) Start in background") ||
+		!strings.Contains(out, "7) MTProto proxy") {
 		t.Fatalf("expected simplified top-level menu, got:\n%s", out)
 	}
 

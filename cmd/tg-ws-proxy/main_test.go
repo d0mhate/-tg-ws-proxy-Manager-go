@@ -123,6 +123,26 @@ func TestParseArgsMTProtoInvalidSecret(t *testing.T) {
 	}
 }
 
+func TestParseArgsMTProtoOnlyMode(t *testing.T) {
+	cfg, err := parseArgs([]string{"--socks5=false", "--mtproto", "--mtproto-port", "8443"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if cfg.SOCKS5Enabled {
+		t.Fatal("expected SOCKS5Enabled to be false")
+	}
+	if !cfg.MTProtoEnabled {
+		t.Fatal("expected MTProtoEnabled to be true")
+	}
+}
+
+func TestParseArgsRejectsAllModesDisabled(t *testing.T) {
+	_, err := parseArgs([]string{"--socks5=false"})
+	if err == nil {
+		t.Fatal("expected error when all proxy modes are disabled")
+	}
+}
+
 func TestHandleUtilityModeQR(t *testing.T) {
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()

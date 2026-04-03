@@ -33,6 +33,7 @@ func parseArgs(args []string) (config.Config, error) {
 	fs := flag.NewFlagSet("tg-ws-proxy", flag.ContinueOnError)
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "SOCKS5 listen host")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "SOCKS5 listen port")
+	fs.BoolVar(&cfg.SOCKS5Enabled, "socks5", cfg.SOCKS5Enabled, "enable SOCKS5 proxy")
 	fs.StringVar(&cfg.Username, "username", cfg.Username, "SOCKS5 username auth")
 	fs.StringVar(&cfg.Password, "password", cfg.Password, "SOCKS5 password auth")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
@@ -58,6 +59,9 @@ func parseArgs(args []string) (config.Config, error) {
 	}
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return config.Config{}, fmt.Errorf("--username and --password must be used together")
+	}
+	if !cfg.SOCKS5Enabled && !cfg.MTProtoEnabled {
+		return config.Config{}, fmt.Errorf("at least one proxy mode must be enabled")
 	}
 	if cfg.MTProtoEnabled {
 		if cfg.MTProtoPort == 0 {
@@ -100,10 +104,12 @@ func main() {
 
 	errCh := make(chan error, 2)
 
-	srv := socks5.NewServer(cfg, logger)
-	go func() {
-		errCh <- srv.Run(ctx)
-	}()
+	if cfg.SOCKS5Enabled {
+		srv := socks5.NewServer(cfg, logger)
+		go func() {
+			errCh <- srv.Run(ctx)
+		}()
+	}
 
 	if cfg.MTProtoEnabled {
 		secret, _ := mtprotoproxy.ParseSecret(cfg.MTProtoSecret)
