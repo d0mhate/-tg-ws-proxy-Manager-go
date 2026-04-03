@@ -701,6 +701,18 @@ show_mtproto_link_block() {
     fi
 }
 
+show_mtproto_settings() {
+    if ! mtproto_ready; then
+        printf "%sMTProto proxy is disabled%s\n" "$C_YELLOW" "$C_RESET"
+        return 0
+    fi
+    printf "%sMTProto Proxy (fake-TLS)%s\n" "$C_BOLD" "$C_RESET"
+    printf "  host     : %s\n" "$(telegram_host)"
+    printf "  port     : %s\n" "$MTPROTO_PORT"
+    printf "  secret   : %s\n" "$MTPROTO_SECRET"
+    show_mtproto_link_block
+}
+
 pause() {
     if [ "$COMMAND_MODE" = "1" ]; then
         return 0
@@ -1157,16 +1169,17 @@ show_quick_commands() {
 }
 
 port_in_use() {
+    port="${1:-$LISTEN_PORT}"
     if command -v lsof >/dev/null 2>&1; then
-        lsof -nP -iTCP:"$LISTEN_PORT" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+        lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 0
     fi
 
     if command -v ss >/dev/null 2>&1; then
-        ss -ltn 2>/dev/null | awk -v p="$LISTEN_PORT" 'NR>1 {n=$4; sub(/^.*:/, "", n); if (n == p) found=1} END {exit(found ? 0 : 1)}' && return 0
+        ss -ltn 2>/dev/null | awk -v p="$port" 'NR>1 {n=$4; sub(/^.*:/, "", n); if (n == p) found=1} END {exit(found ? 0 : 1)}' && return 0
     fi
 
     if command -v netstat >/dev/null 2>&1; then
-        netstat -ltn 2>/dev/null | awk -v p="$LISTEN_PORT" 'NR>2 {n=$4; sub(/^.*:/, "", n); if (n == p) found=1} END {exit(found ? 0 : 1)}' && return 0
+        netstat -ltn 2>/dev/null | awk -v p="$port" 'NR>2 {n=$4; sub(/^.*:/, "", n); if (n == p) found=1} END {exit(found ? 0 : 1)}' && return 0
     fi
 
     return 1
@@ -1196,17 +1209,18 @@ named_proxy_pids() {
 }
 
 prompt_stop_detected_proxy_for_busy_port() {
+    port="${1:-$LISTEN_PORT}"
     pids="$(named_proxy_pids 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
     if [ -z "$pids" ]; then
         show_header
-        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
-        printf "Free the port first or change LISTEN_PORT\n"
+        printf "%sPort %s is already busy%s\n\n" "$C_RED" "$port" "$C_RESET"
+        printf "Free the port first or change the configured port\n"
         pause
         return 1
     fi
 
     show_header
-    printf "%sPort %s is already busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
+    printf "%sPort %s is already busy%s\n\n" "$C_RED" "$port" "$C_RESET"
     printf "Detected running %s process: %s\n" "$APP_NAME" "$pids"
     printf "Stop it and try again? [y/N]: "
     IFS= read -r busy_choice
@@ -1223,9 +1237,9 @@ prompt_stop_detected_proxy_for_busy_port() {
                 fi
             done
 
-            if port_in_use; then
-                printf "\n%sPort %s is still busy%s\n\n" "$C_RED" "$LISTEN_PORT" "$C_RESET"
-                printf "Free the port first or change LISTEN_PORT\n"
+            if port_in_use "$port"; then
+                printf "\n%sPort %s is still busy%s\n\n" "$C_RED" "$port" "$C_RESET"
+                printf "Free the port first or change the configured port\n"
                 pause
                 return 1
             fi
@@ -1233,7 +1247,7 @@ prompt_stop_detected_proxy_for_busy_port() {
             ;;
         *)
             printf "\n"
-            printf "Free the port first or change LISTEN_PORT\n"
+            printf "Free the port first or change the configured port\n"
             pause
             return 1
             ;;
@@ -1846,34 +1860,68 @@ update_binary() {
 }
 
 run_binary() {
+    run_binary_mode "combined"
+}
+
+run_binary_background() {
+    run_binary_background_mode "combined"
+}
+
+run_binary_mode() {
+    mode="$1"
     bin_path="$(runtime_bin_path 2>/dev/null || true)"
     [ -n "$bin_path" ] || return 1
 
     set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+    case "$mode" in
+        mtproto-only)
+            set -- "$@" --socks5=false
+            ;;
+        combined|socks5-only)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    if [ "$mode" != "mtproto-only" ] && [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
         set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
     fi
-    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
+    if [ "$mode" = "mtproto-only" ]; then
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
+    elif [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
         set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
     fi
     "$@"
 }
 
-run_binary_background() {
+run_binary_background_mode() {
+    mode="$1"
     bin_path="$(runtime_bin_path 2>/dev/null || true)"
     [ -n "$bin_path" ] || return 1
 
     set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+    case "$mode" in
+        mtproto-only)
+            set -- "$@" --socks5=false
+            ;;
+        combined|socks5-only)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    if [ "$mode" != "mtproto-only" ] && [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
         set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
     fi
-    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
+    if [ "$mode" = "mtproto-only" ]; then
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
+    elif [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
         set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
     fi
 
@@ -1884,6 +1932,122 @@ run_binary_background() {
     fi
 
     printf "%s" "$!"
+}
+
+mtproto_ready() {
+    [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]
+}
+
+show_mtproto_only() {
+    show_header
+    show_mtproto_settings
+    if ! mtproto_ready; then
+        printf "\nOpen MTProto proxy menu and enable it first.\n"
+    fi
+    pause
+}
+
+start_mtproto_proxy() {
+    if ! mtproto_ready; then
+        show_header
+        printf "%sMTProto proxy is disabled%s\n\n" "$C_RED" "$C_RESET"
+        printf "Open MTProto proxy menu to enable and configure it first.\n"
+        pause
+        return 1
+    fi
+
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        show_header
+        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    if is_running; then
+        prompt_restart_running_proxy || return 1
+    fi
+
+    if port_in_use "$MTPROTO_PORT"; then
+        prompt_stop_detected_proxy_for_busy_port "$MTPROTO_PORT" || return 1
+    fi
+
+    show_header
+    show_environment_checks
+    printf "\n"
+    printf "%sStarting MTProto proxy in terminal%s\n\n" "$C_GREEN" "$C_RESET"
+    printf "Logs will be printed here.\n"
+    printf "Stop with Ctrl+C\n"
+    printf "Bind: %s:%s\n\n" "$(telegram_host)" "$MTPROTO_PORT"
+    show_mtproto_settings
+    printf "\n"
+    interrupted="0"
+    run_binary_mode "mtproto-only" &
+    child_pid="$!"
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    trap 'interrupted="1"; kill -INT "$child_pid" 2>/dev/null' INT
+    wait "$child_pid"
+    code="$?"
+    rm -f "$PID_FILE"
+    trap - INT
+    printf "\n%sMTProto proxy exited with code %s%s\n" "$C_YELLOW" "$code" "$C_RESET"
+    if [ "$interrupted" = "1" ]; then
+        printf "Returned to menu after Ctrl+C\n"
+    fi
+    pause
+}
+
+start_mtproto_proxy_background() {
+    if ! mtproto_ready; then
+        show_header
+        printf "%sMTProto proxy is disabled%s\n\n" "$C_RED" "$C_RESET"
+        printf "Open MTProto proxy menu to enable and configure it first.\n"
+        pause
+        return 1
+    fi
+
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        show_header
+        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    if is_running; then
+        prompt_restart_running_proxy || return 1
+    fi
+
+    if port_in_use "$MTPROTO_PORT"; then
+        prompt_stop_detected_proxy_for_busy_port "$MTPROTO_PORT" || return 1
+    fi
+
+    show_header
+    show_environment_checks
+    printf "\n"
+    printf "%sStarting MTProto proxy in background%s\n\n" "$C_GREEN" "$C_RESET"
+    printf "Logs will not be printed in this session.\n"
+    printf "Bind: %s:%s\n\n" "$(telegram_host)" "$MTPROTO_PORT"
+
+    child_pid="$(run_binary_background_mode "mtproto-only")" || return 1
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    sleep 1
+
+    if kill -0 "$child_pid" 2>/dev/null; then
+        printf "Background process pid:\n  %s\n" "$child_pid"
+        pause
+        return 0
+    fi
+
+    wait "$child_pid" 2>/dev/null
+    code="$?"
+    rm -f "$PID_FILE"
+    printf "%sBackground start failed%s\n\n" "$C_RED" "$C_RESET"
+    printf "Process exited with code: %s\n" "$code"
+    pause
+    return 1
 }
 
 start_proxy() {
@@ -2483,7 +2647,6 @@ advanced_menu() {
         printf "  5) Remove binary and runtime files\n"
         printf "  6) Configure SOCKS5 auth\n"
         printf "  7) Configure update source\n"
-        printf "  8) Configure MTProto proxy\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -2512,8 +2675,42 @@ advanced_menu() {
             7)
                 configure_update_source
                 ;;
-            8)
+            *)
+                return 0
+                ;;
+        esac
+    done
+}
+
+mtproto_menu() {
+    while true; do
+        show_header
+        show_mtproto_settings
+        printf "\n%sMTProto Proxy%s\n\n" "$C_BOLD" "$C_RESET"
+        printf "  1) Show MTProto settings\n"
+        printf "  2) Configure MTProto proxy\n"
+        printf "  3) Run only MTProto in terminal\n"
+        printf "  4) Start only MTProto in background\n"
+        printf "  5) Stop running proxy\n"
+        printf "  Enter) Back\n\n"
+        printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
+        read mtproto_choice
+
+        case "$mtproto_choice" in
+            1)
+                show_mtproto_only
+                ;;
+            2)
                 configure_mtproto
+                ;;
+            3)
+                start_mtproto_proxy
+                ;;
+            4)
+                start_mtproto_proxy_background
+                ;;
+            5)
+                stop_proxy
                 ;;
             *)
                 return 0
@@ -2532,6 +2729,8 @@ show_help() {
     printf "  sh %s disable-autostart  disable OpenWrt autostart\n" "$0"
     printf "  sh %s start          run proxy in terminal\n" "$0"
     printf "  sh %s start-background start proxy in background\n" "$0"
+    printf "  sh %s start-mtproto  run only MTProto proxy in terminal\n" "$0"
+    printf "  sh %s start-mtproto-background start only MTProto proxy in background\n" "$0"
     printf "  sh %s stop           stop running proxy\n" "$0"
     printf "  sh %s restart        restart proxy in terminal\n" "$0"
     printf "  sh %s status         show status\n" "$0"
@@ -2566,6 +2765,7 @@ menu() {
     printf "  4) Show Telegram SOCKS5 settings\n"
     printf "  5) Advanced\n"
     printf "  6) Start in background\n"
+    printf "  7) MTProto proxy\n"
     printf "  Enter) Exit\n\n"
     printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
     read choice
@@ -2589,6 +2789,7 @@ menu() {
         4) show_telegram_only ;;
         5) advanced_menu ;;
         6) start_proxy_background ;;
+        7) mtproto_menu ;;
         *) exit 0 ;;
     esac
 }
@@ -2613,6 +2814,8 @@ if [ "$COMMAND_MODE" = "1" ]; then
         disable-autostart) disable_autostart; rc=$? ;;
         start) start_proxy; rc=$? ;;
         start-background|start-bg) start_proxy_background; rc=$? ;;
+        start-mtproto) start_mtproto_proxy; rc=$? ;;
+        start-mtproto-background|start-mtproto-bg) start_mtproto_proxy_background; rc=$? ;;
         stop) stop_proxy; rc=$? ;;
         restart) restart_proxy; rc=$? ;;
         status) show_header; show_status; rc=$? ;;
