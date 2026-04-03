@@ -45,6 +45,27 @@ func TestManagerMTProtoSettingsShownWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestManagerMTProtoSettingsShowQRWhenRendererAvailable(t *testing.T) {
+	env := append(managerEnv(t),
+		"MTPROTO_ENABLED=1",
+		"MTPROTO_PORT=8443",
+		"MTPROTO_SECRET=ee0123456789abcdef0123456789abcdef",
+	)
+
+	writeQRProxyScript(t, envValue(env, "BIN_PATH"))
+
+	out, err := runManager(t, env, "telegram")
+	if err != nil {
+		t.Fatalf("telegram failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "qr       :") {
+		t.Fatalf("expected QR label in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "██") {
+		t.Fatalf("expected QR body in output, got:\n%s", out)
+	}
+}
+
 func TestManagerMTProtoConfigPersisted(t *testing.T) {
 	env := append(managerEnv(t),
 		"MTPROTO_ENABLED=1",
@@ -199,6 +220,7 @@ func TestManagerMTProtoRunBinaryOmitsFlagsWhenDisabled(t *testing.T) {
 func TestManagerConfigureMTProtoEnableViaMenu(t *testing.T) {
 	env := managerEnv(t)
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	writeQRProxyScript(t, envValue(env, "BIN_PATH"))
 
 	// Menu: 5 (Advanced) → 8 (Configure MTProto) → y (enable) → Enter (default port) → Enter (back) → Enter (exit)
 	out, err := runManagerMenu(t, env, "5\n8\ny\n\n\n\n")
@@ -210,6 +232,9 @@ func TestManagerConfigureMTProtoEnableViaMenu(t *testing.T) {
 	}
 	if !strings.Contains(out, "tg://proxy?server=") {
 		t.Fatalf("expected tg://proxy link in output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "qr     :") {
+		t.Fatalf("expected QR label in output, got:\n%s", out)
 	}
 
 	config := readTrimmed(t, configPath)

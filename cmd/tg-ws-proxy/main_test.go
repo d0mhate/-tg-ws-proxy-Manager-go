@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -117,5 +120,37 @@ func TestParseArgsMTProtoInvalidSecret(t *testing.T) {
 	_, err := parseArgs([]string{"--mtproto", "--mtproto-port", "8443", "--mtproto-secret", "badvalue"})
 	if err == nil {
 		t.Fatal("expected error for invalid secret")
+	}
+}
+
+func TestHandleUtilityModeQR(t *testing.T) {
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+	defer func() {
+		os.Stdout = oldStdout
+	}()
+
+	handled, err := handleUtilityMode([]string{"qr", "tg://proxy?server=127.0.0.1&port=8443&secret=ee0123456789abcdef0123456789abcdef"})
+	_ = w.Close()
+	if err != nil {
+		t.Fatalf("handleUtilityMode returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected QR utility mode to be handled")
+	}
+
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(bytes.TrimSpace(out)) == 0 {
+		t.Fatal("expected QR output")
+	}
+	if !strings.ContainsAny(string(out), "▀▄█") {
+		t.Fatalf("expected QR block characters, got:\n%s", string(out))
 	}
 }

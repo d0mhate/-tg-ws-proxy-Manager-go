@@ -78,6 +78,13 @@ func parseArgs(args []string) (config.Config, error) {
 }
 
 func main() {
+	if handled, err := handleUtilityMode(os.Args[1:]); handled {
+		if err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	cfg, err := parseArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
@@ -93,13 +100,11 @@ func main() {
 
 	errCh := make(chan error, 2)
 
-	// Start SOCKS5 server.
 	srv := socks5.NewServer(cfg, logger)
 	go func() {
 		errCh <- srv.Run(ctx)
 	}()
 
-	// Start MTProto proxy if enabled.
 	if cfg.MTProtoEnabled {
 		secret, _ := mtprotoproxy.ParseSecret(cfg.MTProtoSecret)
 		pool := wsbridge.NewPool(cfg)
@@ -115,5 +120,26 @@ func main() {
 
 	if err := <-errCh; err != nil {
 		logger.Fatalf("server stopped with error: %v", err)
+	}
+}
+
+func handleUtilityMode(args []string) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+
+	switch args[0] {
+	case "qr":
+		if len(args) != 2 {
+			return true, fmt.Errorf("usage: %s qr <text>", os.Args[0])
+		}
+		qr, err := mtprotoproxy.RenderTerminalQR(args[1])
+		if err != nil {
+			return true, err
+		}
+		_, err = fmt.Fprint(os.Stdout, qr)
+		return true, err
+	default:
+		return false, nil
 	}
 }

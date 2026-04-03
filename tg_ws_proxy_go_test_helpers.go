@@ -348,6 +348,18 @@ func joinArgs(args []string) string {
 	}
 }
 
+func writeQRProxyScript(t *testing.T, path string) {
+	t.Helper()
+
+	writeFile(t, path, `#!/bin/sh
+if [ "$1" = "qr" ]; then
+  printf '██\n▀▀\n'
+  exit 0
+fi
+exit 0
+`, 0o755)
+}
+
 func waitForMenuText(t *testing.T, env []string, want string) string {
 	t.Helper()
 
