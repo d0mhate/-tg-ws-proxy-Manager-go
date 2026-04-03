@@ -684,6 +684,8 @@ mtproto_link() {
     if [ -n "$MTPROTO_DOMAIN" ]; then
         if command -v xxd >/dev/null 2>&1; then
             domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | xxd -p -c 256 | tr -d '\n')"
+        elif command -v hexdump >/dev/null 2>&1; then
+            domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | hexdump -v -e '/1 "%02x"' 2>/dev/null | tr -d '\n')"
         elif command -v od >/dev/null 2>&1; then
             domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | od -An -tx1 -v | tr -d ' \n')"
         else
