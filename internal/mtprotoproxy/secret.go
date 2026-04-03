@@ -10,6 +10,7 @@ import (
 const (
 	secretLen      = 16 // 16 bytes = 32 hex chars
 	fakeTLSPrefix  = "ee"
+	defaultDomain  = "www.google.com"
 )
 
 var (
@@ -27,6 +28,18 @@ func GenerateSecret() (string, error) {
 	return fakeTLSPrefix + hex.EncodeToString(raw), nil
 }
 
+func DefaultFakeTLSDomain() string {
+	return defaultDomain
+}
+
+func NormalizeFakeTLSDomain(domain string) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if domain == "" {
+		return defaultDomain
+	}
+	return domain
+}
+
 // ParseSecret parses an ee-prefixed hex secret string and returns
 // the raw 16-byte secret. Only fake-TLS (ee) secrets are supported.
 func ParseSecret(s string) ([]byte, error) {
@@ -37,11 +50,15 @@ func ParseSecret(s string) ([]byte, error) {
 	}
 	s = s[len(fakeTLSPrefix):]
 
-	if len(s) != secretLen*2 {
+	if len(s) < secretLen*2 || len(s)%2 != 0 {
 		return nil, ErrSecretTooShort
 	}
 
-	raw, err := hex.DecodeString(s)
+	if _, err := hex.DecodeString(s); err != nil {
+		return nil, ErrSecretInvalid
+	}
+
+	raw, err := hex.DecodeString(s[:secretLen*2])
 	if err != nil {
 		return nil, ErrSecretInvalid
 	}
@@ -49,8 +66,16 @@ func ParseSecret(s string) ([]byte, error) {
 }
 
 // FormatLink returns a tg://proxy link for the given server, port and secret.
-func FormatLink(host string, port int, secret string) string {
-	return "tg://proxy?server=" + host + "&port=" + itoa(port) + "&secret=" + secret
+func FormatLink(host string, port int, secret, domain string) string {
+	return "tg://proxy?server=" + host + "&port=" + itoa(port) + "&secret=" + LinkSecret(secret, domain)
+}
+
+func LinkSecret(secret, domain string) string {
+	secret = strings.ToLower(strings.TrimSpace(secret))
+	if !strings.HasPrefix(secret, fakeTLSPrefix) || len(secret) != 2+secretLen*2 {
+		return secret
+	}
+	return secret + hex.EncodeToString([]byte(NormalizeFakeTLSDomain(domain)))
 }
 
 func itoa(v int) string {

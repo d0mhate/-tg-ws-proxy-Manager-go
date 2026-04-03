@@ -25,6 +25,7 @@ type Config struct {
 	MTProtoHost    string
 	MTProtoPort    int
 	MTProtoSecret  string
+	MTProtoDomain  string
 }
 
 func Default() Config {
@@ -38,6 +39,7 @@ func Default() Config {
 		DialTimeout:   10 * time.Second,
 		InitTimeout:   15 * time.Second,
 		ConnectWSPath: "/apiws",
+		MTProtoDomain: "www.google.com",
 		DCIPs: map[int]string{
 			1: "149.154.175.205",
 			2: "149.154.167.220",

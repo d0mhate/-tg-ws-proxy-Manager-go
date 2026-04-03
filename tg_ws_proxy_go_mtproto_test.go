@@ -37,10 +37,13 @@ func TestManagerMTProtoSettingsShownWhenEnabled(t *testing.T) {
 	if !strings.Contains(out, "port     : 8443") {
 		t.Fatalf("expected MTProto port in output, got:\n%s", out)
 	}
+	if !strings.Contains(out, "domain   : www.google.com") {
+		t.Fatalf("expected MTProto domain in output, got:\n%s", out)
+	}
 	if !strings.Contains(out, "secret   : ee0123456789abcdef0123456789abcdef") {
 		t.Fatalf("expected MTProto secret in output, got:\n%s", out)
 	}
-	if !strings.Contains(out, "tg://proxy?server=") {
+	if !strings.Contains(out, "tg://proxy?server=") || !strings.Contains(out, "7777772e676f6f676c652e636f6d") {
 		t.Fatalf("expected tg://proxy link in output, got:\n%s", out)
 	}
 }
@@ -88,6 +91,9 @@ func TestManagerMTProtoConfigPersisted(t *testing.T) {
 	}
 	if !strings.Contains(config, "MTPROTO_SECRET='ee0123456789abcdef0123456789abcdef'") {
 		t.Fatalf("expected MTPROTO_SECRET in config, got:\n%s", config)
+	}
+	if !strings.Contains(config, "MTPROTO_DOMAIN='www.google.com'") {
+		t.Fatalf("expected MTPROTO_DOMAIN in config, got:\n%s", config)
 	}
 }
 
@@ -141,6 +147,9 @@ func TestManagerMTProtoInitScriptIncludesFlags(t *testing.T) {
 	if !strings.Contains(initScript, "--mtproto-secret") {
 		t.Fatalf("expected --mtproto-secret in init script, got:\n%s", initScript)
 	}
+	if !strings.Contains(initScript, "--mtproto-domain") {
+		t.Fatalf("expected --mtproto-domain in init script, got:\n%s", initScript)
+	}
 }
 
 func TestManagerMTProtoInitScriptGuardedByCondition(t *testing.T) {
@@ -186,6 +195,9 @@ func TestManagerMTProtoRunBinaryPassesFlags(t *testing.T) {
 	}
 	if !strings.Contains(args, "--mtproto-secret\nee0123456789abcdef0123456789abcdef") {
 		t.Fatalf("expected --mtproto-secret in binary args, got:\n%s", args)
+	}
+	if !strings.Contains(args, "--mtproto-domain\nwww.google.com") {
+		t.Fatalf("expected --mtproto-domain in binary args, got:\n%s", args)
 	}
 
 	if _, err := runManager(t, env, "stop"); err != nil {
@@ -242,6 +254,9 @@ func TestManagerMTProtoOnlyRunBinaryPassesModeFlags(t *testing.T) {
 	if !strings.Contains(args, "--mtproto") {
 		t.Fatalf("expected --mtproto in mtproto-only args, got:\n%s", args)
 	}
+	if !strings.Contains(args, "--mtproto-domain\nwww.google.com") {
+		t.Fatalf("expected --mtproto-domain in mtproto-only args, got:\n%s", args)
+	}
 
 	if _, err := runManager(t, env, "stop"); err != nil {
 		t.Fatalf("stop failed: %v", err)
@@ -253,8 +268,8 @@ func TestManagerConfigureMTProtoEnableViaMenu(t *testing.T) {
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 	writeQRProxyScript(t, envValue(env, "BIN_PATH"))
 
-	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → y (enable) → Enter (default port) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "7\n2\ny\n\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → y (enable) → Enter (default port) → Enter (default domain) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\ny\n\n\n\n\n")
 	if err != nil {
 		t.Fatalf("configure mtproto via menu failed: %v\n%s", err, out)
 	}
@@ -274,6 +289,9 @@ func TestManagerConfigureMTProtoEnableViaMenu(t *testing.T) {
 	}
 	if !strings.Contains(config, "MTPROTO_SECRET='ee") {
 		t.Fatalf("expected auto-generated secret in config, got:\n%s", config)
+	}
+	if !strings.Contains(config, "MTPROTO_DOMAIN='www.google.com'") {
+		t.Fatalf("expected default domain in config, got:\n%s", config)
 	}
 }
 
@@ -344,8 +362,8 @@ func TestManagerConfigureMTProtoRegenerateSecretViaMenu(t *testing.T) {
 		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
 	}
 
-	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → 3 (Regenerate secret) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "7\n2\n3\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → 4 (Regenerate secret) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\n4\n\n\n")
 	if err != nil {
 		t.Fatalf("regenerate mtproto secret via menu failed: %v\n%s", err, out)
 	}
@@ -367,8 +385,8 @@ func TestManagerConfigureMTProtoEnableWithCustomPort(t *testing.T) {
 	env := managerEnv(t)
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 
-	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → y (enable) → 7443 (custom port) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "7\n2\ny\n7443\n\n\n")
+	// Menu: 7 (MTProto proxy) → 2 (Configure MTProto) → y (enable) → 7443 (custom port) → mt.example.com → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\ny\n7443\nmt.example.com\n\n\n")
 	if err != nil {
 		t.Fatalf("enable mtproto with custom port via menu failed: %v\n%s", err, out)
 	}
@@ -379,6 +397,9 @@ func TestManagerConfigureMTProtoEnableWithCustomPort(t *testing.T) {
 	config := readTrimmed(t, configPath)
 	if !strings.Contains(config, "MTPROTO_PORT='7443'") {
 		t.Fatalf("expected custom port in config, got:\n%s", config)
+	}
+	if !strings.Contains(config, "MTPROTO_DOMAIN='mt.example.com'") {
+		t.Fatalf("expected custom domain in config, got:\n%s", config)
 	}
 }
 
@@ -394,8 +415,8 @@ func TestManagerConfigureMTProtoEnableOffersRestartWhenRunning(t *testing.T) {
 	}
 	waitForFile(t, argsFile)
 
-	// Menu: 7 → 2 → y (enable) → Enter (default port) → y (restart) → Enter (back) → Enter (exit)
-	out, err := runManagerMenu(t, env, "7\n2\ny\n\ny\n\n\n")
+	// Menu: 7 → 2 → y (enable) → Enter (default port) → Enter (default domain) → y (restart) → Enter (back) → Enter (exit)
+	out, err := runManagerMenu(t, env, "7\n2\ny\n\n\ny\n\n\n")
 	if err != nil {
 		t.Fatalf("enable mtproto with restart via menu failed: %v\n%s", err, out)
 	}
@@ -499,8 +520,8 @@ func TestManagerMTProtoSecretGeneratedOnEnable(t *testing.T) {
 	env := managerEnv(t)
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 
-	// Enable MTProto, accept default port.
-	_, _ = runManagerMenu(t, env, "7\n2\ny\n\n\n\n")
+	// Enable MTProto, accept default port and domain.
+	_, _ = runManagerMenu(t, env, "7\n2\ny\n\n\n\n\n")
 
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("expected config file to exist: %v", err)
@@ -519,7 +540,7 @@ func TestManagerMTProtoSecretGeneratedOnEnable(t *testing.T) {
 		t.Fatalf("malformed config line:\n%s", config)
 	}
 	secret := after[:end]
-	if len(secret) != 34 { // "ee" + 32 hex chars
+	if len(secret) != 34 { // stored secret stays bare: "ee" + 32 hex chars
 		t.Fatalf("expected 34-char secret, got %d chars: %s", len(secret), secret)
 	}
 }

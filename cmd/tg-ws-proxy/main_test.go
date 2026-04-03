@@ -109,6 +109,16 @@ func TestParseArgsMTProtoCustomSecret(t *testing.T) {
 	}
 }
 
+func TestParseArgsMTProtoDomainDefault(t *testing.T) {
+	cfg, err := parseArgs([]string{"--mtproto", "--mtproto-port", "8443"})
+	if err != nil {
+		t.Fatalf("parseArgs failed: %v", err)
+	}
+	if cfg.MTProtoDomain != "www.google.com" {
+		t.Fatalf("unexpected mtproto domain: %q", cfg.MTProtoDomain)
+	}
+}
+
 func TestParseArgsMTProtoRequiresPort(t *testing.T) {
 	_, err := parseArgs([]string{"--mtproto"})
 	if err == nil {
@@ -154,7 +164,7 @@ func TestHandleUtilityModeQR(t *testing.T) {
 		os.Stdout = oldStdout
 	}()
 
-	handled, err := handleUtilityMode([]string{"qr", "tg://proxy?server=127.0.0.1&port=8443&secret=ee0123456789abcdef0123456789abcdef"})
+	handled, err := handleUtilityMode([]string{"qr", "tg://proxy?server=127.0.0.1&port=8443&secret=ee0123456789abcdef0123456789abcdef7777772e676f6f676c652e636f6d"})
 	_ = w.Close()
 	if err != nil {
 		t.Fatalf("handleUtilityMode returned error: %v", err)

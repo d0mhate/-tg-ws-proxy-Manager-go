@@ -46,6 +46,7 @@ func parseArgs(args []string) (config.Config, error) {
 	fs.StringVar(&cfg.MTProtoHost, "mtproto-host", cfg.MTProtoHost, "MTProto proxy listen host")
 	fs.IntVar(&cfg.MTProtoPort, "mtproto-port", cfg.MTProtoPort, "MTProto proxy listen port")
 	fs.StringVar(&cfg.MTProtoSecret, "mtproto-secret", cfg.MTProtoSecret, "MTProto proxy secret (ee + 32 hex chars); auto-generated if empty")
+	fs.StringVar(&cfg.MTProtoDomain, "mtproto-domain", cfg.MTProtoDomain, "MTProto fake-TLS domain used in tg://proxy link")
 	if err := fs.Parse(args); err != nil {
 		return config.Config{}, err
 	}
@@ -64,6 +65,7 @@ func parseArgs(args []string) (config.Config, error) {
 		return config.Config{}, fmt.Errorf("at least one proxy mode must be enabled")
 	}
 	if cfg.MTProtoEnabled {
+		cfg.MTProtoDomain = mtprotoproxy.NormalizeFakeTLSDomain(cfg.MTProtoDomain)
 		if cfg.MTProtoPort == 0 {
 			return config.Config{}, fmt.Errorf("--mtproto-port is required when --mtproto is enabled")
 		}
@@ -116,7 +118,11 @@ func main() {
 		pool := wsbridge.NewPool(cfg)
 		mtSrv := mtprotoproxy.NewServer(cfg, logger, pool, secret)
 
-		link := mtprotoproxy.FormatLink(cfg.MTProtoHost, cfg.MTProtoPort, cfg.MTProtoSecret)
+		linkHost := cfg.MTProtoHost
+		if linkHost == "" {
+			linkHost = cfg.Host
+		}
+		link := mtprotoproxy.FormatLink(linkHost, cfg.MTProtoPort, cfg.MTProtoSecret, cfg.MTProtoDomain)
 		logger.Printf("mtproto proxy link: %s", link)
 
 		go func() {

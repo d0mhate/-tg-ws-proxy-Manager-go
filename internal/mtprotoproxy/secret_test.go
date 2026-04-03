@@ -51,6 +51,17 @@ func TestParseSecretValid(t *testing.T) {
 	}
 }
 
+func TestParseSecretValidWithDomainSuffix(t *testing.T) {
+	input := "ee" + strings.Repeat("ab", 16) + hex.EncodeToString([]byte("www.google.com"))
+	raw, err := ParseSecret(input)
+	if err != nil {
+		t.Fatalf("ParseSecret failed: %v", err)
+	}
+	if len(raw) != 16 {
+		t.Fatalf("expected 16 bytes, got %d", len(raw))
+	}
+}
+
 func TestParseSecretUpperCase(t *testing.T) {
 	input := "EE" + strings.Repeat("AB", 16)
 	raw, err := ParseSecret(input)
@@ -88,8 +99,8 @@ func TestParseSecretTooShort(t *testing.T) {
 	}
 }
 
-func TestParseSecretTooLong(t *testing.T) {
-	input := "ee" + strings.Repeat("ab", 17) // 34 hex chars
+func TestParseSecretTooLongOddLength(t *testing.T) {
+	input := "ee" + strings.Repeat("ab", 16) + "f"
 	_, err := ParseSecret(input)
 	if err != ErrSecretTooShort {
 		t.Fatalf("expected ErrSecretTooShort, got %v", err)
@@ -130,10 +141,18 @@ func TestParseSecretRoundTrip(t *testing.T) {
 }
 
 func TestFormatLink(t *testing.T) {
-	link := FormatLink("192.168.1.1", 8443, "ee0123456789abcdef0123456789abcdef")
-	want := "tg://proxy?server=192.168.1.1&port=8443&secret=ee0123456789abcdef0123456789abcdef"
+	link := FormatLink("192.168.1.1", 8443, "ee0123456789abcdef0123456789abcdef", "www.google.com")
+	want := "tg://proxy?server=192.168.1.1&port=8443&secret=ee0123456789abcdef0123456789abcdef7777772e676f6f676c652e636f6d"
 	if link != want {
 		t.Fatalf("unexpected link:\ngot:  %s\nwant: %s", link, want)
+	}
+}
+
+func TestLinkSecretKeepsBareSecretWithoutDomain(t *testing.T) {
+	got := LinkSecret("ee0123456789abcdef0123456789abcdef", "")
+	want := "ee0123456789abcdef0123456789abcdef7777772e676f6f676c652e636f6d"
+	if got != want {
+		t.Fatalf("unexpected secret:\ngot:  %s\nwant: %s", got, want)
 	}
 }
 
