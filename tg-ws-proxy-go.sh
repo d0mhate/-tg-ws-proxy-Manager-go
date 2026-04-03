@@ -33,6 +33,9 @@ LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
 SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
 SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
+MTPROTO_ENABLED_FROM_ENV="${MTPROTO_ENABLED+x}"
+MTPROTO_PORT_FROM_ENV="${MTPROTO_PORT+x}"
+MTPROTO_SECRET_FROM_ENV="${MTPROTO_SECRET+x}"
 UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
 PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
@@ -72,6 +75,9 @@ LISTEN_PORT="${LISTEN_PORT:-1080}"
 VERBOSE="${VERBOSE:-0}"
 SOCKS_USERNAME="${SOCKS_USERNAME:-}"
 SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
+MTPROTO_ENABLED="${MTPROTO_ENABLED:-0}"
+MTPROTO_PORT="${MTPROTO_PORT:-8443}"
+MTPROTO_SECRET="${MTPROTO_SECRET:-}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
@@ -284,6 +290,9 @@ write_settings_config() {
         printf "VERBOSE='%s'\n" "$VERBOSE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
         printf "PASSWORD='%s'\n" "$SOCKS_PASSWORD"
+        printf "MTPROTO_ENABLED='%s'\n" "$MTPROTO_ENABLED"
+        printf "MTPROTO_PORT='%s'\n" "$MTPROTO_PORT"
+        printf "MTPROTO_SECRET='%s'\n" "$MTPROTO_SECRET"
     } > "$PERSIST_CONFIG_FILE" || return 1
 }
 
@@ -311,6 +320,20 @@ load_saved_settings() {
 
     if [ -z "$SOCKS_PASSWORD_FROM_ENV" ]; then
         SOCKS_PASSWORD="$(read_config_value PASSWORD 2>/dev/null || true)"
+    fi
+
+    if [ -z "$MTPROTO_ENABLED_FROM_ENV" ]; then
+        mtproto_val="$(read_config_value MTPROTO_ENABLED 2>/dev/null || true)"
+        [ -n "$mtproto_val" ] && MTPROTO_ENABLED="$mtproto_val"
+    fi
+
+    if [ -z "$MTPROTO_PORT_FROM_ENV" ]; then
+        mtproto_port_val="$(read_config_value MTPROTO_PORT 2>/dev/null || true)"
+        [ -n "$mtproto_port_val" ] && MTPROTO_PORT="$mtproto_port_val"
+    fi
+
+    if [ -z "$MTPROTO_SECRET_FROM_ENV" ]; then
+        MTPROTO_SECRET="$(read_config_value MTPROTO_SECRET 2>/dev/null || true)"
     fi
 }
 
@@ -782,6 +805,13 @@ show_telegram_settings() {
         printf "  username : <empty>\n"
     fi
     printf "  password : %s\n" "$(password_display)"
+    if [ "$MTPROTO_ENABLED" = "1" ]; then
+        printf "\n%sMTProto Proxy (fake-TLS)%s\n" "$C_BOLD" "$C_RESET"
+        printf "  host     : %s\n" "$(telegram_host)"
+        printf "  port     : %s\n" "$MTPROTO_PORT"
+        printf "  secret   : %s\n" "$MTPROTO_SECRET"
+        printf "  link     : tg://proxy?server=%s&port=%s&secret=%s\n" "$(telegram_host)" "$MTPROTO_PORT" "$MTPROTO_SECRET"
+    fi
 }
 
 show_current_version() {
@@ -1538,23 +1568,24 @@ write_init_script() {
         printf '%s\n' '    [ -n "$PORT" ] || PORT="1080"'
         printf '%s\n' '    USERNAME="${USERNAME:-}"'
         printf '%s\n' '    PASSWORD="${PASSWORD:-}"'
+        printf '%s\n' '    MTPROTO_ENABLED="${MTPROTO_ENABLED:-0}"'
+        printf '%s\n' '    MTPROTO_PORT="${MTPROTO_PORT:-8443}"'
+        printf '%s\n' '    MTPROTO_SECRET="${MTPROTO_SECRET:-}"'
         printf '%s\n' '    if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
         printf '%s\n' '        return 1'
         printf '%s\n' '    fi'
         printf '%s\n' '    procd_open_instance'
+        printf '%s\n' '    CMD="$BIN --host $HOST --port $PORT"'
         printf '%s\n' '    if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then'
-        printf '%s\n' '        if [ "${VERBOSE:-0}" = "1" ]; then'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --username "$USERNAME" --password "$PASSWORD" --verbose'
-        printf '%s\n' '        else'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --username "$USERNAME" --password "$PASSWORD"'
-        printf '%s\n' '        fi'
-        printf '%s\n' '    else'
-        printf '%s\n' '        if [ "${VERBOSE:-0}" = "1" ]; then'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --verbose'
-        printf '%s\n' '        else'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT"'
-        printf '%s\n' '        fi'
+        printf '%s\n' '        CMD="$CMD --username $USERNAME --password $PASSWORD"'
         printf '%s\n' '    fi'
+        printf '%s\n' '    if [ "${VERBOSE:-0}" = "1" ]; then'
+        printf '%s\n' '        CMD="$CMD --verbose"'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then'
+        printf '%s\n' '        CMD="$CMD --mtproto --mtproto-port $MTPROTO_PORT --mtproto-secret $MTPROTO_SECRET"'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    procd_set_param command $CMD'
         printf '%s\n' '    procd_set_param respawn'
         printf '%s\n' '    procd_set_param stdout 1'
         printf '%s\n' '    procd_set_param stderr 1'
@@ -1795,6 +1826,9 @@ run_binary() {
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
     fi
+    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
+    fi
     "$@"
 }
 
@@ -1808,6 +1842,9 @@ run_binary_background() {
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
+    fi
+    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
     fi
 
     if command -v nohup >/dev/null 2>&1; then
@@ -2160,6 +2197,108 @@ configure_socks_auth() {
     pause
 }
 
+configure_mtproto() {
+    show_header
+    show_telegram_settings
+
+    if [ "$MTPROTO_ENABLED" = "1" ]; then
+        printf "\nMTProto proxy is currently %senabled%s.\n" "$C_GREEN" "$C_RESET"
+        printf "  1) Disable MTProto proxy\n"
+        printf "  2) Change port (current: %s)\n" "$MTPROTO_PORT"
+        printf "  3) Regenerate secret\n"
+        printf "  Enter) Back\n\n"
+        printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
+        read mtproto_choice
+
+        case "$mtproto_choice" in
+            1)
+                MTPROTO_ENABLED="0"
+                write_settings_config || return 1
+                printf "\n%sMTProto proxy disabled%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            2)
+                printf "New MTProto port: "
+                IFS= read -r new_port
+                case "$new_port" in
+                    ''|*[!0-9]*)
+                        printf "\n%sInvalid port number%s\n" "$C_RED" "$C_RESET"
+                        pause
+                        return 1
+                        ;;
+                esac
+                MTPROTO_PORT="$new_port"
+                write_settings_config || return 1
+                printf "\n%sMTProto port changed to %s%s\n" "$C_GREEN" "$MTPROTO_PORT" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            3)
+                MTPROTO_SECRET=""
+                generate_mtproto_secret_if_empty
+                write_settings_config || return 1
+                printf "\n%sNew secret: %s%s\n" "$C_GREEN" "$MTPROTO_SECRET" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    else
+        printf "\nMTProto proxy is currently %sdisabled%s.\n" "$C_RED" "$C_RESET"
+        printf "Enable MTProto proxy? [y/N]: "
+        IFS= read -r enable_choice
+
+        case "$enable_choice" in
+            y|Y|yes|YES|Yes)
+                MTPROTO_ENABLED="1"
+                generate_mtproto_secret_if_empty
+
+                printf "MTProto port [%s]: " "$MTPROTO_PORT"
+                IFS= read -r new_port
+                if [ -n "$new_port" ]; then
+                    case "$new_port" in
+                        ''|*[!0-9]*)
+                            printf "\n%sInvalid port number%s\n" "$C_RED" "$C_RESET"
+                            pause
+                            return 1
+                            ;;
+                    esac
+                    MTPROTO_PORT="$new_port"
+                fi
+
+                write_settings_config || return 1
+                printf "\n%sMTProto proxy enabled%s\n" "$C_GREEN" "$C_RESET"
+                printf "  port   : %s\n" "$MTPROTO_PORT"
+                printf "  secret : %s\n" "$MTPROTO_SECRET"
+                printf "  link   : tg://proxy?server=%s&port=%s&secret=%s\n" "$(telegram_host)" "$MTPROTO_PORT" "$MTPROTO_SECRET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            *)
+                return 0
+                ;;
+        esac
+    fi
+}
+
+generate_mtproto_secret_if_empty() {
+    if [ -n "$MTPROTO_SECRET" ]; then
+        return 0
+    fi
+    # Generate ee + 32 random hex chars.
+    if command -v hexdump >/dev/null 2>&1; then
+        MTPROTO_SECRET="ee$(hexdump -n 16 -e '16/1 "%02x"' /dev/urandom 2>/dev/null || true)"
+    elif command -v od >/dev/null 2>&1; then
+        MTPROTO_SECRET="ee$(od -A n -t x1 -N 16 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    else
+        # Fallback: use dd + sha256sum to get hex bytes.
+        MTPROTO_SECRET="ee$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | sha256sum 2>/dev/null | cut -c1-32)"
+    fi
+}
+
 configure_update_source() {
     show_header
     show_update_source_settings
@@ -2309,6 +2448,7 @@ advanced_menu() {
         printf "  5) Remove binary and runtime files\n"
         printf "  6) Configure SOCKS5 auth\n"
         printf "  7) Configure update source\n"
+        printf "  8) Configure MTProto proxy\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -2336,6 +2476,9 @@ advanced_menu() {
                 ;;
             7)
                 configure_update_source
+                ;;
+            8)
+                configure_mtproto
                 ;;
             *)
                 return 0

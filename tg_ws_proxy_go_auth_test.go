@@ -171,7 +171,7 @@ func TestManagerAutostartConfigPersistsOptionalAuthCredentials(t *testing.T) {
 	}
 
 	initScript := readTrimmed(t, initScriptPath)
-	if !strings.Contains(initScript, `--username "$USERNAME" --password "$PASSWORD"`) {
+	if !strings.Contains(initScript, "--username $USERNAME --password $PASSWORD") {
 		t.Fatalf("expected init script to pass auth flags when configured, got:\n%s", initScript)
 	}
 }

@@ -10,7 +10,9 @@ import (
 	"syscall"
 
 	"tg-ws-proxy/internal/config"
+	"tg-ws-proxy/internal/mtprotoproxy"
 	"tg-ws-proxy/internal/socks5"
+	"tg-ws-proxy/internal/wsbridge"
 )
 
 type dcIPFlags []string
@@ -39,6 +41,10 @@ func parseArgs(args []string) (config.Config, error) {
 	fs.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP dial timeout")
 	fs.DurationVar(&cfg.InitTimeout, "init-timeout", cfg.InitTimeout, "client MTProto init timeout")
 	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:149.154.167.220")
+	fs.BoolVar(&cfg.MTProtoEnabled, "mtproto", cfg.MTProtoEnabled, "enable MTProto proxy (fake-TLS ee mode)")
+	fs.StringVar(&cfg.MTProtoHost, "mtproto-host", cfg.MTProtoHost, "MTProto proxy listen host")
+	fs.IntVar(&cfg.MTProtoPort, "mtproto-port", cfg.MTProtoPort, "MTProto proxy listen port")
+	fs.StringVar(&cfg.MTProtoSecret, "mtproto-secret", cfg.MTProtoSecret, "MTProto proxy secret (ee + 32 hex chars); auto-generated if empty")
 	if err := fs.Parse(args); err != nil {
 		return config.Config{}, err
 	}
@@ -52,6 +58,21 @@ func parseArgs(args []string) (config.Config, error) {
 	}
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return config.Config{}, fmt.Errorf("--username and --password must be used together")
+	}
+	if cfg.MTProtoEnabled {
+		if cfg.MTProtoPort == 0 {
+			return config.Config{}, fmt.Errorf("--mtproto-port is required when --mtproto is enabled")
+		}
+		if cfg.MTProtoSecret == "" {
+			sec, err := mtprotoproxy.GenerateSecret()
+			if err != nil {
+				return config.Config{}, fmt.Errorf("generate mtproto secret: %w", err)
+			}
+			cfg.MTProtoSecret = sec
+		}
+		if _, err := mtprotoproxy.ParseSecret(cfg.MTProtoSecret); err != nil {
+			return config.Config{}, fmt.Errorf("invalid --mtproto-secret: %w", err)
+		}
 	}
 	return cfg, nil
 }
@@ -70,8 +91,29 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	errCh := make(chan error, 2)
+
+	// Start SOCKS5 server.
 	srv := socks5.NewServer(cfg, logger)
-	if err := srv.Run(ctx); err != nil {
+	go func() {
+		errCh <- srv.Run(ctx)
+	}()
+
+	// Start MTProto proxy if enabled.
+	if cfg.MTProtoEnabled {
+		secret, _ := mtprotoproxy.ParseSecret(cfg.MTProtoSecret)
+		pool := wsbridge.NewPool(cfg)
+		mtSrv := mtprotoproxy.NewServer(cfg, logger, pool, secret)
+
+		link := mtprotoproxy.FormatLink(cfg.MTProtoHost, cfg.MTProtoPort, cfg.MTProtoSecret)
+		logger.Printf("mtproto proxy link: %s", link)
+
+		go func() {
+			errCh <- mtSrv.Run(ctx)
+		}()
+	}
+
+	if err := <-errCh; err != nil {
 		logger.Fatalf("server stopped with error: %v", err)
 	}
 }

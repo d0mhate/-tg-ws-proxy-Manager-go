@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDCIPFlagsSetAndString(t *testing.T) {
 	var flags dcIPFlags
@@ -69,5 +72,50 @@ func TestParseArgsRejectsPartialUsernamePassword(t *testing.T) {
 	}
 	if _, err := parseArgs([]string{"--password", "secret"}); err == nil {
 		t.Fatal("expected parseArgs to reject password without username")
+	}
+}
+
+func TestParseArgsMTProtoEnabled(t *testing.T) {
+	cfg, err := parseArgs([]string{"--mtproto", "--mtproto-port", "8443"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if !cfg.MTProtoEnabled {
+		t.Fatal("expected MTProtoEnabled to be true")
+	}
+	if cfg.MTProtoPort != 8443 {
+		t.Fatalf("unexpected mtproto port: %d", cfg.MTProtoPort)
+	}
+	// Secret should be auto-generated.
+	if cfg.MTProtoSecret == "" {
+		t.Fatal("expected auto-generated secret")
+	}
+	if !strings.HasPrefix(cfg.MTProtoSecret, "ee") {
+		t.Fatalf("expected ee prefix, got %q", cfg.MTProtoSecret)
+	}
+}
+
+func TestParseArgsMTProtoCustomSecret(t *testing.T) {
+	secret := "ee0123456789abcdef0123456789abcdef"
+	cfg, err := parseArgs([]string{"--mtproto", "--mtproto-port", "8443", "--mtproto-secret", secret})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if cfg.MTProtoSecret != secret {
+		t.Fatalf("unexpected secret: %q", cfg.MTProtoSecret)
+	}
+}
+
+func TestParseArgsMTProtoRequiresPort(t *testing.T) {
+	_, err := parseArgs([]string{"--mtproto"})
+	if err == nil {
+		t.Fatal("expected error when --mtproto-port is not set")
+	}
+}
+
+func TestParseArgsMTProtoInvalidSecret(t *testing.T) {
+	_, err := parseArgs([]string{"--mtproto", "--mtproto-port", "8443", "--mtproto-secret", "badvalue"})
+	if err == nil {
+		t.Fatal("expected error for invalid secret")
 	}
 }

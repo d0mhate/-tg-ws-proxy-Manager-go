@@ -18,8 +18,12 @@ type Config struct {
 	PoolSize      int
 	DialTimeout   time.Duration
 	InitTimeout   time.Duration
-	ConnectWSPath string
-	DCIPs         map[int]string
+	ConnectWSPath  string
+	DCIPs          map[int]string
+	MTProtoEnabled bool
+	MTProtoHost    string
+	MTProtoPort    int
+	MTProtoSecret  string
 }
 
 func Default() Config {
