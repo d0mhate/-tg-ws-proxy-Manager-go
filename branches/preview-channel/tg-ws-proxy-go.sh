@@ -36,6 +36,7 @@ SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
 MTPROTO_ENABLED_FROM_ENV="${MTPROTO_ENABLED+x}"
 MTPROTO_PORT_FROM_ENV="${MTPROTO_PORT+x}"
 MTPROTO_SECRET_FROM_ENV="${MTPROTO_SECRET+x}"
+MTPROTO_DOMAIN_FROM_ENV="${MTPROTO_DOMAIN+x}"
 UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
 PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
@@ -78,6 +79,7 @@ SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
 MTPROTO_ENABLED="${MTPROTO_ENABLED:-0}"
 MTPROTO_PORT="${MTPROTO_PORT:-8443}"
 MTPROTO_SECRET="${MTPROTO_SECRET:-}"
+MTPROTO_DOMAIN="${MTPROTO_DOMAIN:-www.google.com}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
@@ -293,6 +295,7 @@ write_settings_config() {
         printf "MTPROTO_ENABLED='%s'\n" "$MTPROTO_ENABLED"
         printf "MTPROTO_PORT='%s'\n" "$MTPROTO_PORT"
         printf "MTPROTO_SECRET='%s'\n" "$MTPROTO_SECRET"
+        printf "MTPROTO_DOMAIN='%s'\n" "$MTPROTO_DOMAIN"
     } > "$PERSIST_CONFIG_FILE" || return 1
 }
 
@@ -334,6 +337,11 @@ load_saved_settings() {
 
     if [ -z "$MTPROTO_SECRET_FROM_ENV" ]; then
         MTPROTO_SECRET="$(read_config_value MTPROTO_SECRET 2>/dev/null || true)"
+    fi
+
+    if [ -z "$MTPROTO_DOMAIN_FROM_ENV" ]; then
+        mtproto_domain_val="$(read_config_value MTPROTO_DOMAIN 2>/dev/null || true)"
+        [ -n "$mtproto_domain_val" ] && MTPROTO_DOMAIN="$mtproto_domain_val"
     fi
 }
 
@@ -672,7 +680,22 @@ telegram_host() {
 }
 
 mtproto_link() {
-    printf "tg://proxy?server=%s&port=%s&secret=%s" "$(telegram_host)" "$MTPROTO_PORT" "$MTPROTO_SECRET"
+    secret="$MTPROTO_SECRET"
+    if [ -n "$MTPROTO_DOMAIN" ]; then
+        if command -v xxd >/dev/null 2>&1; then
+            domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | xxd -p -c 256 | tr -d '\n')"
+        elif command -v od >/dev/null 2>&1; then
+            domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | od -An -tx1 -v | tr -d ' \n')"
+        else
+            domain_hex=""
+        fi
+        case "$secret" in
+            ee????????????????????????????????)
+                [ -n "$domain_hex" ] && secret="${secret}${domain_hex}"
+                ;;
+        esac
+    fi
+    printf "tg://proxy?server=%s&port=%s&secret=%s" "$(telegram_host)" "$MTPROTO_PORT" "$secret"
 }
 
 render_mtproto_qr() {
@@ -709,6 +732,7 @@ show_mtproto_settings() {
     printf "%sMTProto Proxy (fake-TLS)%s\n" "$C_BOLD" "$C_RESET"
     printf "  host     : %s\n" "$(telegram_host)"
     printf "  port     : %s\n" "$MTPROTO_PORT"
+    printf "  domain   : %s\n" "$MTPROTO_DOMAIN"
     printf "  secret   : %s\n" "$MTPROTO_SECRET"
     show_mtproto_link_block
 }
@@ -851,6 +875,7 @@ show_telegram_settings() {
         printf "\n%sMTProto Proxy (fake-TLS)%s\n" "$C_BOLD" "$C_RESET"
         printf "  host     : %s\n" "$(telegram_host)"
         printf "  port     : %s\n" "$MTPROTO_PORT"
+        printf "  domain   : %s\n" "$MTPROTO_DOMAIN"
         printf "  secret   : %s\n" "$MTPROTO_SECRET"
         show_mtproto_link_block
     fi
@@ -1615,6 +1640,7 @@ write_init_script() {
         printf '%s\n' '    MTPROTO_ENABLED="${MTPROTO_ENABLED:-0}"'
         printf '%s\n' '    MTPROTO_PORT="${MTPROTO_PORT:-8443}"'
         printf '%s\n' '    MTPROTO_SECRET="${MTPROTO_SECRET:-}"'
+        printf '%s\n' '    MTPROTO_DOMAIN="${MTPROTO_DOMAIN:-www.google.com}"'
         printf '%s\n' '    if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
         printf '%s\n' '        return 1'
         printf '%s\n' '    fi'
@@ -1627,7 +1653,7 @@ write_init_script() {
         printf '%s\n' '        CMD="$CMD --verbose"'
         printf '%s\n' '    fi'
         printf '%s\n' '    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then'
-        printf '%s\n' '        CMD="$CMD --mtproto --mtproto-port $MTPROTO_PORT --mtproto-secret $MTPROTO_SECRET"'
+        printf '%s\n' '        CMD="$CMD --mtproto --mtproto-port $MTPROTO_PORT --mtproto-secret $MTPROTO_SECRET --mtproto-domain $MTPROTO_DOMAIN"'
         printf '%s\n' '    fi'
         printf '%s\n' '    procd_set_param command $CMD'
         printf '%s\n' '    procd_set_param respawn'
@@ -1890,9 +1916,9 @@ run_binary_mode() {
         set -- "$@" --verbose
     fi
     if [ "$mode" = "mtproto-only" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
     elif [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
     fi
     "$@"
 }
@@ -1920,9 +1946,9 @@ run_binary_background_mode() {
         set -- "$@" --verbose
     fi
     if [ "$mode" = "mtproto-only" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
     elif [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET"
+        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
     fi
 
     if command -v nohup >/dev/null 2>&1; then
@@ -2399,7 +2425,8 @@ configure_mtproto() {
         printf "\nMTProto proxy is currently %senabled%s.\n" "$C_GREEN" "$C_RESET"
         printf "  1) Disable MTProto proxy\n"
         printf "  2) Change port (current: %s)\n" "$MTPROTO_PORT"
-        printf "  3) Regenerate secret\n"
+        printf "  3) Change fake-TLS domain (current: %s)\n" "$MTPROTO_DOMAIN"
+        printf "  4) Regenerate secret\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read mtproto_choice
@@ -2429,6 +2456,17 @@ configure_mtproto() {
                 pause
                 ;;
             3)
+                printf "Fake-TLS domain [%s]: " "$MTPROTO_DOMAIN"
+                IFS= read -r new_domain
+                if [ -n "$new_domain" ]; then
+                    MTPROTO_DOMAIN="$new_domain"
+                fi
+                write_settings_config || return 1
+                printf "\n%sFake-TLS domain changed to %s%s\n" "$C_GREEN" "$MTPROTO_DOMAIN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            4)
                 MTPROTO_SECRET=""
                 generate_mtproto_secret_if_empty
                 write_settings_config || return 1
@@ -2463,9 +2501,16 @@ configure_mtproto() {
                     MTPROTO_PORT="$new_port"
                 fi
 
+                printf "Fake-TLS domain [%s]: " "$MTPROTO_DOMAIN"
+                IFS= read -r new_domain
+                if [ -n "$new_domain" ]; then
+                    MTPROTO_DOMAIN="$new_domain"
+                fi
+
                 write_settings_config || return 1
                 printf "\n%sMTProto proxy enabled%s\n" "$C_GREEN" "$C_RESET"
                 printf "  port   : %s\n" "$MTPROTO_PORT"
+                printf "  domain : %s\n" "$MTPROTO_DOMAIN"
                 printf "  secret : %s\n" "$MTPROTO_SECRET"
                 printf "  link   : %s\n" "$(mtproto_link)"
                 qr_output="$(render_mtproto_qr "$(mtproto_link)" 2>/dev/null || true)"
