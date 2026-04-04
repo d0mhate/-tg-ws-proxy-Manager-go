@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -60,4 +61,41 @@ func ParseDCIPList(values []string) (map[int]string, error) {
 		out[dc] = parts[1]
 	}
 	return out, nil
+}
+
+func ParseDCIPString(value string) (map[int]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return map[int]string{}, nil
+	}
+
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			return nil, fmt.Errorf("empty DC:IP entry")
+		}
+		values = append(values, trimmed)
+	}
+
+	return ParseDCIPList(values)
+}
+
+func FormatDCIPMap(dcIPs map[int]string) string {
+	if len(dcIPs) == 0 {
+		return ""
+	}
+
+	keys := make([]int, 0, len(dcIPs))
+	for dc := range dcIPs {
+		keys = append(keys, dc)
+	}
+	sort.Ints(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, dc := range keys {
+		parts = append(parts, fmt.Sprintf("%d:%s", dc, dcIPs[dc]))
+	}
+	return strings.Join(parts, ", ")
 }

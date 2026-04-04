@@ -33,6 +33,7 @@ LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
 SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
 SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
+DC_IPS_FROM_ENV="${DC_IPS+x}"
 UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
 PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
@@ -72,6 +73,7 @@ LISTEN_PORT="${LISTEN_PORT:-1080}"
 VERBOSE="${VERBOSE:-0}"
 SOCKS_USERNAME="${SOCKS_USERNAME:-}"
 SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
+DC_IPS="${DC_IPS:-}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
@@ -265,6 +267,51 @@ read_config_value() {
     sed -n "s/^${key}='\(.*\)'$/\1/p" "$PERSIST_CONFIG_FILE" 2>/dev/null | head -n 1
 }
 
+normalize_dc_ip_list() {
+    value="$(printf "%s" "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    [ -n "$value" ] || return 1
+
+    awk -v input="$value" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        BEGIN {
+            count = split(input, parts, ",")
+            if (count < 1) exit 1
+            out = ""
+            for (i = 1; i <= count; i++) {
+                part = trim(parts[i])
+                if (part == "") exit 1
+                n = split(part, pair, ":")
+                if (n != 2) exit 1
+                dc = trim(pair[1])
+                ip = trim(pair[2])
+                if (dc !~ /^[0-9]+$/) exit 1
+                octets = split(ip, ipParts, ".")
+                if (octets != 4) exit 1
+                for (j = 1; j <= 4; j++) {
+                    if (ipParts[j] !~ /^[0-9]+$/) exit 1
+                    if (ipParts[j] < 0 || ipParts[j] > 255) exit 1
+                }
+                if (out != "") out = out ", "
+                out = out dc ":" ip
+            }
+            print out
+            exit 0
+        }
+    '
+}
+
+show_dc_ip_mapping_settings() {
+    printf "%sTelegram DC mapping%s\n" "$C_BOLD" "$C_RESET"
+    if [ -n "$DC_IPS" ]; then
+        printf "  custom : %s\n" "$DC_IPS"
+    else
+        printf "  custom : <default>\n"
+    fi
+}
+
 write_settings_config() {
     bin_path="${1:-}"
 
@@ -284,6 +331,7 @@ write_settings_config() {
         printf "VERBOSE='%s'\n" "$VERBOSE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
         printf "PASSWORD='%s'\n" "$SOCKS_PASSWORD"
+        printf "DC_IPS='%s'\n" "$DC_IPS"
     } > "$PERSIST_CONFIG_FILE" || return 1
 }
 
@@ -311,6 +359,10 @@ load_saved_settings() {
 
     if [ -z "$SOCKS_PASSWORD_FROM_ENV" ]; then
         SOCKS_PASSWORD="$(read_config_value PASSWORD 2>/dev/null || true)"
+    fi
+
+    if [ -z "$DC_IPS_FROM_ENV" ]; then
+        DC_IPS="$(read_config_value DC_IPS 2>/dev/null || true)"
     fi
 }
 
@@ -782,6 +834,11 @@ show_telegram_settings() {
         printf "  username : <empty>\n"
     fi
     printf "  password : %s\n" "$(password_display)"
+    if [ -n "$DC_IPS" ]; then
+        printf "  dc map   : %s\n" "$DC_IPS"
+    else
+        printf "  dc map   : <default>\n"
+    fi
 }
 
 show_current_version() {
@@ -1538,23 +1595,29 @@ write_init_script() {
         printf '%s\n' '    [ -n "$PORT" ] || PORT="1080"'
         printf '%s\n' '    USERNAME="${USERNAME:-}"'
         printf '%s\n' '    PASSWORD="${PASSWORD:-}"'
+        printf '%s\n' '    DC_IPS="${DC_IPS:-}"'
         printf '%s\n' '    if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
         printf '%s\n' '        return 1'
         printf '%s\n' '    fi'
-        printf '%s\n' '    procd_open_instance'
+        printf '%s\n' '    set -- "$BIN" --host "$HOST" --port "$PORT"'
         printf '%s\n' '    if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then'
-        printf '%s\n' '        if [ "${VERBOSE:-0}" = "1" ]; then'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --username "$USERNAME" --password "$PASSWORD" --verbose'
-        printf '%s\n' '        else'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --username "$USERNAME" --password "$PASSWORD"'
-        printf '%s\n' '        fi'
-        printf '%s\n' '    else'
-        printf '%s\n' '        if [ "${VERBOSE:-0}" = "1" ]; then'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT" --verbose'
-        printf '%s\n' '        else'
-        printf '%s\n' '            procd_set_param command "$BIN" --host "$HOST" --port "$PORT"'
-        printf '%s\n' '        fi'
+        printf '%s\n' '        set -- "$@" --username "$USERNAME" --password "$PASSWORD"'
         printf '%s\n' '    fi'
+        printf '%s\n' '    if [ "${VERBOSE:-0}" = "1" ]; then'
+        printf '%s\n' '        set -- "$@" --verbose'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    if [ -n "$DC_IPS" ]; then'
+        printf '%s\n' '        old_ifs="$IFS"'
+        printf '%s\n' "        IFS=','"
+        printf '%s\n' '        for entry in $DC_IPS; do'
+        printf '%s\n' '            entry="$(printf "%s" "$entry" | sed '"'"'s/^[[:space:]]*//;s/[[:space:]]*$//'"'"')"'
+        printf '%s\n' '            [ -n "$entry" ] || continue'
+        printf '%s\n' '            set -- "$@" --dc-ip "$entry"'
+        printf '%s\n' '        done'
+        printf '%s\n' '        IFS="$old_ifs"'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    procd_open_instance'
+        printf '%s\n' '    procd_set_param command "$@"'
         printf '%s\n' '    procd_set_param respawn'
         printf '%s\n' '    procd_set_param stdout 1'
         printf '%s\n' '    procd_set_param stderr 1'
@@ -1795,6 +1858,16 @@ run_binary() {
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
     fi
+    if [ -n "$DC_IPS" ]; then
+        old_ifs="$IFS"
+        IFS=','
+        for entry in $DC_IPS; do
+            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$entry" ] || continue
+            set -- "$@" --dc-ip "$entry"
+        done
+        IFS="$old_ifs"
+    fi
     "$@"
 }
 
@@ -1808,6 +1881,16 @@ run_binary_background() {
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
+    fi
+    if [ -n "$DC_IPS" ]; then
+        old_ifs="$IFS"
+        IFS=','
+        for entry in $DC_IPS; do
+            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$entry" ] || continue
+            set -- "$@" --dc-ip "$entry"
+        done
+        IFS="$old_ifs"
     fi
 
     if command -v nohup >/dev/null 2>&1; then
@@ -2160,6 +2243,48 @@ configure_socks_auth() {
     pause
 }
 
+configure_dc_ip_mapping() {
+    show_header
+    show_dc_ip_mapping_settings
+    printf "\nEnter DC:IP mappings separated by commas.\n"
+    printf "Example:\n"
+    printf "  2:149.154.167.220, 4:149.154.167.220\n"
+    printf "\nUse 'default' to clear custom mapping.\n"
+    printf "DC mapping (empty to keep current): "
+    IFS= read -r new_dc_ips
+
+    if [ -z "$new_dc_ips" ]; then
+        printf "\nNo changes made.\n"
+        pause
+        return 0
+    fi
+
+    case "$new_dc_ips" in
+        default|DEFAULT|Default)
+            DC_IPS=""
+            write_settings_config || return 1
+            printf "\n%sTelegram DC mapping reset to defaults%s\n" "$C_GREEN" "$C_RESET"
+            prompt_restart_proxy_for_updated_settings
+            pause
+            return 0
+            ;;
+    esac
+
+    normalized_dc_ips="$(normalize_dc_ip_list "$new_dc_ips" 2>/dev/null || true)"
+    if [ -z "$normalized_dc_ips" ]; then
+        printf "\n%sInvalid DC mapping. Use format DC:IP, DC:IP%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    DC_IPS="$normalized_dc_ips"
+    write_settings_config || return 1
+
+    printf "\n%sTelegram DC mapping saved%s\n" "$C_GREEN" "$C_RESET"
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
 configure_update_source() {
     show_header
     show_update_source_settings
@@ -2308,7 +2433,8 @@ advanced_menu() {
         printf "  4) Show quick commands\n"
         printf "  5) Remove binary and runtime files\n"
         printf "  6) Configure SOCKS5 auth\n"
-        printf "  7) Configure update source\n"
+        printf "  7) Configure Telegram DC mapping\n"
+        printf "  8) Configure update source\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -2335,6 +2461,9 @@ advanced_menu() {
                 configure_socks_auth
                 ;;
             7)
+                configure_dc_ip_mapping
+                ;;
+            8)
                 configure_update_source
                 ;;
             *)

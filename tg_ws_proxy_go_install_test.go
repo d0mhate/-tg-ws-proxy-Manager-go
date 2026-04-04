@@ -796,7 +796,7 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenu(t *testing.T) {
 		t.Fatal("missing update source state files in env")
 	}
 
-	out, err := runManagerMenu(t, env, "5\n7\npreview\nfeature/auth-flow\n\n\n")
+	out, err := runManagerMenu(t, env, "5\n8\npreview\nfeature/auth-flow\n\n\n")
 	if err != nil {
 		t.Fatalf("configure update source failed: %v\n%s", err, out)
 	}
@@ -827,7 +827,7 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsArrowSelection(t *te
 		t.Fatal("missing update source state files in env")
 	}
 
-	out, err := runManagerMenu(t, env, "5\n7\n\033[B\nfeature/auth-flow\n\n\n")
+	out, err := runManagerMenu(t, env, "5\n8\n\033[B\nfeature/auth-flow\n\n\n")
 	if err != nil {
 		t.Fatalf("configure update source with arrows failed: %v\n%s", err, out)
 	}
@@ -853,7 +853,7 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsNumberedSelection(t 
 		t.Fatal("missing update source state files in env")
 	}
 
-	out, err := runManagerMenu(t, env, "5\n7\n2\nfeature/auth-flow\n\n\n")
+	out, err := runManagerMenu(t, env, "5\n8\n2\nfeature/auth-flow\n\n\n")
 	if err != nil {
 		t.Fatalf("configure update source with numbered picker failed: %v\n%s", err, out)
 	}
@@ -879,7 +879,7 @@ func TestManagerConfigureUpdateSourcePreviewBranchPromptShowsExampleAndCanReuseS
 		t.Fatal("missing update source state files in env")
 	}
 
-	out, err := runManagerMenu(t, env, "5\n7\n2\nfeature/auth-flow\n\n\n")
+	out, err := runManagerMenu(t, env, "5\n8\n2\nfeature/auth-flow\n\n\n")
 	if err != nil {
 		t.Fatalf("initial configure update source failed: %v\n%s", err, out)
 	}
@@ -887,7 +887,7 @@ func TestManagerConfigureUpdateSourcePreviewBranchPromptShowsExampleAndCanReuseS
 		t.Fatalf("expected example preview branch prompt, got:\n%s", out)
 	}
 
-	out, err = runManagerMenu(t, env, "5\n7\n2\n\n\n")
+	out, err = runManagerMenu(t, env, "5\n8\n2\n\n\n")
 	if err != nil {
 		t.Fatalf("reusing saved preview branch failed: %v\n%s", err, out)
 	}
@@ -915,7 +915,7 @@ func TestManagerConfigureUpdateSourceCanResetToLatestRelease(t *testing.T) {
 	writeFile(t, previewBranchPath, "feature/auth-flow\n", 0o644)
 	writeFile(t, releaseTagPath, "v1.1.25\n", 0o644)
 
-	out, err := runManagerMenu(t, env, "5\n7\nrelease\nlatest\n\n\n")
+	out, err := runManagerMenu(t, env, "5\n8\nrelease\nlatest\n\n\n")
 	if err != nil {
 		t.Fatalf("reset update source failed: %v\n%s", err, out)
 	}
@@ -941,7 +941,7 @@ func TestManagerConfigureUpdateSourceCanSelectPinnedReleaseTagFromNumberedMenu(t
 		t.Fatal("missing release update source state files in env")
 	}
 
-	out, err := runManagerMenu(t, env, "5\n7\n1\n3\n\n\n")
+	out, err := runManagerMenu(t, env, "5\n8\n1\n3\n\n\n")
 	if err != nil {
 		t.Fatalf("configure release tag from numbered menu failed: %v\n%s", err, out)
 	}
@@ -989,7 +989,7 @@ func TestManagerConfigureUpdateSourceRejectsManualReleaseTagBelowMinimum(t *test
 		t.Fatal("missing release update source state files in env")
 	}
 
-	out, err := runManagerMenu(t, env, "5\n7\n1\n4\nv1.1.28\n\n\n")
+	out, err := runManagerMenu(t, env, "5\n8\n1\n4\nv1.1.28\n\n\n")
 	if err != nil {
 		t.Fatalf("manual release tag selection should stay in menu flow, got error: %v\n%s", err, out)
 	}
