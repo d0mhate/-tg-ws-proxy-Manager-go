@@ -1,0 +1,7 @@
+{
+  "branch": "archive/mtproto-preview-work",
+  "commit": "6a60c9881eb2c96ac72878dcbcfb66b0d78fa221",
+  "manager_script": "tg-ws-proxy-go.sh",
+  "default_binary": "tg-ws-proxy-openwrt",
+  "default_mtproto_binary": "tg-ws-mtproto-openwrt"
+}
