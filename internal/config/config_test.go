@@ -30,6 +30,37 @@ func TestParseDCIPListRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestParseDCIPString(t *testing.T) {
+	got, err := ParseDCIPString("2:149.154.167.220, 4:149.154.167.220")
+	if err != nil {
+		t.Fatalf("ParseDCIPString returned error: %v", err)
+	}
+
+	if got[2] != "149.154.167.220" {
+		t.Fatalf("unexpected dc 2 ip: %q", got[2])
+	}
+	if got[4] != "149.154.167.220" {
+		t.Fatalf("unexpected dc 4 ip: %q", got[4])
+	}
+}
+
+func TestParseDCIPStringRejectsEmptyEntry(t *testing.T) {
+	if _, err := ParseDCIPString("2:149.154.167.220, "); err == nil {
+		t.Fatal("expected ParseDCIPString to reject empty entry")
+	}
+}
+
+func TestFormatDCIPMap(t *testing.T) {
+	got := FormatDCIPMap(map[int]string{
+		4: "149.154.167.220",
+		2: "149.154.167.220",
+		1: "149.154.175.205",
+	})
+	if got != "1:149.154.175.205, 2:149.154.167.220, 4:149.154.167.220" {
+		t.Fatalf("unexpected formatted dc map: %q", got)
+	}
+}
+
 func TestDefaultIncludesCommonWSDCs(t *testing.T) {
 	cfg := Default()
 

@@ -286,7 +286,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		}
 	}
 
-	effectiveDC := telegram.NormalizeDC(dc)
+	effectiveDC := s.effectiveDC(dc)
 	if effectiveDC != 0 && effectiveDC != dc {
 		patched, patchErr := mtproto.PatchInitDC(init, choosePatchedDC(effectiveDC, isMedia))
 		if patchErr == nil {
@@ -312,9 +312,10 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		s.debugf("[%s] telegram route will fallback via dc target %s", clientAddr, targetIP)
 	}
 
-	if !isWSEnabledDC(effectiveDC) {
+	wsDomainDC := s.wsDomainDC(effectiveDC)
+	if !isWSEnabledDC(wsDomainDC) {
 		s.stats.incTCPFallback()
-		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d target=%s", clientAddr, dc, effectiveDC, targetIP)
+		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d ws_dc=%d target=%s", clientAddr, dc, effectiveDC, wsDomainDC, targetIP)
 		if err := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
 			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
 		}
@@ -333,7 +334,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 	defer ws.Close()
 	s.stats.incWSConnections()
-	s.debugf("[%s] route=websocket dc=%d effective_dc=%d media=%v target=%s", clientAddr, dc, effectiveDC, isMedia, targetIP)
+	s.debugf("[%s] route=websocket dc=%d effective_dc=%d ws_dc=%d media=%v target=%s", clientAddr, dc, effectiveDC, wsDomainDC, isMedia, targetIP)
 
 	var splitter *mtproto.Splitter
 	if proto != 0 && (initPatched || isMedia || proto != mtproto.ProtoIntermediate) {
@@ -361,7 +362,7 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 		return nil, errWSBlacklisted
 	}
 
-	domains := telegram.WSDomains(dc, isMedia)
+	domains := telegram.WSDomains(s.wsDomainDC(dc), isMedia)
 	if s.pool != nil {
 		s.pool.SetDialFunc(s.wsDialFunc)
 		if ws, ok := s.pool.Get(dc, isMedia, targetIP, domains); ok {
@@ -690,6 +691,23 @@ func choosePatchedDC(dc int, isMedia bool) int {
 		return -dc
 	}
 	return dc
+}
+
+func (s *Server) effectiveDC(dc int) int {
+	if dc == 0 {
+		return 0
+	}
+	if _, ok := s.cfg.DCIPs[dc]; ok {
+		return dc
+	}
+	return telegram.NormalizeDC(dc)
+}
+
+func (s *Server) wsDomainDC(dc int) int {
+	if dc == 0 {
+		return 0
+	}
+	return telegram.NormalizeDC(dc)
 }
 
 func normalizeEOF(err error) error {

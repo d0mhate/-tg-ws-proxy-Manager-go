@@ -259,6 +259,52 @@ func TestManagerShowTelegramSettingsViaTopLevelMenu(t *testing.T) {
 	}
 }
 
+func TestManagerConfigureDCIPMappingViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\n203:91.105.192.100, 2:149.154.167.220\n\n\n")
+	if err != nil {
+		t.Fatalf("configure dc mapping failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Telegram DC mapping saved") {
+		t.Fatalf("expected success message, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "DC_IPS='203:91.105.192.100, 2:149.154.167.220'") {
+		t.Fatalf("expected dc mapping to be persisted, got:\n%s", config)
+	}
+}
+
+func TestManagerConfigureDCIPMappingCanResetToDefaults(t *testing.T) {
+	env := append(managerEnv(t), "DC_IPS=203:91.105.192.100")
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	if out, err := runManager(t, env, "status"); err != nil {
+		t.Fatalf("status failed: %v\n%s", err, out)
+	}
+
+	out, err := runManagerMenu(t, env, "5\n7\ndefault\n\n\n")
+	if err != nil {
+		t.Fatalf("reset dc mapping failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Telegram DC mapping reset to defaults") {
+		t.Fatalf("expected reset confirmation, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "DC_IPS=''") {
+		t.Fatalf("expected persisted dc mapping to be cleared, got:\n%s", config)
+	}
+}
+
 func TestManagerAdvancedShowFullStatusViaMenu(t *testing.T) {
 	env := managerEnv(t)
 	binPath := envValue(env, "BIN_PATH")
@@ -507,6 +553,35 @@ func TestManagerStartBackgroundPassesOptionalAuthFlags(t *testing.T) {
 
 	if _, err := runManager(t, env, "stop"); err != nil {
 		t.Fatalf("stop after auth background start failed: %v", err)
+	}
+}
+
+func TestManagerStartBackgroundPassesCustomDCIPFlags(t *testing.T) {
+	env := append(managerEnv(t), "DC_IPS=203:91.105.192.100, 2:149.154.167.220")
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--dc-ip") ||
+		!strings.Contains(args, "203:91.105.192.100") ||
+		!strings.Contains(args, "2:149.154.167.220") {
+		t.Fatalf("expected background start to pass dc-ip flags, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after dc-ip background start failed: %v", err)
 	}
 }
 
