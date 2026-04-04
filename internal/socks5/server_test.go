@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -595,6 +596,83 @@ func TestHandleConnDC203UsesDC2OverrideTargetAndPatchedInit(t *testing.T) {
 	}
 }
 
+func TestHandleConnDC203UsesExplicitTargetAndKeepsPatchedDCWhenConfigured(t *testing.T) {
+	var got struct {
+		host string
+		port int
+		init []byte
+	}
+
+	cfg := config.Default()
+	cfg.DCIPs[203] = "91.105.192.100"
+
+	srv := NewServer(cfg, log.New(io.Discard, "", 0))
+	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+		return nil, io.EOF
+	}
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		got.host = host
+		got.port = port
+		got.init = append([]byte(nil), init...)
+		return nil
+	}
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 203)
+	runHandleConnFlow(t, srv, ipv4ConnectRequest("91.105.192.100", 443), init, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	if got.host != "91.105.192.100" || got.port != 443 {
+		t.Fatalf("unexpected tcp fallback target for explicit dc203: %s:%d", got.host, got.port)
+	}
+
+	info, err := mtproto.ParseInit(got.init)
+	if err != nil {
+		t.Fatalf("expected patched init to parse, got %v", err)
+	}
+	if info.DC != 203 || info.IsMedia {
+		t.Fatalf("expected patched init to keep dc203 non-media, got %+v", info)
+	}
+}
+
+func TestHandleConnDC203UsesExplicitTargetForWebSocketRoute(t *testing.T) {
+	var got struct {
+		targetIP string
+		dc       int
+		isMedia  bool
+	}
+
+	cfg := config.Default()
+	cfg.DCIPs[203] = "91.105.192.100"
+
+	srv := NewServer(cfg, log.New(io.Discard, "", 0))
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		t.Fatal("did not expect tcp fallback for explicit dc203 websocket route")
+		return nil
+	}
+	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+		got.targetIP = targetIP
+		got.dc = dc
+		got.isMedia = isMedia
+		clientConn, peerConn := net.Pipe()
+		go func() { _ = peerConn.Close() }()
+		return wsbridge.NewClient(clientConn), nil
+	}
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 203)
+	runHandleConnFlow(t, srv, ipv4ConnectRequest("91.105.192.100", 443), init, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	if got.targetIP != "91.105.192.100" || got.dc != 203 || got.isMedia {
+		t.Fatalf("unexpected websocket route for explicit dc203: %+v", got)
+	}
+}
+
 func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 	t.Run("dc2 host routes through websocket target", func(t *testing.T) {
 		var got struct {
@@ -895,6 +973,26 @@ func TestConnectWSUsesFailFastDialTimeoutForAllDCs(t *testing.T) {
 		if timeout != wsFailFastDial {
 			t.Fatalf("expected fail-fast dial timeout %s, got %s", wsFailFastDial, timeout)
 		}
+	}
+}
+
+func TestConnectWSUsesNormalizedDomainsForExplicitDC203(t *testing.T) {
+	srv := NewServer(config.Config{PoolSize: 0}, log.New(io.Discard, "", 0))
+	var seenDomains []string
+
+	srv.wsDialFunc = func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+		seenDomains = append(seenDomains, domain)
+		return nil, io.EOF
+	}
+
+	_, err := srv.connectWS(context.Background(), "91.105.192.100", 203, false)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected dial error, got %v", err)
+	}
+
+	want := []string{"kws2.web.telegram.org", "kws2-1.web.telegram.org"}
+	if !reflect.DeepEqual(seenDomains, want) {
+		t.Fatalf("unexpected domains for explicit dc203: got %v want %v", seenDomains, want)
 	}
 }
 
