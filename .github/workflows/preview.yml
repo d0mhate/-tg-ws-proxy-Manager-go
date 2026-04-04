@@ -40,7 +40,13 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-x86_64 ./cmd/tg-ws-proxy
           GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-armv7 ./cmd/tg-ws-proxy
           GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-aarch64 ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-mtproto-openwrt-mipsel_24kc ./cmd/tg-ws-mtproto
+          GOOS=linux GOARCH=mips GOMIPS=softfloat go build -trimpath -ldflags="-s -w" -o build/tg-ws-mtproto-openwrt-mips_24kc ./cmd/tg-ws-mtproto
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-mtproto-openwrt-x86_64 ./cmd/tg-ws-mtproto
+          GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w" -o build/tg-ws-mtproto-openwrt-armv7 ./cmd/tg-ws-mtproto
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-mtproto-openwrt-aarch64 ./cmd/tg-ws-mtproto
           cp build/tg-ws-proxy-openwrt-mipsel_24kc build/tg-ws-proxy-openwrt
+          cp build/tg-ws-mtproto-openwrt-mipsel_24kc build/tg-ws-mtproto-openwrt
 
       - name: publish preview artifacts
         env:
@@ -82,6 +88,12 @@ jobs:
           cp build/tg-ws-proxy-openwrt-armv7 "$target_dir/"
           cp build/tg-ws-proxy-openwrt-aarch64 "$target_dir/"
           cp build/tg-ws-proxy-openwrt "$target_dir/"
+          cp build/tg-ws-mtproto-openwrt-mipsel_24kc "$target_dir/"
+          cp build/tg-ws-mtproto-openwrt-mips_24kc "$target_dir/"
+          cp build/tg-ws-mtproto-openwrt-x86_64 "$target_dir/"
+          cp build/tg-ws-mtproto-openwrt-armv7 "$target_dir/"
+          cp build/tg-ws-mtproto-openwrt-aarch64 "$target_dir/"
+          cp build/tg-ws-mtproto-openwrt "$target_dir/"
           cp tg-ws-proxy-go.sh "$target_dir/"
 
           cat > "$target_dir/manifest.json" <<EOF
@@ -89,7 +101,8 @@ jobs:
             "branch": "$BRANCH_NAME",
             "commit": "$COMMIT_SHA",
             "manager_script": "tg-ws-proxy-go.sh",
-            "default_binary": "tg-ws-proxy-openwrt"
+            "default_binary": "tg-ws-proxy-openwrt",
+            "default_mtproto_binary": "tg-ws-mtproto-openwrt"
           }
           EOF
 

@@ -138,17 +138,17 @@ func TestManagerMTProtoInitScriptIncludesFlags(t *testing.T) {
 	initScriptPath := envValue(env, "INIT_SCRIPT_PATH")
 	initScript := readTrimmed(t, initScriptPath)
 
-	if !strings.Contains(initScript, "--mtproto") {
-		t.Fatalf("expected --mtproto in init script, got:\n%s", initScript)
+	if !strings.Contains(initScript, `MTPROTO_BIN="${MTPROTO_BIN:-}"`) {
+		t.Fatalf("expected MTPROTO_BIN in init script, got:\n%s", initScript)
 	}
-	if !strings.Contains(initScript, "--mtproto-port") {
-		t.Fatalf("expected --mtproto-port in init script, got:\n%s", initScript)
+	if !strings.Contains(initScript, "--public-host") {
+		t.Fatalf("expected --public-host in init script, got:\n%s", initScript)
 	}
-	if !strings.Contains(initScript, "--mtproto-secret") {
-		t.Fatalf("expected --mtproto-secret in init script, got:\n%s", initScript)
+	if !strings.Contains(initScript, "--secret") {
+		t.Fatalf("expected --secret in init script, got:\n%s", initScript)
 	}
-	if !strings.Contains(initScript, "--mtproto-domain") {
-		t.Fatalf("expected --mtproto-domain in init script, got:\n%s", initScript)
+	if !strings.Contains(initScript, "--domain") {
+		t.Fatalf("expected --domain in init script, got:\n%s", initScript)
 	}
 }
 
@@ -168,7 +168,7 @@ func TestManagerMTProtoInitScriptGuardedByCondition(t *testing.T) {
 	}
 }
 
-func TestManagerMTProtoRunBinaryPassesFlags(t *testing.T) {
+func TestManagerRunBinaryOmitsMTProtoFlagsWhenUsingSeparateBinary(t *testing.T) {
 	env := append(managerEnv(t),
 		"MTPROTO_ENABLED=1",
 		"MTPROTO_PORT=8443",
@@ -178,7 +178,7 @@ func TestManagerMTProtoRunBinaryPassesFlags(t *testing.T) {
 	binPath := envValue(env, "BIN_PATH")
 	argsFile := filepath.Join(t.TempDir(), "args.txt")
 	writeCapturingProxyScript(t, binPath)
-	env = append(env, "ARGS_FILE="+argsFile)
+	env = append(env, "ARGS_FILE_TG_WS_PROXY="+argsFile)
 
 	if out, err := runManager(t, env, "start-background"); err != nil {
 		t.Fatalf("start-background failed: %v\n%s", err, out)
@@ -187,17 +187,8 @@ func TestManagerMTProtoRunBinaryPassesFlags(t *testing.T) {
 	waitForFile(t, argsFile)
 	args := readTrimmed(t, argsFile)
 
-	if !strings.Contains(args, "--mtproto") {
-		t.Fatalf("expected --mtproto in binary args, got:\n%s", args)
-	}
-	if !strings.Contains(args, "--mtproto-port\n8443") {
-		t.Fatalf("expected --mtproto-port 8443 in binary args, got:\n%s", args)
-	}
-	if !strings.Contains(args, "--mtproto-secret\nee0123456789abcdef0123456789abcdef") {
-		t.Fatalf("expected --mtproto-secret in binary args, got:\n%s", args)
-	}
-	if !strings.Contains(args, "--mtproto-domain\nwww.google.com") {
-		t.Fatalf("expected --mtproto-domain in binary args, got:\n%s", args)
+	if strings.Contains(args, "--mtproto") || strings.Contains(args, "--mtproto-port") || strings.Contains(args, "--mtproto-secret") {
+		t.Fatalf("expected no embedded MTProto flags in SOCKS5 binary args, got:\n%s", args)
 	}
 
 	if _, err := runManager(t, env, "stop"); err != nil {
@@ -211,7 +202,7 @@ func TestManagerMTProtoRunBinaryOmitsFlagsWhenDisabled(t *testing.T) {
 	binPath := envValue(env, "BIN_PATH")
 	argsFile := filepath.Join(t.TempDir(), "args.txt")
 	writeCapturingProxyScript(t, binPath)
-	env = append(env, "ARGS_FILE="+argsFile)
+	env = append(env, "ARGS_FILE_TG_WS_PROXY="+argsFile)
 
 	if out, err := runManager(t, env, "start-background"); err != nil {
 		t.Fatalf("start-background failed: %v\n%s", err, out)
@@ -236,10 +227,10 @@ func TestManagerMTProtoOnlyRunBinaryPassesModeFlags(t *testing.T) {
 		"MTPROTO_SECRET=ee0123456789abcdef0123456789abcdef",
 	)
 
-	binPath := envValue(env, "BIN_PATH")
+	binPath := envValue(env, "MTPROTO_SOURCE_BIN")
 	argsFile := filepath.Join(t.TempDir(), "args.txt")
 	writeCapturingProxyScript(t, binPath)
-	env = append(env, "ARGS_FILE="+argsFile)
+	env = append(env, "ARGS_FILE_TG_WS_MTPROTO="+argsFile)
 
 	if out, err := runManager(t, env, "start-mtproto-background"); err != nil {
 		t.Fatalf("start-mtproto-background failed: %v\n%s", err, out)
@@ -248,18 +239,18 @@ func TestManagerMTProtoOnlyRunBinaryPassesModeFlags(t *testing.T) {
 	waitForFile(t, argsFile)
 	args := readTrimmed(t, argsFile)
 
-	if !strings.Contains(args, "--socks5=false") {
-		t.Fatalf("expected --socks5=false in mtproto-only args, got:\n%s", args)
+	if !strings.Contains(args, "--public-host\n127.0.0.1") {
+		t.Fatalf("expected --public-host in mtproto args, got:\n%s", args)
 	}
-	if !strings.Contains(args, "--mtproto") {
-		t.Fatalf("expected --mtproto in mtproto-only args, got:\n%s", args)
+	if !strings.Contains(args, "--secret\nee0123456789abcdef0123456789abcdef") {
+		t.Fatalf("expected --secret in mtproto args, got:\n%s", args)
 	}
-	if !strings.Contains(args, "--mtproto-domain\nwww.google.com") {
-		t.Fatalf("expected --mtproto-domain in mtproto-only args, got:\n%s", args)
+	if !strings.Contains(args, "--domain\nwww.google.com") {
+		t.Fatalf("expected --domain in mtproto args, got:\n%s", args)
 	}
 
-	if _, err := runManager(t, env, "stop"); err != nil {
-		t.Fatalf("stop failed: %v", err)
+	if _, err := runManagerMenu(t, env, "7\n5\n\n\n"); err != nil {
+		t.Fatalf("stop mtproto via menu failed: %v", err)
 	}
 }
 
@@ -405,15 +396,21 @@ func TestManagerConfigureMTProtoEnableWithCustomPort(t *testing.T) {
 
 func TestManagerConfigureMTProtoEnableOffersRestartWhenRunning(t *testing.T) {
 	env := managerEnv(t)
-	binPath := envValue(env, "BIN_PATH")
-	argsFile := filepath.Join(t.TempDir(), "args.txt")
-	writeCapturingProxyScript(t, binPath)
-	env = append(env, "ARGS_FILE="+argsFile)
+	socksBinPath := envValue(env, "BIN_PATH")
+	socksArgsFile := filepath.Join(t.TempDir(), "socks-args.txt")
+	writeCapturingProxyScript(t, socksBinPath)
+	mtprotoBinPath := envValue(env, "MTPROTO_SOURCE_BIN")
+	mtprotoArgsFile := filepath.Join(t.TempDir(), "mtproto-args.txt")
+	writeCapturingProxyScript(t, mtprotoBinPath)
+	env = append(env,
+		"ARGS_FILE_TG_WS_PROXY="+socksArgsFile,
+		"ARGS_FILE_TG_WS_MTPROTO="+mtprotoArgsFile,
+	)
 
 	if out, err := runManager(t, env, "start-background"); err != nil {
 		t.Fatalf("start-background failed: %v\n%s", err, out)
 	}
-	waitForFile(t, argsFile)
+	waitForFile(t, socksArgsFile)
 
 	// Menu: 7 → 2 → y (enable) → Enter (default port) → Enter (default domain) → y (restart) → Enter (back) → Enter (exit)
 	out, err := runManagerMenu(t, env, "7\n2\ny\n\n\ny\n\n\n")
@@ -426,20 +423,26 @@ func TestManagerConfigureMTProtoEnableOffersRestartWhenRunning(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		args := readTrimmed(t, argsFile)
-		if strings.Contains(args, "--mtproto") {
-			break
+		if _, err := os.Stat(mtprotoArgsFile); err == nil {
+			args := readTrimmed(t, mtprotoArgsFile)
+			if strings.Contains(args, "--secret") {
+				break
+			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	args := readTrimmed(t, argsFile)
-	if !strings.Contains(args, "--mtproto") {
-		t.Fatalf("expected restarted proxy to include --mtproto flag, got args:\n%s", args)
+	waitForFile(t, mtprotoArgsFile)
+	args := readTrimmed(t, mtprotoArgsFile)
+	if !strings.Contains(args, "--secret") {
+		t.Fatalf("expected restart flow to start mtproto binary, got args:\n%s", args)
 	}
 
 	if _, err := runManager(t, env, "stop"); err != nil {
 		t.Fatalf("stop failed: %v", err)
+	}
+	if _, err := runManagerMenu(t, env, "7\n5\n\n\n"); err != nil {
+		t.Fatalf("stop mtproto via menu failed: %v", err)
 	}
 }
 

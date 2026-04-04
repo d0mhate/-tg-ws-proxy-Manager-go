@@ -34,6 +34,8 @@ func managerEnv(t *testing.T) []string {
 	root := t.TempDir()
 	sourceBin := filepath.Join(root, "source", "tg-ws-proxy-openwrt")
 	sourceVersion := sourceBin + ".version"
+	mtprotoSourceBin := filepath.Join(root, "source", "tg-ws-mtproto-openwrt")
+	mtprotoSourceVersion := mtprotoSourceBin + ".version"
 	sourceManager := filepath.Join(root, "source", "tg-ws-proxy-go.sh")
 	managerScriptPath := filepath.Join(root, "manager", "tg-ws-proxy-go.sh")
 	releaseAPI := filepath.Join(root, "release.json")
@@ -52,6 +54,8 @@ func managerEnv(t *testing.T) []string {
 
 	writeFile(t, sourceBin, "#!/bin/sh\nexit 0\n", 0o755)
 	writeFile(t, sourceVersion, "v9.9.9\n", 0o644)
+	writeFile(t, mtprotoSourceBin, "#!/bin/sh\nexit 0\n", 0o755)
+	writeFile(t, mtprotoSourceVersion, "v9.9.9\n", 0o644)
 	writeFile(t, releaseAPI, "{\"tag_name\":\"v9.9.9\"}\n", 0o644)
 	writeFile(t, releasesAPI, "[{\"tag_name\":\"v1.1.30\"},{\"tag_name\":\"v1.1.29\"},{\"tag_name\":\"v1.1.28\"},{\"tag_name\":\"v1.1.27\"},{\"tag_name\":\"v1.1.25\"}]\n", 0o644)
 	writeFile(t, rcCommonPath, "#!/bin/sh\nscript=\"$1\"\ncmd=\"$2\"\nname=\"$(basename \"$script\")\"\nrc_dir=\"${RC_D_DIR:-/etc/rc.d}\"\nmkdir -p \"$rc_dir\"\ncase \"$cmd\" in\nenable)\n  ln -sf \"$script\" \"$rc_dir/S95$name\"\n  ;;\ndisable)\n  rm -f \"$rc_dir\"/*\"$name\"\n  ;;\nstart|restart)\n  marker=\"${FAKE_INIT_START_MARKER:-}\"\n  if [ -n \"$marker\" ]; then\n    mkdir -p \"$(dirname \"$marker\")\"\n    : > \"$marker\"\n  fi\n  ;;\nstop)\n  exit 0\n  ;;\n*)\n  exit 0\n  ;;\nesac\n", 0o755)
@@ -71,11 +75,15 @@ func managerEnv(t *testing.T) []string {
 		"SCRIPT_RELEASE_BASE_URL=file://"+scriptBase,
 		"SOURCE_BIN="+sourceBin,
 		"SOURCE_VERSION_FILE="+sourceVersion,
+		"MTPROTO_SOURCE_BIN="+mtprotoSourceBin,
+		"MTPROTO_SOURCE_VERSION_FILE="+mtprotoSourceVersion,
 		"SOURCE_MANAGER_SCRIPT="+sourceManager,
 		"MANAGER_SCRIPT_PATH="+managerScriptPath,
 		"INSTALL_DIR="+installDir,
 		"BIN_PATH="+filepath.Join(installDir, "tg-ws-proxy"),
+		"MTPROTO_BIN_PATH="+filepath.Join(installDir, "tg-ws-mtproto"),
 		"VERSION_FILE="+filepath.Join(installDir, "version"),
+		"MTPROTO_VERSION_FILE="+filepath.Join(installDir, "mtproto.version"),
 		"PERSIST_STATE_DIR="+persistStateDir,
 		"PERSIST_PATH_FILE="+filepath.Join(persistStateDir, "install_dir"),
 		"PERSIST_VERSION_FILE="+filepath.Join(persistStateDir, "version"),
@@ -310,6 +318,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -318,7 +327,7 @@ func main() {
 		return
 	}
 
-	if argsFile := os.Getenv("ARGS_FILE"); argsFile != "" {
+	if argsFile := resolveArgsFile(); argsFile != "" {
 		_ = os.MkdirAll(filepath.Dir(argsFile), 0o755)
 		_ = os.WriteFile(argsFile, []byte(joinArgs(os.Args[1:])), 0o644)
 	}
@@ -338,10 +347,21 @@ func joinArgs(args []string) string {
 	}
 	return out
 }
+
+func resolveArgsFile() string {
+	name := strings.ToUpper(strings.ReplaceAll(filepath.Base(os.Args[0]), "-", "_"))
+	if path := os.Getenv("ARGS_FILE_" + name); path != "" {
+		return path
+	}
+	return os.Getenv("ARGS_FILE")
+}
 `, 0o644)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir capturing proxy dir: %v", err)
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("remove existing capturing proxy binary: %v", err)
 	}
 
 	cmd := exec.Command("go", "build", "-o", path, source)

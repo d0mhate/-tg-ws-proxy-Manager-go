@@ -47,8 +47,10 @@ jobs:
           go-version: "1.22"
           cache: false
 
-      - name: build local binary
-        run: go build ./cmd/tg-ws-proxy
+      - name: build local binaries
+        run: |
+          go build ./cmd/tg-ws-proxy
+          go build ./cmd/tg-ws-mtproto
 
   build-openwrt:
     needs: test
@@ -59,22 +61,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - asset: tg-ws-proxy-openwrt-mipsel_24kc
+          - proxy_asset: tg-ws-proxy-openwrt-mipsel_24kc
+            mtproto_asset: tg-ws-mtproto-openwrt-mipsel_24kc
             goarch: mipsle
             gomips: softfloat
             file_match: "MIPS"
-          - asset: tg-ws-proxy-openwrt-mips_24kc
+          - proxy_asset: tg-ws-proxy-openwrt-mips_24kc
+            mtproto_asset: tg-ws-mtproto-openwrt-mips_24kc
             goarch: mips
             gomips: softfloat
             file_match: "MIPS"
-          - asset: tg-ws-proxy-openwrt-x86_64
+          - proxy_asset: tg-ws-proxy-openwrt-x86_64
+            mtproto_asset: tg-ws-mtproto-openwrt-x86_64
             goarch: amd64
             file_match: "x86-64"
-          - asset: tg-ws-proxy-openwrt-armv7
+          - proxy_asset: tg-ws-proxy-openwrt-armv7
+            mtproto_asset: tg-ws-mtproto-openwrt-armv7
             goarch: arm
             goarm: "7"
             file_match: "ARM"
-          - asset: tg-ws-proxy-openwrt-aarch64
+          - proxy_asset: tg-ws-proxy-openwrt-aarch64
+            mtproto_asset: tg-ws-mtproto-openwrt-aarch64
             goarch: arm64
             file_match: "aarch64"
 
@@ -94,30 +101,41 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm || '' }}
           GOMIPS: ${{ matrix.gomips || '' }}
-          OUTPUT: build/${{ matrix.asset }}
+          PROXY_OUTPUT: build/${{ matrix.proxy_asset }}
+          MTPROTO_OUTPUT: build/${{ matrix.mtproto_asset }}
         run: |
           mkdir -p build
-          go build -trimpath -ldflags="-s -w" -o "$OUTPUT" ./cmd/tg-ws-proxy
+          go build -trimpath -ldflags="-s -w" -o "$PROXY_OUTPUT" ./cmd/tg-ws-proxy
+          go build -trimpath -ldflags="-s -w" -o "$MTPROTO_OUTPUT" ./cmd/tg-ws-mtproto
 
       - name: inspect target binary
         env:
-          OUTPUT: build/${{ matrix.asset }}
+          PROXY_OUTPUT: build/${{ matrix.proxy_asset }}
+          MTPROTO_OUTPUT: build/${{ matrix.mtproto_asset }}
           FILE_MATCH: ${{ matrix.file_match }}
         run: |
-          test -s "$OUTPUT"
-          file "$OUTPUT" | tee /tmp/file-output.txt
-          grep -q "$FILE_MATCH" /tmp/file-output.txt
-          if readelf -l "$OUTPUT" | grep -q "Requesting program interpreter"; then
-            echo "dynamic loader detected in $OUTPUT"
-            readelf -l "$OUTPUT"
-            exit 1
-          fi
+          for output in "$PROXY_OUTPUT" "$MTPROTO_OUTPUT"; do
+            test -s "$output"
+            file "$output" | tee /tmp/file-output.txt
+            grep -q "$FILE_MATCH" /tmp/file-output.txt
+            if readelf -l "$output" | grep -q "Requesting program interpreter"; then
+              echo "dynamic loader detected in $output"
+              readelf -l "$output"
+              exit 1
+            fi
+          done
 
-      - name: upload target artifact
+      - name: upload proxy artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: ${{ matrix.asset }}
-          path: build/${{ matrix.asset }}
+          name: ${{ matrix.proxy_asset }}
+          path: build/${{ matrix.proxy_asset }}
+
+      - name: upload mtproto artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: ${{ matrix.mtproto_asset }}
+          path: build/${{ matrix.mtproto_asset }}
 
   verify-openwrt-artifacts:
     needs: build-openwrt
@@ -136,6 +154,11 @@ jobs:
           test -f build/tg-ws-proxy-openwrt-x86_64/tg-ws-proxy-openwrt-x86_64
           test -f build/tg-ws-proxy-openwrt-armv7/tg-ws-proxy-openwrt-armv7
           test -f build/tg-ws-proxy-openwrt-aarch64/tg-ws-proxy-openwrt-aarch64
+          test -f build/tg-ws-mtproto-openwrt-mipsel_24kc/tg-ws-mtproto-openwrt-mipsel_24kc
+          test -f build/tg-ws-mtproto-openwrt-mips_24kc/tg-ws-mtproto-openwrt-mips_24kc
+          test -f build/tg-ws-mtproto-openwrt-x86_64/tg-ws-mtproto-openwrt-x86_64
+          test -f build/tg-ws-mtproto-openwrt-armv7/tg-ws-mtproto-openwrt-armv7
+          test -f build/tg-ws-mtproto-openwrt-aarch64/tg-ws-mtproto-openwrt-aarch64
 
   smoke-openwrt-x86_64:
     needs: build-openwrt
@@ -148,16 +171,31 @@ jobs:
           name: tg-ws-proxy-openwrt-x86_64
           path: build
 
-      - name: smoke-run x86_64 binary
+      - name: download x86_64 mtproto artifact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: tg-ws-mtproto-openwrt-x86_64
+          path: build
+
+      - name: smoke-run x86_64 binaries
         run: |
           chmod +x build/tg-ws-proxy-openwrt-x86_64
+          chmod +x build/tg-ws-mtproto-openwrt-x86_64
           set +e
           timeout 3s build/tg-ws-proxy-openwrt-x86_64 -host 127.0.0.1 -port 0 -verbose > /tmp/smoke.log 2>&1
           rc=$?
+          timeout 3s build/tg-ws-mtproto-openwrt-x86_64 --host 127.0.0.1 --public-host 127.0.0.1 --port 0 --secret ee0123456789abcdef0123456789abcdef --domain www.google.com --verbose > /tmp/mtproto-smoke.log 2>&1
+          mtproto_rc=$?
           set -e
           cat /tmp/smoke.log
+          cat /tmp/mtproto-smoke.log
           if [ "$rc" -ne 124 ]; then
             echo "unexpected exit code: $rc"
             exit 1
           fi
+          if [ "$mtproto_rc" -ne 124 ]; then
+            echo "unexpected mtproto exit code: $mtproto_rc"
+            exit 1
+          fi
           grep -q "listening on" /tmp/smoke.log
+          grep -q "MTProto proxy link" /tmp/mtproto-smoke.log

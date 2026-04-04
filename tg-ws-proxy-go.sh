@@ -23,11 +23,14 @@ else
 fi
 
 APP_NAME="tg-ws-proxy"
+MTPROTO_APP_NAME="tg-ws-mtproto"
 LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
 REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
 DEFAULT_BINARY_NAME="${DEFAULT_BINARY_NAME:-tg-ws-proxy-openwrt}"
+DEFAULT_MTPROTO_BINARY_NAME="${DEFAULT_MTPROTO_BINARY_NAME:-tg-ws-mtproto-openwrt}"
 BINARY_NAME="${BINARY_NAME:-}"
+MTPROTO_BINARY_NAME="${MTPROTO_BINARY_NAME:-}"
 LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
 LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
@@ -54,9 +57,13 @@ FORCE_NUMBERED_UPDATE_SOURCE_PICKER="${FORCE_NUMBERED_UPDATE_SOURCE_PICKER:-}"
 SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
 SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
 SOURCE_MANAGER_SCRIPT="${SOURCE_MANAGER_SCRIPT:-$SOURCE_BIN.manager}"
+MTPROTO_SOURCE_BIN="${MTPROTO_SOURCE_BIN:-/tmp/tg-ws-mtproto-openwrt}"
+MTPROTO_SOURCE_VERSION_FILE="${MTPROTO_SOURCE_VERSION_FILE:-$MTPROTO_SOURCE_BIN.version}"
 INSTALL_DIR="${INSTALL_DIR:-/tmp/tg-ws-proxy-go}"
 BIN_PATH="${BIN_PATH:-$INSTALL_DIR/tg-ws-proxy}"
+MTPROTO_BIN_PATH="${MTPROTO_BIN_PATH:-$INSTALL_DIR/tg-ws-mtproto}"
 VERSION_FILE="${VERSION_FILE:-$INSTALL_DIR/version}"
+MTPROTO_VERSION_FILE="${MTPROTO_VERSION_FILE:-$INSTALL_DIR/mtproto.version}"
 PERSIST_STATE_DIR="${PERSIST_STATE_DIR:-/etc/tg-ws-proxy-go}"
 PERSIST_PATH_FILE="${PERSIST_PATH_FILE:-$PERSIST_STATE_DIR/install_dir}"
 PERSIST_VERSION_FILE="${PERSIST_VERSION_FILE:-$PERSIST_STATE_DIR/version}"
@@ -85,6 +92,7 @@ PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
 PERSISTENT_SPACE_HEADROOM_KB="${PERSISTENT_SPACE_HEADROOM_KB:-2048}"
 PID_FILE="${PID_FILE:-$INSTALL_DIR/pid}"
+MTPROTO_PID_FILE="${MTPROTO_PID_FILE:-$INSTALL_DIR/mtproto.pid}"
 COMMAND_MODE="0"
 
 if [ "$#" -gt 0 ]; then
@@ -127,6 +135,30 @@ binary_name_for_arch() {
     esac
 }
 
+mtproto_binary_name_for_arch() {
+    arch="$1"
+    case "$arch" in
+        mipsel_24kc)
+            printf "tg-ws-mtproto-openwrt-mipsel_24kc"
+            ;;
+        mips_24kc)
+            printf "tg-ws-mtproto-openwrt-mips_24kc"
+            ;;
+        aarch64*)
+            printf "tg-ws-mtproto-openwrt-aarch64"
+            ;;
+        x86_64)
+            printf "tg-ws-mtproto-openwrt-x86_64"
+            ;;
+        arm_cortex-a7|arm_cortex-a9|arm_cortex-a15_neon-vfpv4)
+            printf "tg-ws-mtproto-openwrt-armv7"
+            ;;
+        *)
+            printf "%s" "$DEFAULT_MTPROTO_BINARY_NAME"
+            ;;
+    esac
+}
+
 is_supported_openwrt_arch() {
     arch="$1"
     case "$arch" in
@@ -154,6 +186,23 @@ resolved_binary_name() {
     printf "%s" "$DEFAULT_BINARY_NAME"
 }
 
+resolved_mtproto_binary_name() {
+    if [ -n "$MTPROTO_BINARY_NAME" ]; then
+        printf "%s" "$MTPROTO_BINARY_NAME"
+        return 0
+    fi
+
+    if is_openwrt; then
+        arch="$(openwrt_arch)"
+        if [ -n "$arch" ]; then
+            mtproto_binary_name_for_arch "$arch"
+            return 0
+        fi
+    fi
+
+    printf "%s" "$DEFAULT_MTPROTO_BINARY_NAME"
+}
+
 resolved_release_url() {
     if [ -n "$RELEASE_URL" ]; then
         printf "%s" "$RELEASE_URL"
@@ -173,6 +222,28 @@ resolved_release_url() {
     fi
 
     printf "%s/%s" "$RELEASE_DOWNLOAD_BASE_URL" "$(resolved_binary_name)"
+}
+
+resolved_mtproto_release_url() {
+    if [ -n "$RELEASE_URL" ]; then
+        base_url="${RELEASE_URL%/*}"
+        printf "%s/%s" "$base_url" "$(resolved_mtproto_binary_name)"
+        return 0
+    fi
+
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview_branch" ]; then
+        printf "%s/%s/%s" "$PREVIEW_BASE_URL" "$preview_branch" "$(resolved_mtproto_binary_name)"
+        return 0
+    fi
+
+    tag="$(selected_release_tag 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$tag" "$(resolved_mtproto_binary_name)"
+        return 0
+    fi
+
+    printf "%s/%s" "$RELEASE_DOWNLOAD_BASE_URL" "$(resolved_mtproto_binary_name)"
 }
 
 tmp_available_kb() {
@@ -275,9 +346,13 @@ read_config_value() {
 
 write_settings_config() {
     bin_path="${1:-}"
+    mtproto_bin_path="${2:-}"
 
     if [ -z "$bin_path" ]; then
         bin_path="$(read_config_value BIN 2>/dev/null || true)"
+    fi
+    if [ -z "$mtproto_bin_path" ]; then
+        mtproto_bin_path="$(read_config_value MTPROTO_BIN 2>/dev/null || true)"
     fi
 
     auth_settings_valid || return 1
@@ -286,6 +361,9 @@ write_settings_config() {
     {
         if [ -n "$bin_path" ]; then
             printf "BIN='%s'\n" "$bin_path"
+        fi
+        if [ -n "$mtproto_bin_path" ]; then
+            printf "MTPROTO_BIN='%s'\n" "$mtproto_bin_path"
         fi
         printf "HOST='%s'\n" "$LISTEN_HOST"
         printf "PORT='%s'\n" "$LISTEN_PORT"
@@ -464,8 +542,18 @@ installed_version() {
     normalize_version "$value"
 }
 
+installed_mtproto_version() {
+    value="$(read_first_line "$MTPROTO_VERSION_FILE" 2>/dev/null || true)"
+    normalize_version "$value"
+}
+
 cached_source_version() {
     value="$(read_first_line "$SOURCE_VERSION_FILE" 2>/dev/null || true)"
+    normalize_version "$value"
+}
+
+cached_mtproto_source_version() {
+    value="$(read_first_line "$MTPROTO_SOURCE_VERSION_FILE" 2>/dev/null || true)"
     normalize_version "$value"
 }
 
@@ -609,6 +697,12 @@ persistent_bin_path() {
     printf "%s/tg-ws-proxy" "$dir"
 }
 
+persistent_mtproto_bin_path() {
+    dir="$(persistent_install_dir 2>/dev/null || true)"
+    [ -n "$dir" ] || return 1
+    printf "%s/tg-ws-mtproto" "$dir"
+}
+
 persistent_manager_path() {
     dir="$(persistent_install_dir 2>/dev/null || true)"
     [ -n "$dir" ] || return 1
@@ -628,6 +722,21 @@ runtime_bin_path() {
     fi
 
     bin="$(persistent_bin_path 2>/dev/null || true)"
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        printf "%s" "$bin"
+        return 0
+    fi
+
+    return 1
+}
+
+runtime_mtproto_bin_path() {
+    if [ -x "$MTPROTO_BIN_PATH" ]; then
+        printf "%s" "$MTPROTO_BIN_PATH"
+        return 0
+    fi
+
+    bin="$(persistent_mtproto_bin_path 2>/dev/null || true)"
     if [ -n "$bin" ] && [ -x "$bin" ]; then
         printf "%s" "$bin"
         return 0
@@ -682,15 +791,7 @@ telegram_host() {
 mtproto_link() {
     secret="$MTPROTO_SECRET"
     if [ -n "$MTPROTO_DOMAIN" ]; then
-        if command -v xxd >/dev/null 2>&1; then
-            domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | xxd -p -c 256 | tr -d '\n')"
-        elif command -v hexdump >/dev/null 2>&1; then
-            domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | hexdump -v -e '/1 "%02x"' 2>/dev/null | tr -d '\n')"
-        elif command -v od >/dev/null 2>&1; then
-            domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | od -An -tx1 -v | tr -d ' \n')"
-        else
-            domain_hex=""
-        fi
+        domain_hex="$(mtproto_domain_hex)"
         case "$secret" in
             ee????????????????????????????????)
                 [ -n "$domain_hex" ] && secret="${secret}${domain_hex}"
@@ -698,6 +799,34 @@ mtproto_link() {
         esac
     fi
     printf "tg://proxy?server=%s&port=%s&secret=%s" "$(telegram_host)" "$MTPROTO_PORT" "$secret"
+}
+
+mtproto_domain_hex() {
+    if command -v xxd >/dev/null 2>&1; then
+        domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | xxd -p -c 256 2>/dev/null | tr -d '\n')"
+        [ -n "$domain_hex" ] && {
+            printf "%s" "$domain_hex"
+            return 0
+        }
+    fi
+
+    if command -v hexdump >/dev/null 2>&1; then
+        domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | hexdump -v -e '/1 "%02x"' 2>/dev/null | tr -d '\n')"
+        [ -n "$domain_hex" ] && {
+            printf "%s" "$domain_hex"
+            return 0
+        }
+    fi
+
+    if command -v od >/dev/null 2>&1; then
+        domain_hex="$(printf "%s" "$MTPROTO_DOMAIN" | od -An -tx1 -v 2>/dev/null | tr -d ' \n')"
+        [ -n "$domain_hex" ] && {
+            printf "%s" "$domain_hex"
+            return 0
+        }
+    fi
+
+    return 1
 }
 
 render_mtproto_qr() {
@@ -790,11 +919,12 @@ pid_matches_binary() {
 
 matching_pids_for_path() {
     path="$1"
+    pid_file="${2:-$PID_FILE}"
     [ -n "$path" ] || return 1
 
     matches=""
 
-    pid_from_file="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
+    pid_from_file="$(read_first_line "$pid_file" 2>/dev/null || true)"
     if [ -n "$pid_from_file" ] && pid_matches_binary "$pid_from_file" "$path"; then
         matches="$matches
 $pid_from_file"
@@ -826,11 +956,29 @@ is_running() {
     current_pids >/dev/null 2>&1
 }
 
+is_mtproto_running() {
+    current_mtproto_pids >/dev/null 2>&1
+}
+
 current_pids() {
     all_pids=""
     for path in "$BIN_PATH" "$(persistent_bin_path 2>/dev/null || true)"; do
         [ -n "$path" ] || continue
         pids="$(matching_pids_for_path "$path" 2>/dev/null || true)"
+        [ -n "$pids" ] || continue
+        all_pids="$all_pids
+$pids"
+    done
+
+    [ -n "$all_pids" ] || return 1
+    printf "%s\n" "$all_pids" | awk 'NF && !seen[$0]++'
+}
+
+current_mtproto_pids() {
+    all_pids=""
+    for path in "$MTPROTO_BIN_PATH" "$(persistent_mtproto_bin_path 2>/dev/null || true)"; do
+        [ -n "$path" ] || continue
+        pids="$(matching_pids_for_path "$path" "$MTPROTO_PID_FILE" 2>/dev/null || true)"
         [ -n "$pids" ] || continue
         all_pids="$all_pids
 $pids"
@@ -1308,6 +1456,33 @@ prompt_restart_running_proxy() {
     esac
 }
 
+prompt_restart_running_mtproto() {
+    pids="$(current_mtproto_pids 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+    [ -n "$pids" ] || return 1
+
+    show_header
+    printf "%s%s is already running%s\n\n" "$C_YELLOW" "$MTPROTO_APP_NAME" "$C_RESET"
+    printf "Detected running process: %s\n" "$pids"
+    printf "Stop it and start again? [y/N]: "
+    IFS= read -r running_choice
+
+    case "$running_choice" in
+        y|Y|yes|YES)
+            stop_mtproto_running >/dev/null 2>&1 || true
+            if is_mtproto_running; then
+                printf "\n%sFailed to stop the running process%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+            fi
+            return 0
+            ;;
+        *)
+            pause
+            return 1
+            ;;
+    esac
+}
+
 release_url_reachable() {
     url="$(resolved_release_url)"
     if command -v wget >/dev/null 2>&1; then
@@ -1474,6 +1649,23 @@ download_binary() {
     return 1
 }
 
+download_mtproto_binary() {
+    mkdir -p "$(dirname "$MTPROTO_SOURCE_BIN")" || return 1
+    url="$(resolved_mtproto_release_url)"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "$MTPROTO_SOURCE_BIN" "$url"
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail -o "$MTPROTO_SOURCE_BIN" "$url"
+        return $?
+    fi
+
+    return 1
+}
+
 script_release_url() {
     preview_branch="$(selected_preview_branch 2>/dev/null || true)"
     if [ -n "$preview_branch" ]; then
@@ -1554,6 +1746,37 @@ write_source_version_file() {
     printf "%s\n" "$version" > "$SOURCE_VERSION_FILE" || return 1
 }
 
+write_mtproto_source_version_file() {
+    version="$1"
+    [ -n "$version" ] || return 0
+    printf "%s\n" "$version" > "$MTPROTO_SOURCE_VERSION_FILE" || return 1
+}
+
+sync_mtproto_runtime_binary() {
+    if [ ! -f "$MTPROTO_SOURCE_BIN" ]; then
+        rm -f "$MTPROTO_BIN_PATH" "$MTPROTO_VERSION_FILE"
+        return 0
+    fi
+
+    desired_ref="$(resolved_release_ref 2>/dev/null || true)"
+    cached_ref="$(cached_mtproto_source_version 2>/dev/null || true)"
+    if [ -n "$desired_ref" ] && [ -n "$cached_ref" ] && [ "$desired_ref" != "$cached_ref" ]; then
+        rm -f "$MTPROTO_BIN_PATH" "$MTPROTO_VERSION_FILE"
+        return 0
+    fi
+
+    mkdir -p "$INSTALL_DIR" || return 1
+    cp "$MTPROTO_SOURCE_BIN" "$MTPROTO_BIN_PATH" || return 1
+    chmod +x "$MTPROTO_BIN_PATH" || return 1
+
+    version="$(cached_mtproto_source_version 2>/dev/null || true)"
+    if [ -n "$version" ]; then
+        printf "%s\n" "$version" > "$MTPROTO_VERSION_FILE" || return 1
+    else
+        rm -f "$MTPROTO_VERSION_FILE"
+    fi
+}
+
 install_from_source() {
     mkdir -p "$INSTALL_DIR" || return 1
     cp "$SOURCE_BIN" "$BIN_PATH" || return 1
@@ -1573,6 +1796,8 @@ install_from_source() {
     else
         launcher_path="$(install_launcher "$INSTALL_DIR/$PERSIST_MANAGER_NAME")" || return 1
     fi
+
+    sync_mtproto_runtime_binary || return 1
     printf "%s" "$launcher_path"
 }
 
@@ -1595,6 +1820,12 @@ install_persistent_from_source() {
     mkdir -p "$install_dir" || return 1
     cp "$SOURCE_BIN" "$install_dir/tg-ws-proxy" || return 1
     chmod +x "$install_dir/tg-ws-proxy" || return 1
+    if [ -f "$MTPROTO_SOURCE_BIN" ]; then
+        cp "$MTPROTO_SOURCE_BIN" "$install_dir/tg-ws-mtproto" || return 1
+        chmod +x "$install_dir/tg-ws-mtproto" || return 1
+    else
+        rm -f "$install_dir/tg-ws-mtproto"
+    fi
     cp "$SOURCE_MANAGER_SCRIPT" "$install_dir/$PERSIST_MANAGER_NAME" || return 1
     chmod +x "$install_dir/$PERSIST_MANAGER_NAME" || return 1
 
@@ -1606,7 +1837,8 @@ install_persistent_from_source() {
 
 write_autostart_config() {
     bin_path="$1"
-    write_settings_config "$bin_path"
+    mtproto_bin_path="$2"
+    write_settings_config "$bin_path" "$mtproto_bin_path"
 }
 
 sync_autostart_config_if_enabled() {
@@ -1619,7 +1851,8 @@ sync_autostart_config_if_enabled() {
         return 0
     fi
 
-    write_autostart_config "$bin_path"
+    mtproto_bin_path="$(persistent_mtproto_bin_path 2>/dev/null || true)"
+    write_autostart_config "$bin_path" "$mtproto_bin_path"
 }
 
 write_init_script() {
@@ -1639,6 +1872,7 @@ write_init_script() {
         printf '%s\n' '    [ -n "$PORT" ] || PORT="1080"'
         printf '%s\n' '    USERNAME="${USERNAME:-}"'
         printf '%s\n' '    PASSWORD="${PASSWORD:-}"'
+        printf '%s\n' '    MTPROTO_BIN="${MTPROTO_BIN:-}"'
         printf '%s\n' '    MTPROTO_ENABLED="${MTPROTO_ENABLED:-0}"'
         printf '%s\n' '    MTPROTO_PORT="${MTPROTO_PORT:-8443}"'
         printf '%s\n' '    MTPROTO_SECRET="${MTPROTO_SECRET:-}"'
@@ -1654,14 +1888,23 @@ write_init_script() {
         printf '%s\n' '    if [ "${VERBOSE:-0}" = "1" ]; then'
         printf '%s\n' '        CMD="$CMD --verbose"'
         printf '%s\n' '    fi'
-        printf '%s\n' '    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then'
-        printf '%s\n' '        CMD="$CMD --mtproto --mtproto-port $MTPROTO_PORT --mtproto-secret $MTPROTO_SECRET --mtproto-domain $MTPROTO_DOMAIN"'
-        printf '%s\n' '    fi'
         printf '%s\n' '    procd_set_param command $CMD'
         printf '%s\n' '    procd_set_param respawn'
         printf '%s\n' '    procd_set_param stdout 1'
         printf '%s\n' '    procd_set_param stderr 1'
         printf '%s\n' '    procd_close_instance'
+        printf '%s\n' '    if [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ] && [ -x "$MTPROTO_BIN" ]; then'
+        printf '%s\n' '        procd_open_instance'
+        printf '%s\n' '        MT_CMD="$MTPROTO_BIN --host $HOST --public-host $HOST --port $MTPROTO_PORT --secret $MTPROTO_SECRET --domain $MTPROTO_DOMAIN"'
+        printf '%s\n' '        if [ "${VERBOSE:-0}" = "1" ]; then'
+        printf '%s\n' '            MT_CMD="$MT_CMD --verbose"'
+        printf '%s\n' '        fi'
+        printf '%s\n' '        procd_set_param command $MT_CMD'
+        printf '%s\n' '        procd_set_param respawn'
+        printf '%s\n' '        procd_set_param stdout 1'
+        printf '%s\n' '        procd_set_param stderr 1'
+        printf '%s\n' '        procd_close_instance'
+        printf '%s\n' '    fi'
         printf '%s\n' '}'
     } > "$INIT_SCRIPT_PATH" || return 1
 
@@ -1726,6 +1969,36 @@ ensure_source_binary_current() {
         printf "Or check GitHub API access or network access\n"
         return 1
     fi
+}
+
+ensure_mtproto_source_binary_current() {
+    desired_ref="$(resolved_release_ref 2>/dev/null || true)"
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
+
+    if [ -n "$desired_ref" ]; then
+        cached_tag="$(cached_mtproto_source_version 2>/dev/null || true)"
+        need_download="0"
+
+        if [ ! -f "$MTPROTO_SOURCE_BIN" ]; then
+            need_download="1"
+        elif [ -n "$preview_branch" ]; then
+            need_download="1"
+        elif [ -z "$cached_tag" ]; then
+            need_download="1"
+        elif [ "$cached_tag" != "$desired_ref" ]; then
+            need_download="1"
+        fi
+
+        if [ "$need_download" = "1" ]; then
+            if ! download_mtproto_binary; then
+                return 1
+            fi
+            write_mtproto_source_version_file "$desired_ref" || return 1
+        fi
+        return 0
+    fi
+
+    return 1
 }
 
 install_binary() {
@@ -1902,9 +2175,6 @@ run_binary_mode() {
 
     set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
     case "$mode" in
-        mtproto-only)
-            set -- "$@" --socks5=false
-            ;;
         combined|socks5-only)
             ;;
         *)
@@ -1916,11 +2186,6 @@ run_binary_mode() {
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
-    fi
-    if [ "$mode" = "mtproto-only" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
-    elif [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
     fi
     "$@"
 }
@@ -1932,9 +2197,6 @@ run_binary_background_mode() {
 
     set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
     case "$mode" in
-        mtproto-only)
-            set -- "$@" --socks5=false
-            ;;
         combined|socks5-only)
             ;;
         *)
@@ -1946,11 +2208,6 @@ run_binary_background_mode() {
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
-    fi
-    if [ "$mode" = "mtproto-only" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
-    elif [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]; then
-        set -- "$@" --mtproto --mtproto-port "$MTPROTO_PORT" --mtproto-secret "$MTPROTO_SECRET" --mtproto-domain "$MTPROTO_DOMAIN"
     fi
 
     if command -v nohup >/dev/null 2>&1; then
@@ -1964,6 +2221,46 @@ run_binary_background_mode() {
 
 mtproto_ready() {
     [ "$MTPROTO_ENABLED" = "1" ] && [ -n "$MTPROTO_SECRET" ]
+}
+
+ensure_mtproto_runtime_current() {
+    if ! ensure_mtproto_source_binary_current; then
+        printf "%sMTProto binary download failed%s\n\n" "$C_RED" "$C_RESET"
+        printf "Check GitHub Release visibility or network access\n"
+        return 1
+    fi
+
+    sync_mtproto_runtime_binary || return 1
+    [ -x "$MTPROTO_BIN_PATH" ]
+}
+
+run_mtproto_binary() {
+    bin_path="$(runtime_mtproto_bin_path 2>/dev/null || true)"
+    [ -n "$bin_path" ] || return 1
+
+    set -- "$bin_path" --host "$LISTEN_HOST" --public-host "$(telegram_host)" --port "$MTPROTO_PORT" --secret "$MTPROTO_SECRET" --domain "$MTPROTO_DOMAIN"
+    if [ "$VERBOSE" = "1" ]; then
+        set -- "$@" --verbose
+    fi
+    "$@"
+}
+
+run_mtproto_binary_background() {
+    bin_path="$(runtime_mtproto_bin_path 2>/dev/null || true)"
+    [ -n "$bin_path" ] || return 1
+
+    set -- "$bin_path" --host "$LISTEN_HOST" --public-host "$(telegram_host)" --port "$MTPROTO_PORT" --secret "$MTPROTO_SECRET" --domain "$MTPROTO_DOMAIN"
+    if [ "$VERBOSE" = "1" ]; then
+        set -- "$@" --verbose
+    fi
+
+    if command -v nohup >/dev/null 2>&1; then
+        nohup "$@" >/dev/null 2>&1 &
+    else
+        "$@" >/dev/null 2>&1 &
+    fi
+
+    printf "%s" "$!"
 }
 
 show_mtproto_only() {
@@ -1984,16 +2281,14 @@ start_mtproto_proxy() {
         return 1
     fi
 
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        show_header
-        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
-        pause
-        return 1
+    if is_mtproto_running; then
+        prompt_restart_running_mtproto || return 1
     fi
 
-    if is_running; then
-        prompt_restart_running_proxy || return 1
+    if ! ensure_mtproto_runtime_current; then
+        show_header
+        pause
+        return 1
     fi
 
     if port_in_use "$MTPROTO_PORT"; then
@@ -2010,14 +2305,14 @@ start_mtproto_proxy() {
     show_mtproto_settings
     printf "\n"
     interrupted="0"
-    run_binary_mode "mtproto-only" &
+    run_mtproto_binary &
     child_pid="$!"
-    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
-    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    mkdir -p "$(dirname "$MTPROTO_PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$MTPROTO_PID_FILE" 2>/dev/null || true
     trap 'interrupted="1"; kill -INT "$child_pid" 2>/dev/null' INT
     wait "$child_pid"
     code="$?"
-    rm -f "$PID_FILE"
+    rm -f "$MTPROTO_PID_FILE"
     trap - INT
     printf "\n%sMTProto proxy exited with code %s%s\n" "$C_YELLOW" "$code" "$C_RESET"
     if [ "$interrupted" = "1" ]; then
@@ -2035,16 +2330,14 @@ start_mtproto_proxy_background() {
         return 1
     fi
 
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        show_header
-        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
-        pause
-        return 1
+    if is_mtproto_running; then
+        prompt_restart_running_mtproto || return 1
     fi
 
-    if is_running; then
-        prompt_restart_running_proxy || return 1
+    if ! ensure_mtproto_runtime_current; then
+        show_header
+        pause
+        return 1
     fi
 
     if port_in_use "$MTPROTO_PORT"; then
@@ -2058,9 +2351,9 @@ start_mtproto_proxy_background() {
     printf "Logs will not be printed in this session.\n"
     printf "Bind: %s:%s\n\n" "$(telegram_host)" "$MTPROTO_PORT"
 
-    child_pid="$(run_binary_background_mode "mtproto-only")" || return 1
-    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
-    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    child_pid="$(run_mtproto_binary_background)" || return 1
+    mkdir -p "$(dirname "$MTPROTO_PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$MTPROTO_PID_FILE" 2>/dev/null || true
     sleep 1
 
     if kill -0 "$child_pid" 2>/dev/null; then
@@ -2071,7 +2364,7 @@ start_mtproto_proxy_background() {
 
     wait "$child_pid" 2>/dev/null
     code="$?"
-    rm -f "$PID_FILE"
+    rm -f "$MTPROTO_PID_FILE"
     printf "%sBackground start failed%s\n\n" "$C_RED" "$C_RESET"
     printf "Process exited with code: %s\n" "$code"
     pause
@@ -2197,6 +2490,7 @@ enable_autostart() {
     fi
 
     bin_path="$(persistent_bin_path 2>/dev/null || true)"
+    mtproto_bin_path="$(persistent_mtproto_bin_path 2>/dev/null || true)"
     if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
         if ! check_tmp_space; then
             free_kb="$(tmp_available_kb)"
@@ -2224,7 +2518,19 @@ enable_autostart() {
         printf "Launcher:\n  %s\n\n" "$launcher_path"
     fi
 
-    write_autostart_config "$bin_path" || return 1
+    if mtproto_ready; then
+        if ! ensure_mtproto_source_binary_current; then
+            pause
+            return 1
+        fi
+        persist_dir="$(persistent_install_dir 2>/dev/null || true)"
+        if [ -n "$persist_dir" ]; then
+            install_persistent_from_source "$persist_dir" >/dev/null || return 1
+            mtproto_bin_path="$(persistent_mtproto_bin_path 2>/dev/null || true)"
+        fi
+    fi
+
+    write_autostart_config "$bin_path" "$mtproto_bin_path" || return 1
     write_init_script || return 1
 
     if ! "$INIT_SCRIPT_PATH" enable >/dev/null 2>&1; then
@@ -2317,12 +2623,45 @@ stop_running() {
     return 0
 }
 
+stop_mtproto_running() {
+    if ! is_mtproto_running; then
+        rm -f "$MTPROTO_PID_FILE"
+        return 1
+    fi
+
+    pids="$(current_mtproto_pids)"
+    [ -n "$pids" ] || return 1
+
+    for pid in $pids; do
+        kill "$pid" 2>/dev/null
+    done
+    sleep 1
+
+    for pid in $pids; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null
+        fi
+    done
+    rm -f "$MTPROTO_PID_FILE"
+    return 0
+}
+
 stop_proxy() {
     show_header
     if stop_running; then
         printf "%sProxy stopped%s\n" "$C_GREEN" "$C_RESET"
     else
         printf "%s%s is not running%s\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
+    fi
+    pause
+}
+
+stop_mtproto_proxy() {
+    show_header
+    if stop_mtproto_running; then
+        printf "%sMTProto proxy stopped%s\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "%s%s is not running%s\n" "$C_YELLOW" "$MTPROTO_APP_NAME" "$C_RESET"
     fi
     pause
 }
@@ -2347,27 +2686,46 @@ restart_running_proxy_for_updated_settings() {
         return 1
     fi
 
-    stop_running >/dev/null 2>&1 || true
-    child_pid="$(run_binary_background)" || return 1
-    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
-    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
-    sleep 1
+    restarted="0"
 
-    if kill -0 "$child_pid" 2>/dev/null; then
-        return 0
+    if is_running; then
+        stop_running >/dev/null 2>&1 || true
+        child_pid="$(run_binary_background)" || return 1
+        mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+        printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+        sleep 1
+        if ! kill -0 "$child_pid" 2>/dev/null; then
+            wait "$child_pid" 2>/dev/null
+            rm -f "$PID_FILE"
+            return 1
+        fi
+        restarted="1"
     fi
 
-    wait "$child_pid" 2>/dev/null
-    rm -f "$PID_FILE"
-    return 1
+    if is_mtproto_running || { mtproto_ready && is_running; }; then
+        stop_mtproto_running >/dev/null 2>&1 || true
+        ensure_mtproto_runtime_current >/dev/null 2>&1 || return 1
+        child_pid="$(run_mtproto_binary_background)" || return 1
+        mkdir -p "$(dirname "$MTPROTO_PID_FILE")" >/dev/null 2>&1 || true
+        printf "%s\n" "$child_pid" > "$MTPROTO_PID_FILE" 2>/dev/null || true
+        sleep 1
+        if ! kill -0 "$child_pid" 2>/dev/null; then
+            wait "$child_pid" 2>/dev/null
+            rm -f "$MTPROTO_PID_FILE"
+            return 1
+        fi
+        restarted="1"
+    fi
+
+    [ "$restarted" = "1" ]
 }
 
 prompt_restart_proxy_for_updated_settings() {
-    if ! is_running; then
+    if ! is_running && ! is_mtproto_running; then
         return 0
     fi
 
-    printf "\nProxy is currently running.\n"
+    printf "\nA proxy instance is currently running.\n"
     printf "Restart now to apply the new settings? [y/N]: "
     IFS= read -r restart_choice
 
@@ -2610,6 +2968,7 @@ show_quick_only() {
 
 remove_all() {
     stop_running >/dev/null 2>&1 || true
+    stop_mtproto_running >/dev/null 2>&1 || true
     if [ -f "$INIT_SCRIPT_PATH" ]; then
         "$INIT_SCRIPT_PATH" disable >/dev/null 2>&1 || true
         "$INIT_SCRIPT_PATH" stop >/dev/null 2>&1 || true
@@ -2620,9 +2979,9 @@ remove_all() {
     if [ -n "$persist_dir" ]; then
         rm -rf "$persist_dir"
     fi
-    rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
+    rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE" "$MTPROTO_SOURCE_BIN" "$MTPROTO_SOURCE_VERSION_FILE"
     rm -f "$SOURCE_MANAGER_SCRIPT"
-    rm -f "$PID_FILE"
+    rm -f "$PID_FILE" "$MTPROTO_PID_FILE"
     rm -rf "$PERSIST_STATE_DIR"
     rm -f "$INIT_SCRIPT_PATH"
     rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
@@ -2757,7 +3116,7 @@ mtproto_menu() {
                 start_mtproto_proxy_background
                 ;;
             5)
-                stop_proxy
+                stop_mtproto_proxy
                 ;;
             *)
                 return 0
