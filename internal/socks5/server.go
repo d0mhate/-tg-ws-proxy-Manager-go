@@ -8,7 +8,9 @@ import (
 	"io"
 	"log"
 	"net"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,7 +37,7 @@ const (
 	socksAuthUserPass    = 0x02
 	wsFailCooldown       = 30 * time.Second
 	wsFailFastDial       = 2 * time.Second
-	statsLogEvery        = 30 * time.Second
+	statsLogEvery        = 5 * time.Second
 )
 
 const errInvalidUsernamePassword = "invalid username/password"
@@ -50,12 +52,15 @@ type Server struct {
 	logger *log.Logger
 	pool   *wsbridge.Pool
 
-	stateMu     sync.Mutex
-	wsBlacklist map[routeKey]struct{}
-	wsFailUntil map[routeKey]time.Time
-	stats       *runtimeStats
-	authFails   *authFailureTracker
-	wsDialFunc  wsbridge.DialFunc
+	stateMu      sync.Mutex
+	wsBlacklist  map[routeKey]struct{}
+	wsFailUntil  map[routeKey]time.Time
+	stats        *runtimeStats
+	authFails    *authFailureTracker
+	hsFails      *handshakeFailureTracker
+	verboseFails *connFailureTracker
+	verboseDebug *debugEventTracker
+	wsDialFunc   wsbridge.DialFunc
 
 	proxyTCPFunc         func(ctx context.Context, conn net.Conn, host string, port int) error
 	proxyTCPWithInitFunc func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error
@@ -80,23 +85,69 @@ type routeKey struct {
 }
 
 type runtimeStats struct {
-	mu             sync.Mutex
-	connections    int
-	wsConnections  int
-	tcpFallbacks   int
-	httpRejected   int
-	passthrough    int
-	wsErrors       int
-	poolHits       int
-	poolMisses     int
-	blacklistHits  int
-	cooldownActivs int
+	mu               sync.Mutex
+	handshakeWait    int
+	handshakeEOF     int
+	handshakeBadVer  int
+	handshakeOther   int
+	connections      int
+	wsConnections    int
+	wsMedia          int
+	tcpFallbacks     int
+	tcpFallbackMedia int
+	httpRejected     int
+	passthrough      int
+	wsErrors         int
+	poolHits         int
+	poolMisses       int
+	blacklistHits    int
+	cooldownActivs   int
+	wsByDC           map[int]int
+	tcpFallbackByDC  map[int]int
+	errorCounts      map[string]int
 }
 
 type authFailureTracker struct {
 	mu       sync.Mutex
 	count    int
 	lastAddr string
+}
+
+type handshakeFailureTracker struct {
+	mu       sync.Mutex
+	counts   map[string]int
+	lastAddr map[string]string
+}
+
+type connFailureTracker struct {
+	mu       sync.Mutex
+	counts   map[string]int
+	lastAddr map[string]string
+}
+
+type debugEventTracker struct {
+	mu      sync.Mutex
+	counts  map[string]int
+	samples map[string]string
+}
+
+type handshakeError struct {
+	stage string
+	err   error
+}
+
+func (e *handshakeError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *handshakeError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
 }
 
 func NewServer(cfg config.Config, logger *log.Logger) *Server {
@@ -106,9 +157,25 @@ func NewServer(cfg config.Config, logger *log.Logger) *Server {
 		pool:        wsbridge.NewPool(cfg),
 		wsBlacklist: make(map[routeKey]struct{}),
 		wsFailUntil: make(map[routeKey]time.Time),
-		stats:       &runtimeStats{},
-		authFails:   &authFailureTracker{},
-		wsDialFunc:  wsbridge.Dial,
+		stats: &runtimeStats{
+			wsByDC:          make(map[int]int),
+			tcpFallbackByDC: make(map[int]int),
+			errorCounts:     make(map[string]int),
+		},
+		authFails: &authFailureTracker{},
+		hsFails: &handshakeFailureTracker{
+			counts:   make(map[string]int),
+			lastAddr: make(map[string]string),
+		},
+		verboseFails: &connFailureTracker{
+			counts:   make(map[string]int),
+			lastAddr: make(map[string]string),
+		},
+		verboseDebug: &debugEventTracker{
+			counts:  make(map[string]int),
+			samples: make(map[string]string),
+		},
+		wsDialFunc: wsbridge.Dial,
 	}
 	if srv.pool != nil {
 		srv.pool.SetDialFunc(srv.wsDialFunc)
@@ -131,6 +198,11 @@ func (s *Server) Run(ctx context.Context) error {
 	s.startStatsLogger(ctx)
 
 	s.logger.Printf("listening on %s", addr)
+	if s.cfg.Verbose {
+		s.logger.Printf("verbose aggregation window: %s", statsLogEvery)
+		s.logger.Printf("verbose mode: repeated events and errors will be summarized, waiting for traffic...")
+		s.logger.Printf("stats legend:\n  hs_wait       waiting for SOCKS5 handshake\n  hs_eof        client closed before SOCKS5 greeting\n  hs_badver     invalid SOCKS version byte\n  hs_other      other handshake failures\n  conn          successful SOCKS5 handshakes\n  ws            websocket routes\n  tcp_fb        tcp fallbacks\n  passthrough   direct passthrough routes\n  http_reject   telegram http transport fallbacks\n  ws_err        websocket dial/bridge errors\n  pool_hit      websocket pool hits\n  pool_miss     websocket pool misses\n  blacklist_hit websocket blacklist hits\n  cooldown_set  websocket cooldown activations")
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -157,7 +229,9 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	clientAddr := remoteAddr(conn)
 
+	s.stats.incHandshakeWait()
 	req, err := handshake(conn, s.cfg)
+	s.stats.decHandshakeWait()
 	if err != nil {
 		s.logHandshakeFailure(clientAddr, err)
 		return
@@ -194,7 +268,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			return
 		}
 		if err := s.proxyTCP(ctx, conn, req.DstHost, req.DstPort); err != nil && !errors.Is(err, io.EOF) {
-			s.logger.Printf("[%s] passthrough failed: %v", clientAddr, err)
+			s.stats.recordError("passthrough", err)
+			s.recordVerboseConnFailure(clientAddr, "passthrough", err)
 		}
 		return
 	}
@@ -212,16 +287,19 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			s.debugf("[%s] route=passthrough reason=probe-read-failed destination=%s:%d err=%v", clientAddr, req.DstHost, req.DstPort, err)
 			if n == 0 {
 				if ptErr := s.proxyTCP(ctx, conn, req.DstHost, req.DstPort); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-					s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+					s.stats.recordError("passthrough", ptErr)
+					s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
 				}
 				return
 			}
 			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init[:n]); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-				s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+				s.stats.recordError("passthrough", ptErr)
+				s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
 			}
 			return
 		}
-		s.logger.Printf("[%s] failed to read mtproto init: %v", clientAddr, err)
+		s.stats.recordError("mtproto_init", err)
+		s.recordVerboseConnFailure(clientAddr, "mtproto_init", err)
 		return
 	}
 
@@ -231,7 +309,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			s.stats.incPassthrough()
 			s.debugf("[%s] route=passthrough reason=mtproto-probe-miss destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
 			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-				s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+				s.stats.recordError("passthrough", ptErr)
+				s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
 			}
 			return
 		}
@@ -245,21 +324,24 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			s.stats.incPassthrough()
 			s.debugf("[%s] route=passthrough reason=http-probe destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
 			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-				s.logger.Printf("[%s] passthrough failed: %v", clientAddr, ptErr)
+				s.stats.recordError("passthrough", ptErr)
+				s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
 			}
 			return
 		}
 		s.stats.incTCPFallback()
+		s.stats.recordTCPFallbackRoute(0, false)
 		s.debugf("[%s] route=tcp-fallback reason=http-transport destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
 		if err := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
-			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
+			s.stats.recordError("tcp_fb", err)
+			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
 		}
 		return
 	}
 
 	info, err := mtproto.ParseInit(init)
 	if err != nil && !errors.Is(err, mtproto.ErrInvalidProto) {
-		s.logger.Printf("[%s] mtproto init parse failed: %v", clientAddr, err)
+		s.recordVerboseConnFailure(clientAddr, "mtproto_parse", err)
 	}
 
 	dc := info.DC
@@ -299,9 +381,11 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	targetIP, ok := s.cfg.DCIPs[effectiveDC]
 	if !ok || targetIP == "" {
 		s.stats.incTCPFallback()
+		s.stats.recordTCPFallbackRoute(effectiveDC, isMedia)
 		s.debugf("[%s] route=tcp-fallback reason=no-dc-override dc=%d effective_dc=%d destination=%s:%d", clientAddr, dc, effectiveDC, req.DstHost, req.DstPort)
 		if err := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
-			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
+			s.stats.recordError("tcp_fb", err)
+			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
 		}
 		return
 	}
@@ -315,25 +399,31 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	wsDomainDC := s.wsDomainDC(effectiveDC)
 	if !isWSEnabledDC(wsDomainDC) {
 		s.stats.incTCPFallback()
+		s.stats.recordTCPFallbackRoute(effectiveDC, isMedia)
 		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d ws_dc=%d target=%s", clientAddr, dc, effectiveDC, wsDomainDC, targetIP)
 		if err := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
-			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, err)
+			s.stats.recordError("tcp_fb", err)
+			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
 		}
 		return
 	}
 
 	ws, err := s.connectWS(ctx, targetIP, effectiveDC, isMedia)
 	if err != nil {
-		s.logger.Printf("[%s] ws connect failed for DC%d via %s: %v", clientAddr, effectiveDC, targetIP, err)
+		s.stats.recordError("ws_connect", err)
+		s.recordVerboseConnFailure(clientAddr, "ws_connect", err)
 		s.stats.incTCPFallback()
+		s.stats.recordTCPFallbackRoute(effectiveDC, isMedia)
 		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d effective_dc=%d target=%s", clientAddr, fallbackReason(err), dc, effectiveDC, targetIP)
 		if fbErr := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); fbErr != nil && !errors.Is(fbErr, io.EOF) {
-			s.logger.Printf("[%s] tcp fallback failed: %v", clientAddr, fbErr)
+			s.stats.recordError("tcp_fb", fbErr)
+			s.recordVerboseConnFailure(clientAddr, "tcp_fb", fbErr)
 		}
 		return
 	}
 	defer ws.Close()
 	s.stats.incWSConnections()
+	s.stats.recordWSRoute(effectiveDC, isMedia)
 	s.debugf("[%s] route=websocket dc=%d effective_dc=%d ws_dc=%d media=%v target=%s", clientAddr, dc, effectiveDC, wsDomainDC, isMedia, targetIP)
 
 	var splitter *mtproto.Splitter
@@ -345,7 +435,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	if err := wsbridge.Bridge(ctx, conn, ws, init, splitter); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, context.Canceled) {
-		s.logger.Printf("[%s] ws bridge ended with error: %v", clientAddr, err)
+		s.stats.recordError("ws_bridge", err)
+		s.recordVerboseConnFailure(clientAddr, "ws_bridge", err)
 		return
 	}
 	s.debugf("[%s] connection finished", clientAddr)
@@ -490,70 +581,70 @@ func handshake(conn net.Conn, cfg config.Config) (request, error) {
 	buf := make([]byte, 262)
 
 	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
-		return req, err
+		return req, &handshakeError{stage: "greeting", err: err}
 	}
 	if buf[0] != 0x05 {
-		return req, errors.New("unsupported socks version")
+		return req, &handshakeError{stage: "greeting", err: errors.New("unsupported socks version")}
 	}
 
 	nMethods := int(buf[1])
 	if nMethods == 0 {
-		return req, errors.New("no auth methods provided")
+		return req, &handshakeError{stage: "greeting", err: errors.New("no auth methods provided")}
 	}
 	if _, err := io.ReadFull(conn, buf[:nMethods]); err != nil {
-		return req, err
+		return req, &handshakeError{stage: "greeting", err: err}
 	}
 	method, err := negotiateAuthMethod(buf[:nMethods], cfg)
 	if err != nil {
 		_, _ = conn.Write([]byte{0x05, 0xff})
-		return req, err
+		return req, &handshakeError{stage: "greeting", err: err}
 	}
 	if _, err := conn.Write([]byte{0x05, method}); err != nil {
-		return req, err
+		return req, &handshakeError{stage: "greeting", err: err}
 	}
 	if method == socksAuthUserPass {
 		if err := authenticateUserPass(conn, cfg.Username, cfg.Password); err != nil {
-			return req, err
+			return req, &handshakeError{stage: "auth", err: err}
 		}
 	}
 
 	if _, err := io.ReadFull(conn, buf[:4]); err != nil {
-		return req, err
+		return req, &handshakeError{stage: "request", err: err}
 	}
 	if buf[0] != 0x05 {
-		return req, errors.New("unsupported socks version")
+		return req, &handshakeError{stage: "request", err: errors.New("unsupported socks version")}
 	}
 	req.Cmd = buf[1]
 	if req.Cmd != socksCmdConnect && req.Cmd != socksCmdUDPAssociate {
-		return req, errors.New("only connect and udp associate are supported")
+		return req, &handshakeError{stage: "request", err: errors.New("only connect and udp associate are supported")}
 	}
 
 	switch buf[3] {
 	case 0x01:
 		if _, err := io.ReadFull(conn, buf[:4]); err != nil {
-			return req, err
+			return req, &handshakeError{stage: "request", err: err}
 		}
 		req.DstHost = net.IP(buf[:4]).String()
 	case 0x03:
 		if _, err := io.ReadFull(conn, buf[:1]); err != nil {
-			return req, err
+			return req, &handshakeError{stage: "request", err: err}
 		}
 		size := int(buf[0])
 		if _, err := io.ReadFull(conn, buf[:size]); err != nil {
-			return req, err
+			return req, &handshakeError{stage: "request", err: err}
 		}
 		req.DstHost = string(buf[:size])
 	case 0x04:
 		if _, err := io.ReadFull(conn, buf[:16]); err != nil {
-			return req, err
+			return req, &handshakeError{stage: "request", err: err}
 		}
 		req.DstHost = net.IP(buf[:16]).String()
 	default:
-		return req, errors.New("address type not supported")
+		return req, &handshakeError{stage: "request", err: errors.New("address type not supported")}
 	}
 
 	if _, err := io.ReadFull(conn, buf[:2]); err != nil {
-		return req, err
+		return req, &handshakeError{stage: "request", err: err}
 	}
 	req.DstPort = int(binary.BigEndian.Uint16(buf[:2]))
 	return req, nil
@@ -747,7 +838,7 @@ func (s *Server) debugf(format string, args ...any) {
 	if !s.cfg.Verbose {
 		return
 	}
-	s.logger.Printf(format, args...)
+	s.recordVerboseDebug(fmt.Sprintf(format, args...))
 }
 
 func remoteAddr(conn net.Conn) string {
@@ -1000,11 +1091,17 @@ func (s *Server) startStatsLogger(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				s.flushAuthFailureSummary()
-				s.logger.Printf("stats: %s blacklist=%d cooldown=%d", s.stats.summary(), s.blacklistSize(), s.cooldownSize())
+				s.flushHandshakeFailureSummary()
+				s.flushVerboseConnFailureSummary()
+				s.flushVerboseDebugSummary()
+				s.logger.Printf("%s", s.stats.summaryBlock(s.blacklistSize(), s.cooldownSize()))
 				return
 			case <-ticker.C:
 				s.flushAuthFailureSummary()
-				s.logger.Printf("stats: %s blacklist=%d cooldown=%d", s.stats.summary(), s.blacklistSize(), s.cooldownSize())
+				s.flushHandshakeFailureSummary()
+				s.flushVerboseConnFailureSummary()
+				s.flushVerboseDebugSummary()
+				s.logger.Printf("%s", s.stats.summaryBlock(s.blacklistSize(), s.cooldownSize()))
 			}
 		}
 	}()
@@ -1016,6 +1113,10 @@ func (s *Server) logHandshakeFailure(clientAddr string, err error) {
 	}
 	if err.Error() == errInvalidUsernamePassword && !s.cfg.Verbose {
 		s.recordAuthFailure(clientAddr)
+		return
+	}
+	if !s.cfg.Verbose {
+		s.recordHandshakeFailure(clientAddr, err)
 		return
 	}
 	s.logger.Printf("[%s] handshake failed: %v", clientAddr, err)
@@ -1049,6 +1150,213 @@ func (s *Server) flushAuthFailureSummary() {
 	}
 
 	s.logger.Printf("auth failures summary: %s x%d in %s last_source=%s", errInvalidUsernamePassword, count, statsLogEvery, lastAddr)
+}
+
+func classifyHandshakeFailure(err error) string {
+	var hsErr *handshakeError
+	if errors.As(err, &hsErr) {
+		switch {
+		case errors.Is(hsErr.err, io.EOF), errors.Is(hsErr.err, io.ErrUnexpectedEOF):
+			switch hsErr.stage {
+			case "greeting":
+				return "closed_before_greeting"
+			case "request":
+				return "closed_before_request"
+			default:
+				return "closed_during_auth"
+			}
+		case hsErr.err != nil && hsErr.err.Error() == "unsupported socks version":
+			return "invalid_version"
+		}
+	}
+	return "other"
+}
+
+func (s *Server) recordHandshakeFailure(clientAddr string, err error) {
+	if s.hsFails == nil {
+		s.logger.Printf("[%s] handshake failed: %v", clientAddr, err)
+		return
+	}
+	reason := classifyHandshakeFailure(err)
+	s.hsFails.mu.Lock()
+	s.hsFails.counts[reason]++
+	s.hsFails.lastAddr[reason] = clientAddr
+	s.hsFails.mu.Unlock()
+
+	switch reason {
+	case "closed_before_greeting":
+		s.stats.incHandshakeEOF()
+	case "invalid_version":
+		s.stats.incHandshakeBadVersion()
+	default:
+		s.stats.incHandshakeOther()
+	}
+}
+
+func (s *Server) flushHandshakeFailureSummary() {
+	if s.cfg.Verbose || s.hsFails == nil {
+		return
+	}
+
+	s.hsFails.mu.Lock()
+	counts := make(map[string]int, len(s.hsFails.counts))
+	lastAddrs := make(map[string]string, len(s.hsFails.lastAddr))
+	for reason, count := range s.hsFails.counts {
+		counts[reason] = count
+	}
+	for reason, addr := range s.hsFails.lastAddr {
+		lastAddrs[reason] = addr
+	}
+	s.hsFails.counts = make(map[string]int)
+	s.hsFails.lastAddr = make(map[string]string)
+	s.hsFails.mu.Unlock()
+
+	order := []string{"closed_before_greeting", "closed_before_request", "closed_during_auth", "invalid_version", "other"}
+	parts := make([]string, 0, len(order))
+	lastSource := ""
+	for _, reason := range order {
+		count := counts[reason]
+		if count == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s x%d", reason, count))
+		if lastSource == "" {
+			lastSource = lastAddrs[reason]
+		}
+	}
+	if len(parts) == 0 {
+		return
+	}
+	s.logger.Printf("handshake failures summary: %s in %s last_source=%s", strings.Join(parts, ", "), statsLogEvery, lastSource)
+}
+
+func (s *Server) recordVerboseConnFailure(clientAddr, prefix string, err error) {
+	if !s.cfg.Verbose || s.verboseFails == nil {
+		return
+	}
+	key := classifyRuntimeError(prefix, err)
+	s.verboseFails.mu.Lock()
+	s.verboseFails.counts[key]++
+	s.verboseFails.lastAddr[key] = clientAddr
+	s.verboseFails.mu.Unlock()
+}
+
+func (s *Server) flushVerboseConnFailureSummary() {
+	if !s.cfg.Verbose || s.verboseFails == nil {
+		return
+	}
+
+	s.verboseFails.mu.Lock()
+	counts := make(map[string]int, len(s.verboseFails.counts))
+	lastAddrs := make(map[string]string, len(s.verboseFails.lastAddr))
+	for key, count := range s.verboseFails.counts {
+		counts[key] = count
+	}
+	for key, addr := range s.verboseFails.lastAddr {
+		lastAddrs[key] = addr
+	}
+	s.verboseFails.counts = make(map[string]int)
+	s.verboseFails.lastAddr = make(map[string]string)
+	s.verboseFails.mu.Unlock()
+
+	type item struct {
+		key   string
+		count int
+	}
+	items := make([]item, 0, len(counts))
+	for key, count := range counts {
+		if count > 0 {
+			items = append(items, item{key: key, count: count})
+		}
+	}
+	if len(items) == 0 {
+		return
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].key < items[j].key
+	})
+	if len(items) > 6 {
+		items = items[:6]
+	}
+
+	for _, item := range items {
+		s.logger.Printf("%s x%d in %s last_source=%s", item.key, item.count, statsLogEvery, lastAddrs[item.key])
+	}
+}
+
+func normalizeVerboseMessage(msg string) string {
+	if strings.HasPrefix(msg, "[") {
+		if idx := strings.Index(msg, "] "); idx >= 0 {
+			msg = msg[idx+2:]
+		}
+	}
+	if strings.HasPrefix(msg, "accepted connection from ") {
+		return "accepted connection from <client>"
+	}
+	return msg
+}
+
+func (s *Server) recordVerboseDebug(msg string) {
+	if !s.cfg.Verbose || s.verboseDebug == nil || msg == "" {
+		return
+	}
+	key := normalizeVerboseMessage(msg)
+	s.verboseDebug.mu.Lock()
+	s.verboseDebug.counts[key]++
+	if _, ok := s.verboseDebug.samples[key]; !ok {
+		s.verboseDebug.samples[key] = msg
+	}
+	s.verboseDebug.mu.Unlock()
+}
+
+func (s *Server) flushVerboseDebugSummary() {
+	if !s.cfg.Verbose || s.verboseDebug == nil {
+		return
+	}
+
+	s.verboseDebug.mu.Lock()
+	counts := make(map[string]int, len(s.verboseDebug.counts))
+	samples := make(map[string]string, len(s.verboseDebug.samples))
+	for key, count := range s.verboseDebug.counts {
+		counts[key] = count
+	}
+	for key, sample := range s.verboseDebug.samples {
+		samples[key] = sample
+	}
+	s.verboseDebug.counts = make(map[string]int)
+	s.verboseDebug.samples = make(map[string]string)
+	s.verboseDebug.mu.Unlock()
+
+	type item struct {
+		key    string
+		count  int
+		sample string
+	}
+	items := make([]item, 0, len(counts))
+	for key, count := range counts {
+		if count > 0 {
+			items = append(items, item{key: key, count: count, sample: samples[key]})
+		}
+	}
+	if len(items) == 0 {
+		return
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].key < items[j].key
+	})
+	if len(items) > 12 {
+		items = items[:12]
+	}
+
+	for _, item := range items {
+		s.logger.Printf("%s x%d in %s", item.key, item.count, statsLogEvery)
+	}
 }
 
 func (s *Server) isBlacklisted(key routeKey) bool {
@@ -1121,6 +1429,17 @@ func fallbackReason(err error) string {
 	return "ws-connect-failed"
 }
 
+func (s *runtimeStats) incHandshakeWait() { s.add(func() { s.handshakeWait++ }) }
+func (s *runtimeStats) decHandshakeWait() {
+	s.add(func() {
+		if s.handshakeWait > 0 {
+			s.handshakeWait--
+		}
+	})
+}
+func (s *runtimeStats) incHandshakeEOF()        { s.add(func() { s.handshakeEOF++ }) }
+func (s *runtimeStats) incHandshakeBadVersion() { s.add(func() { s.handshakeBadVer++ }) }
+func (s *runtimeStats) incHandshakeOther()      { s.add(func() { s.handshakeOther++ }) }
 func (s *runtimeStats) incConnections()         { s.add(func() { s.connections++ }) }
 func (s *runtimeStats) incWSConnections()       { s.add(func() { s.wsConnections++ }) }
 func (s *runtimeStats) incTCPFallback()         { s.add(func() { s.tcpFallbacks++ }) }
@@ -1131,6 +1450,65 @@ func (s *runtimeStats) incPoolHit()             { s.add(func() { s.poolHits++ })
 func (s *runtimeStats) incPoolMiss()            { s.add(func() { s.poolMisses++ }) }
 func (s *runtimeStats) incBlacklistHits()       { s.add(func() { s.blacklistHits++ }) }
 func (s *runtimeStats) incCooldownActivations() { s.add(func() { s.cooldownActivs++ }) }
+
+func (s *runtimeStats) recordWSRoute(dc int, isMedia bool) {
+	s.add(func() {
+		if isMedia {
+			s.wsMedia++
+		}
+		if s.wsByDC == nil {
+			s.wsByDC = make(map[int]int)
+		}
+		s.wsByDC[dc]++
+	})
+}
+
+func (s *runtimeStats) recordTCPFallbackRoute(dc int, isMedia bool) {
+	s.add(func() {
+		if isMedia {
+			s.tcpFallbackMedia++
+		}
+		if s.tcpFallbackByDC == nil {
+			s.tcpFallbackByDC = make(map[int]int)
+		}
+		s.tcpFallbackByDC[dc]++
+	})
+}
+
+func classifyRuntimeError(prefix string, err error) string {
+	if err == nil {
+		return prefix + "_other"
+	}
+	if errors.Is(err, context.Canceled) {
+		return prefix + "_canceled"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return prefix + "_timeout"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "i/o timeout"):
+		return prefix + "_timeout"
+	case strings.Contains(msg, "no route to host"):
+		return prefix + "_no_route"
+	case strings.Contains(msg, "connection reset by peer"):
+		return prefix + "_reset"
+	case strings.Contains(msg, "EOF"):
+		return prefix + "_eof"
+	default:
+		return prefix + "_other"
+	}
+}
+
+func (s *runtimeStats) recordError(prefix string, err error) {
+	s.add(func() {
+		if s.errorCounts == nil {
+			s.errorCounts = make(map[string]int)
+		}
+		s.errorCounts[classifyRuntimeError(prefix, err)]++
+	})
+}
 
 func (s *runtimeStats) add(fn func()) {
 	if s == nil {
@@ -1149,7 +1527,11 @@ func (s *runtimeStats) summary() string {
 	defer s.mu.Unlock()
 
 	return fmt.Sprintf(
-		"conn=%d ws=%d tcp_fb=%d passthrough=%d http_reject=%d ws_err=%d pool_hit=%d pool_miss=%d blacklist_hit=%d cooldown_set=%d",
+		"hs_wait=%d hs_eof=%d hs_badver=%d hs_other=%d conn=%d ws=%d tcp_fb=%d passthrough=%d http_reject=%d ws_err=%d pool_hit=%d pool_miss=%d blacklist_hit=%d cooldown_set=%d",
+		s.handshakeWait,
+		s.handshakeEOF,
+		s.handshakeBadVer,
+		s.handshakeOther,
 		s.connections,
 		s.wsConnections,
 		s.tcpFallbacks,
@@ -1161,4 +1543,170 @@ func (s *runtimeStats) summary() string {
 		s.blacklistHits,
 		s.cooldownActivs,
 	)
+}
+
+func (s *runtimeStats) summaryBlock(blacklist, cooldown int) string {
+	if s == nil {
+		return "stats: disabled"
+	}
+
+	s.mu.Lock()
+	hsWait := s.handshakeWait
+	hsEOF := s.handshakeEOF
+	hsBadVer := s.handshakeBadVer
+	hsOther := s.handshakeOther
+	connections := s.connections
+	wsConnections := s.wsConnections
+	wsMedia := s.wsMedia
+	tcpFallbacks := s.tcpFallbacks
+	tcpFallbackMedia := s.tcpFallbackMedia
+	passthrough := s.passthrough
+	httpRejected := s.httpRejected
+	wsErrors := s.wsErrors
+	poolHits := s.poolHits
+	poolMisses := s.poolMisses
+	blacklistHits := s.blacklistHits
+	cooldownActivs := s.cooldownActivs
+	wsByDC := make(map[int]int, len(s.wsByDC))
+	for dc, count := range s.wsByDC {
+		wsByDC[dc] = count
+	}
+	fbByDC := make(map[int]int, len(s.tcpFallbackByDC))
+	for dc, count := range s.tcpFallbackByDC {
+		fbByDC[dc] = count
+	}
+	errorCounts := make(map[string]int, len(s.errorCounts))
+	for key, count := range s.errorCounts {
+		errorCounts[key] = count
+	}
+	s.mu.Unlock()
+
+	lines := []string{
+		"stats:",
+		fmt.Sprintf("  handshake  wait=%d eof=%d badver=%d other=%d", hsWait, hsEOF, hsBadVer, hsOther),
+		fmt.Sprintf("  routes     conn=%d ws=%d tcp_fb=%d passthrough=%d http_reject=%d", connections, wsConnections, tcpFallbacks, passthrough, httpRejected),
+		fmt.Sprintf("  media      ws=%d tcp_fb=%d", wsMedia, tcpFallbackMedia),
+	}
+
+	if dcLine := summarizeDCBreakdown(wsByDC, fbByDC); dcLine != "" {
+		lines = append(lines, "  dc         "+dcLine)
+	}
+	if probeLine := summarizeProbeCounts(errorCounts); probeLine != "" {
+		lines = append(lines, "  probe      "+probeLine)
+	}
+	if errorLine := summarizeErrorCounts(errorCounts); errorLine != "" {
+		lines = append(lines, "  errors     "+errorLine)
+	}
+	lines = append(lines, fmt.Sprintf("  state      ws_err=%d pool_hit=%d pool_miss=%d blacklist_hit=%d cooldown_set=%d blacklist=%d cooldown=%d", wsErrors, poolHits, poolMisses, blacklistHits, cooldownActivs, blacklist, cooldown))
+	return strings.Join(lines, "\n")
+}
+
+func summarizeDCBreakdown(wsByDC, fbByDC map[int]int) string {
+	parts := make([]string, 0, 2)
+	if s := summarizeDCMap("ws", wsByDC); s != "" {
+		parts = append(parts, s)
+	}
+	if s := summarizeDCMap("tcp_fb", fbByDC); s != "" {
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " ")
+}
+
+func summarizeDCMap(label string, counts map[int]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	dcs := make([]int, 0, len(counts))
+	for dc, count := range counts {
+		if count > 0 {
+			dcs = append(dcs, dc)
+		}
+	}
+	if len(dcs) == 0 {
+		return ""
+	}
+	sort.Ints(dcs)
+	parts := make([]string, 0, len(dcs))
+	for _, dc := range dcs {
+		parts = append(parts, fmt.Sprintf("%d=%d", dc, counts[dc]))
+	}
+	return fmt.Sprintf("%s{%s}", label, strings.Join(parts, ", "))
+}
+
+func summarizeErrorCounts(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	type item struct {
+		key   string
+		count int
+	}
+	items := make([]item, 0, len(counts))
+	for key, count := range counts {
+		if count > 0 {
+			items = append(items, item{key: key, count: count})
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].key < items[j].key
+	})
+	if len(items) > 4 {
+		items = items[:4]
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, fmt.Sprintf("%s=%d", item.key, item.count))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func summarizeProbeCounts(counts map[string]int) string {
+	parts := make([]string, 0, 2)
+	if s := summarizePrefixedCounts("mtproto_init", "init", counts); s != "" {
+		parts = append(parts, s)
+	}
+	if s := summarizePrefixedCounts("passthrough", "passthrough", counts); s != "" {
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " ")
+}
+
+func summarizePrefixedCounts(prefix, label string, counts map[string]int) string {
+	filtered := make(map[string]int)
+	for key, count := range counts {
+		if count <= 0 || !strings.HasPrefix(key, prefix+"_") {
+			continue
+		}
+		filtered[strings.TrimPrefix(key, prefix+"_")] = count
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+
+	type item struct {
+		key   string
+		count int
+	}
+	items := make([]item, 0, len(filtered))
+	for key, count := range filtered {
+		items = append(items, item{key: key, count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].count != items[j].count {
+			return items[i].count > items[j].count
+		}
+		return items[i].key < items[j].key
+	})
+	if len(items) > 3 {
+		items = items[:3]
+	}
+
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, fmt.Sprintf("%s=%d", item.key, item.count))
+	}
+	return fmt.Sprintf("%s{%s}", label, strings.Join(parts, ", "))
 }
