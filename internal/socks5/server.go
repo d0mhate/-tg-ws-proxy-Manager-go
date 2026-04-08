@@ -3,6 +3,7 @@ package socks5
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -132,8 +133,9 @@ type debugEventTracker struct {
 }
 
 type handshakeError struct {
-	stage string
-	err   error
+	stage      string
+	err        error
+	firstBytes []byte
 }
 
 func (e *handshakeError) Error() string {
@@ -584,12 +586,12 @@ func handshake(conn net.Conn, cfg config.Config) (request, error) {
 		return req, &handshakeError{stage: "greeting", err: err}
 	}
 	if buf[0] != 0x05 {
-		return req, &handshakeError{stage: "greeting", err: errors.New("unsupported socks version")}
+		return req, &handshakeError{stage: "greeting", err: errors.New("unsupported socks version"), firstBytes: append([]byte(nil), buf[:2]...)}
 	}
 
 	nMethods := int(buf[1])
 	if nMethods == 0 {
-		return req, &handshakeError{stage: "greeting", err: errors.New("no auth methods provided")}
+		return req, &handshakeError{stage: "greeting", err: errors.New("no auth methods provided"), firstBytes: append([]byte(nil), buf[:2]...)}
 	}
 	if _, err := io.ReadFull(conn, buf[:nMethods]); err != nil {
 		return req, &handshakeError{stage: "greeting", err: err}
@@ -1117,6 +1119,11 @@ func (s *Server) logHandshakeFailure(clientAddr string, err error) {
 	}
 	if !s.cfg.Verbose {
 		s.recordHandshakeFailure(clientAddr, err)
+		return
+	}
+	var hsErr *handshakeError
+	if errors.As(err, &hsErr) && len(hsErr.firstBytes) > 0 {
+		s.logger.Printf("[%s] handshake failed: %v first_bytes=%s", clientAddr, err, hex.EncodeToString(hsErr.firstBytes))
 		return
 	}
 	s.logger.Printf("[%s] handshake failed: %v", clientAddr, err)
