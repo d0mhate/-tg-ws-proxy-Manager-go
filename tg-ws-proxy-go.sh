@@ -1,89 +1,13 @@
 #!/bin/sh
 
+
 set -u
 
-if [ -t 1 ]; then
-    C_RESET="$(printf '\033[0m')"
-    C_BOLD="$(printf '\033[1m')"
-    C_GREEN="$(printf '\033[1;32m')"
-    C_YELLOW="$(printf '\033[1;33m')"
-    C_RED="$(printf '\033[1;31m')"
-    C_CYAN="$(printf '\033[1;36m')"
-    C_BLUE="$(printf '\033[0;34m')"
-    C_DIM="$(printf '\033[38;5;244m')"
-else
-    C_RESET=""
-    C_BOLD=""
-    C_GREEN=""
-    C_YELLOW=""
-    C_RED=""
-    C_CYAN=""
-    C_BLUE=""
-    C_DIM=""
-fi
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$SCRIPT_DIR/lib/colors.sh"
+. "$SCRIPT_DIR/lib/globals.sh"
+. "$SCRIPT_DIR/lib/utils.sh"
 
-APP_NAME="tg-ws-proxy"
-LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
-REPO_OWNER="${REPO_OWNER:-d0mhate}"
-REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
-DEFAULT_BINARY_NAME="${DEFAULT_BINARY_NAME:-tg-ws-proxy-openwrt}"
-BINARY_NAME="${BINARY_NAME:-}"
-LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
-LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
-VERBOSE_FROM_ENV="${VERBOSE+x}"
-SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
-SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
-DC_IPS_FROM_ENV="${DC_IPS+x}"
-UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
-PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
-OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
-RELEASE_DOWNLOAD_BASE_URL="${RELEASE_DOWNLOAD_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/latest/download}"
-RELEASE_URL="${RELEASE_URL:-}"
-RELEASE_API_URL="${RELEASE_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest}"
-RELEASES_API_URL="${RELEASES_API_URL:-https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases?per_page=10}"
-SCRIPT_RELEASE_BASE_URL="${SCRIPT_RELEASE_BASE_URL:-https://github.com/$REPO_OWNER/$REPO_NAME/releases/download}"
-PREVIEW_BRANCH_NAME="${PREVIEW_BRANCH_NAME:-preview}"
-PREVIEW_BASE_URL="${PREVIEW_BASE_URL:-https://raw.githubusercontent.com/$REPO_OWNER/$REPO_NAME/$PREVIEW_BRANCH_NAME/branches}"
-RELEASE_TAG="${RELEASE_TAG:-}"
-MIN_PINNED_RELEASE_TAG="${MIN_PINNED_RELEASE_TAG:-v1.1.29}"
-FORCE_ARROW_UPDATE_SOURCE_PICKER="${FORCE_ARROW_UPDATE_SOURCE_PICKER:-}"
-FORCE_NUMBERED_UPDATE_SOURCE_PICKER="${FORCE_NUMBERED_UPDATE_SOURCE_PICKER:-}"
-SOURCE_BIN="${SOURCE_BIN:-/tmp/tg-ws-proxy-openwrt}"
-SOURCE_VERSION_FILE="${SOURCE_VERSION_FILE:-$SOURCE_BIN.version}"
-SOURCE_MANAGER_SCRIPT="${SOURCE_MANAGER_SCRIPT:-$SOURCE_BIN.manager}"
-INSTALL_DIR="${INSTALL_DIR:-/tmp/tg-ws-proxy-go}"
-BIN_PATH="${BIN_PATH:-$INSTALL_DIR/tg-ws-proxy}"
-VERSION_FILE="${VERSION_FILE:-$INSTALL_DIR/version}"
-PERSIST_STATE_DIR="${PERSIST_STATE_DIR:-/etc/tg-ws-proxy-go}"
-PERSIST_PATH_FILE="${PERSIST_PATH_FILE:-$PERSIST_STATE_DIR/install_dir}"
-PERSIST_VERSION_FILE="${PERSIST_VERSION_FILE:-$PERSIST_STATE_DIR/version}"
-PERSIST_CONFIG_FILE="${PERSIST_CONFIG_FILE:-$PERSIST_STATE_DIR/autostart.conf}"
-PERSIST_RELEASE_TAG_FILE="${PERSIST_RELEASE_TAG_FILE:-$PERSIST_STATE_DIR/release_tag}"
-PERSIST_UPDATE_CHANNEL_FILE="${PERSIST_UPDATE_CHANNEL_FILE:-$PERSIST_STATE_DIR/update_channel}"
-PERSIST_PREVIEW_BRANCH_FILE="${PERSIST_PREVIEW_BRANCH_FILE:-$PERSIST_STATE_DIR/preview_branch}"
-INIT_SCRIPT_PATH="${INIT_SCRIPT_PATH:-/etc/init.d/tg-ws-proxy-go}"
-PERSIST_MANAGER_NAME="${PERSIST_MANAGER_NAME:-tg-ws-proxy-go.sh}"
-PERSISTENT_DIR_CANDIDATES="${PERSISTENT_DIR_CANDIDATES:-/root/tg-ws-proxy-go /opt/tg-ws-proxy-go /etc/tg-ws-proxy-go}"
-RC_COMMON_PATH="${RC_COMMON_PATH:-/etc/rc.common}"
-RC_D_DIR="${RC_D_DIR:-/etc/rc.d}"
-PROC_ROOT="${PROC_ROOT:-/proc}"
-LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
-LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
-LISTEN_PORT="${LISTEN_PORT:-1080}"
-VERBOSE="${VERBOSE:-0}"
-SOCKS_USERNAME="${SOCKS_USERNAME:-}"
-SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
-DC_IPS="${DC_IPS:-}"
-UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
-PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
-REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
-PERSISTENT_SPACE_HEADROOM_KB="${PERSISTENT_SPACE_HEADROOM_KB:-2048}"
-PID_FILE="${PID_FILE:-$INSTALL_DIR/pid}"
-COMMAND_MODE="0"
-
-if [ "$#" -gt 0 ]; then
-    COMMAND_MODE="1"
-fi
 
 lan_ip() {
     uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1
@@ -169,30 +93,6 @@ resolved_release_url() {
     printf "%s/%s" "$RELEASE_DOWNLOAD_BASE_URL" "$(resolved_binary_name)"
 }
 
-tmp_available_kb() {
-    df -k /tmp 2>/dev/null | awk 'NR==2 {print $4+0}'
-}
-
-closest_existing_path() {
-    path="$1"
-
-    while [ -n "$path" ] && [ "$path" != "/" ] && [ ! -e "$path" ]; do
-        path="$(dirname "$path")"
-    done
-
-    if [ -z "$path" ]; then
-        printf "/"
-        return 0
-    fi
-
-    printf "%s" "$path"
-}
-
-path_available_kb() {
-    path="$(closest_existing_path "$1")"
-    df -k "$path" 2>/dev/null | awk 'NR==2 {print $4+0}'
-}
-
 source_binary_size_kb() {
     if [ ! -f "$SOURCE_BIN" ]; then
         return 1
@@ -214,14 +114,6 @@ required_persistent_kb() {
         need_kb="$REQUIRED_TMP_KB"
     fi
     printf "%s" "$need_kb"
-}
-
-read_first_line() {
-    file="$1"
-    [ -f "$file" ] || return 1
-    IFS= read -r line < "$file" || return 1
-    [ -n "$line" ] || return 1
-    printf "%s" "$line"
 }
 
 normalize_version() {
@@ -472,14 +364,6 @@ show_invalid_auth_settings() {
     printf "SOCKS_USERNAME and SOCKS_PASSWORD must be both set or both empty.\n"
 }
 
-password_display() {
-    if [ -n "$SOCKS_PASSWORD" ]; then
-        printf "<set>"
-    else
-        printf "<empty>"
-    fi
-}
-
 installed_version() {
     value="$(read_first_line "$VERSION_FILE" 2>/dev/null || true)"
     normalize_version "$value"
@@ -698,27 +582,6 @@ telegram_host() {
             printf "%s" "$LISTEN_HOST"
             ;;
     esac
-}
-
-pause() {
-    if [ "$COMMAND_MODE" = "1" ]; then
-        return 0
-    fi
-    printf "\nPress Enter to continue..."
-    read dummy
-}
-
-canonical_path() {
-    path="$1"
-    readlink -f "$path" 2>/dev/null || printf "%s" "$path"
-}
-
-current_script_path() {
-    if [ -n "${0:-}" ]; then
-        canonical_path "$0"
-        return 0
-    fi
-    return 1
 }
 
 pid_matches_binary() {
