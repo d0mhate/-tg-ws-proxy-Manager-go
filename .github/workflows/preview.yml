@@ -42,6 +42,9 @@ jobs:
           GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-aarch64 ./cmd/tg-ws-proxy
           cp build/tg-ws-proxy-openwrt-mipsel_24kc build/tg-ws-proxy-openwrt
 
+      - name: build standalone manager script
+        run: sh ./scripts/build-manager-standalone.sh build/tg-ws-proxy-go.sh
+
       - name: publish preview artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -82,7 +85,7 @@ jobs:
           cp build/tg-ws-proxy-openwrt-armv7 "$target_dir/"
           cp build/tg-ws-proxy-openwrt-aarch64 "$target_dir/"
           cp build/tg-ws-proxy-openwrt "$target_dir/"
-          cp tg-ws-proxy-go.sh "$target_dir/"
+          cp build/tg-ws-proxy-go.sh "$target_dir/"
 
           cat > "$target_dir/manifest.json" <<EOF
           {

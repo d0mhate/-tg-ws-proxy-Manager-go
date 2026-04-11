@@ -435,11 +435,7 @@ func TestManagerUpdateRefreshesLegacyCurrentScriptPath(t *testing.T) {
 	serverURL := "http://" + listener.Addr().String()
 
 	legacyScript := filepath.Join(t.TempDir(), "legacy", "tg-ws-proxy-go.sh")
-	managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
-	if err != nil {
-		t.Fatalf("read manager script: %v", err)
-	}
-	writeFile(t, legacyScript, string(managerScript), 0o755)
+	copyManagerBundle(t, legacyScript)
 
 	launcherPath := envValue(env, "LAUNCHER_PATH")
 	installDir := envValue(env, "INSTALL_DIR")

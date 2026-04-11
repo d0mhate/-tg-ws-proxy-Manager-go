@@ -52,10 +52,34 @@ install_launcher() {
     printf "%s" "$target"
 }
 
+copy_manager_bundle() {
+    src_script="$1"
+    dest_script="$2"
+    fallback_script="${3:-}"
+
+    mkdir -p "$(dirname "$dest_script")" || return 1
+    cp "$src_script" "$dest_script" || return 1
+    chmod +x "$dest_script" || return 1
+
+    src_lib_dir="$(dirname "$src_script")/lib"
+    if [ ! -d "$src_lib_dir" ] && [ -n "$fallback_script" ]; then
+        fallback_lib_dir="$(dirname "$fallback_script")/lib"
+        if [ -d "$fallback_lib_dir" ]; then
+            src_lib_dir="$fallback_lib_dir"
+        fi
+    fi
+
+    if [ -d "$src_lib_dir" ]; then
+        dest_lib_dir="$(dirname "$dest_script")/lib"
+        rm -rf "$dest_lib_dir"
+        cp -R "$src_lib_dir" "$dest_lib_dir" || return 1
+    fi
+}
+
 copy_current_manager_script() {
-    mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")" || return 1
-    cp "$0" "$SOURCE_MANAGER_SCRIPT" || return 1
-    chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
+    current_script="$(current_script_path 2>/dev/null || true)"
+    [ -n "$current_script" ] || current_script="$0"
+    copy_manager_bundle "$current_script" "$SOURCE_MANAGER_SCRIPT"
 }
 
 refresh_current_manager_script_from_source() {
@@ -71,8 +95,7 @@ refresh_current_manager_script_from_source() {
 
     [ -w "$current_script" ] || return 0
 
-    cp "$SOURCE_MANAGER_SCRIPT" "$current_script" || return 1
-    chmod +x "$current_script" || return 1
+    copy_manager_bundle "$SOURCE_MANAGER_SCRIPT" "$current_script" "$current_script"
 }
 
 ensure_source_manager_current() {
@@ -98,8 +121,8 @@ install_from_source() {
     mkdir -p "$INSTALL_DIR" || return 1
     cp "$SOURCE_BIN" "$BIN_PATH" || return 1
     chmod +x "$BIN_PATH" || return 1
-    cp "$SOURCE_MANAGER_SCRIPT" "$INSTALL_DIR/$PERSIST_MANAGER_NAME" || return 1
-    chmod +x "$INSTALL_DIR/$PERSIST_MANAGER_NAME" || return 1
+    current_script="$(current_script_path 2>/dev/null || true)"
+    copy_manager_bundle "$SOURCE_MANAGER_SCRIPT" "$INSTALL_DIR/$PERSIST_MANAGER_NAME" "$current_script" || return 1
 
     version="$(cached_source_version 2>/dev/null || true)"
     if [ -n "$version" ]; then
@@ -122,8 +145,8 @@ install_persistent_from_source() {
     mkdir -p "$install_dir" || return 1
     cp "$SOURCE_BIN" "$install_dir/tg-ws-proxy" || return 1
     chmod +x "$install_dir/tg-ws-proxy" || return 1
-    cp "$SOURCE_MANAGER_SCRIPT" "$install_dir/$PERSIST_MANAGER_NAME" || return 1
-    chmod +x "$install_dir/$PERSIST_MANAGER_NAME" || return 1
+    current_script="$(current_script_path 2>/dev/null || true)"
+    copy_manager_bundle "$SOURCE_MANAGER_SCRIPT" "$install_dir/$PERSIST_MANAGER_NAME" "$current_script" || return 1
 
     version="$(cached_source_version 2>/dev/null || true)"
     write_persistent_state "$install_dir" "$version" || return 1

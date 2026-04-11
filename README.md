@@ -41,7 +41,7 @@
 Подключитесь по SSH к роутеру и запустите:
 
 ```bash
-wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-proxy-Manager-go/main/tg-ws-proxy-go.sh && sh /tmp/tg-ws-proxy-go.sh
+wget -O /tmp/tg-ws-proxy-go.sh https://github.com/d0mhate/-tg-ws-proxy-Manager-go/releases/latest/download/tg-ws-proxy-go.sh && sh /tmp/tg-ws-proxy-go.sh
 ```
 
 Дальше в меню обычно хватает трёх действий:
@@ -71,7 +71,7 @@ wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-
 Без меню:
 
 ```bash
-wget -O /tmp/tg-ws-proxy-go.sh https://raw.githubusercontent.com/d0mhate/-tg-ws-proxy-Manager-go/main/tg-ws-proxy-go.sh && sh /tmp/tg-ws-proxy-go.sh install && sh /tmp/tg-ws-proxy-go.sh start
+wget -O /tmp/tg-ws-proxy-go.sh https://github.com/d0mhate/-tg-ws-proxy-Manager-go/releases/latest/download/tg-ws-proxy-go.sh && sh /tmp/tg-ws-proxy-go.sh install && sh /tmp/tg-ws-proxy-go.sh start
 ```
 
 Во время `start` прокси работает в foreground, логи идут прямо в терминал, остановка через `Ctrl+C`.

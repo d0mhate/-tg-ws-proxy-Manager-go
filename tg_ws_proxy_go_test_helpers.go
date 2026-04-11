@@ -28,6 +28,32 @@ func readTrimmed(t *testing.T, path string) string {
 	return strings.TrimSpace(string(data))
 }
 
+func copyManagerBundle(t *testing.T, destScript string) {
+	t.Helper()
+
+	managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+	if err != nil {
+		t.Fatalf("read manager script: %v", err)
+	}
+	writeFile(t, destScript, string(managerScript), 0o755)
+
+	entries, err := os.ReadDir("lib")
+	if err != nil {
+		t.Fatalf("read lib dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		srcPath := filepath.Join("lib", entry.Name())
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			t.Fatalf("read %s: %v", srcPath, err)
+		}
+		writeFile(t, filepath.Join(filepath.Dir(destScript), "lib", entry.Name()), string(data), 0o644)
+	}
+}
+
 func managerEnv(t *testing.T) []string {
 	t.Helper()
 
@@ -56,12 +82,8 @@ func managerEnv(t *testing.T) []string {
 	writeFile(t, releasesAPI, "[{\"tag_name\":\"v1.1.30\"},{\"tag_name\":\"v1.1.29\"},{\"tag_name\":\"v1.1.28\"},{\"tag_name\":\"v1.1.27\"},{\"tag_name\":\"v1.1.25\"}]\n", 0o644)
 	writeFile(t, rcCommonPath, "#!/bin/sh\nscript=\"$1\"\ncmd=\"$2\"\nname=\"$(basename \"$script\")\"\nrc_dir=\"${RC_D_DIR:-/etc/rc.d}\"\nmkdir -p \"$rc_dir\"\ncase \"$cmd\" in\nenable)\n  ln -sf \"$script\" \"$rc_dir/S95$name\"\n  ;;\ndisable)\n  rm -f \"$rc_dir\"/*\"$name\"\n  ;;\nstart|restart)\n  marker=\"${FAKE_INIT_START_MARKER:-}\"\n  if [ -n \"$marker\" ]; then\n    mkdir -p \"$(dirname \"$marker\")\"\n    : > \"$marker\"\n  fi\n  ;;\nstop)\n  exit 0\n  ;;\n*)\n  exit 0\n  ;;\nesac\n", 0o755)
 	writeFile(t, openwrtRelease, "DISTRIB_ID='OpenWrt'\nDISTRIB_ARCH='mipsel_24kc'\n", 0o644)
-	managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
-	if err != nil {
-		t.Fatalf("read manager script: %v", err)
-	}
-	writeFile(t, managerScriptPath, string(managerScript), 0o755)
-	writeFile(t, scriptReleasePath, string(managerScript), 0o755)
+	copyManagerBundle(t, managerScriptPath)
+	copyManagerBundle(t, scriptReleasePath)
 
 	env := append([]string{}, os.Environ()...)
 	env = append(env,
