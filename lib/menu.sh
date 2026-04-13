@@ -467,26 +467,36 @@ configure_cf_domain() {
 
 check_cf_endpoint() {
     host="$1"
-    if ! command -v openssl >/dev/null 2>&1; then
-        printf "  %-24s failed            openssl not found\n" "$host"
-        return 1
-    fi
 
-    if command -v timeout >/dev/null 2>&1; then
-        output="$(
-            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
-                timeout 8 openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
-        )"
-    elif command -v perl >/dev/null 2>&1; then
-        output="$(
-            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
-                perl -e 'alarm 8; exec @ARGV' openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
-        )"
+    if command -v openssl >/dev/null 2>&1; then
+        if command -v timeout >/dev/null 2>&1; then
+            output="$(
+                printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                    timeout 8 openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+            )"
+        elif command -v perl >/dev/null 2>&1; then
+            output="$(
+                printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                    perl -e 'alarm 8; exec @ARGV' openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+            )"
+        else
+            output="$(
+                printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                    openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+            )"
+        fi
+    elif command -v curl >/dev/null 2>&1; then
+        output="$(curl -s --max-time 8 --http1.1 \
+            -H "Upgrade: websocket" \
+            -H "Connection: Upgrade" \
+            -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+            -H "Sec-WebSocket-Version: 13" \
+            -H "Sec-WebSocket-Protocol: binary" \
+            -D - -o /dev/null \
+            "https://$host/apiws" 2>/dev/null || true)"
     else
-        output="$(
-            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
-                openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
-        )"
+        printf "  %-24s failed            openssl or curl not found\n" "$host"
+        return 1
     fi
 
     status_line="$(printf "%s\n" "$output" | sed -n '/^HTTP\//{p;q;}')"

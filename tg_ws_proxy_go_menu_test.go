@@ -450,6 +450,41 @@ func TestManagerCheckCFDomainViaAdvancedMenu(t *testing.T) {
 	}
 }
 
+func TestManagerCheckCFDomainViaCurlFallback(t *testing.T) {
+	env := append(managerEnv(t), "CF_DOMAIN=example.com")
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "curl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
+
+	for _, tool := range []string{"sed", "grep", "awk", "timeout", "wc", "date"} {
+		if toolPath, err := exec.LookPath(tool); err == nil {
+			_ = os.Symlink(toolPath, filepath.Join(fakeBinDir, tool))
+		}
+	}
+
+	origPath := envValue(env, "PATH")
+	var filteredDirs []string
+	for _, dir := range filepath.SplitList(origPath) {
+		if _, err := os.Stat(filepath.Join(dir, "openssl")); err == nil {
+			continue
+		}
+		filteredDirs = append(filteredDirs, dir)
+	}
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+strings.Join(filteredDirs, ":"))
+
+	out, err := runManagerMenu(t, env, "5\n12\n\n\n\n")
+	if err != nil {
+		t.Fatalf("check cf domain (curl fallback) failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Checking example.com") ||
+		!strings.Contains(out, "kws1.example.com") ||
+		!strings.Contains(out, "kws203.example.com") ||
+		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") ||
+		!strings.Contains(out, "tcp ok | tls ok | ws upgrade ok") {
+		t.Fatalf("unexpected cf domain check output (curl fallback):\n%s", out)
+	}
+}
+
 func TestManagerAdvancedShowFullStatusViaMenu(t *testing.T) {
 	env := managerEnv(t)
 	binPath := envValue(env, "BIN_PATH")
