@@ -2,6 +2,7 @@
 
 set -u
 
+
 if [ -t 1 ]; then
     C_RESET="$(printf '\033[0m')"
     C_BOLD="$(printf '\033[1m')"
@@ -22,7 +23,12 @@ else
     C_DIM=""
 fi
 
+
+_decode_domain() { printf '%s' "$1" | tr 'a-z' 'uvwxyzabcdefghijklmnopqrst'; }
+_DEFAULT_CF_DOMAIN_ENC="virkgj.iu.aq"
+
 APP_NAME="tg-ws-proxy"
+DEFAULT_CF_DOMAIN="${DEFAULT_CF_DOMAIN:-$(_decode_domain "$_DEFAULT_CF_DOMAIN_ENC")}"
 LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
 REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
@@ -34,6 +40,9 @@ VERBOSE_FROM_ENV="${VERBOSE+x}"
 SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
 SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
 DC_IPS_FROM_ENV="${DC_IPS+x}"
+CF_PROXY_FROM_ENV="${CF_PROXY+x}"
+CF_PROXY_FIRST_FROM_ENV="${CF_PROXY_FIRST+x}"
+CF_DOMAIN_FROM_ENV="${CF_DOMAIN+x}"
 UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
 PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
@@ -74,6 +83,9 @@ VERBOSE="${VERBOSE:-0}"
 SOCKS_USERNAME="${SOCKS_USERNAME:-}"
 SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
 DC_IPS="${DC_IPS:-}"
+CF_PROXY="${CF_PROXY:-0}"
+CF_PROXY_FIRST="${CF_PROXY_FIRST:-0}"
+CF_DOMAIN="${CF_DOMAIN:-$DEFAULT_CF_DOMAIN}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
@@ -84,6 +96,69 @@ COMMAND_MODE="0"
 if [ "$#" -gt 0 ]; then
     COMMAND_MODE="1"
 fi
+
+
+tmp_available_kb() {
+    df -k /tmp 2>/dev/null | awk 'NR==2 {print $4+0}'
+}
+
+closest_existing_path() {
+    path="$1"
+
+    while [ -n "$path" ] && [ "$path" != "/" ] && [ ! -e "$path" ]; do
+        path="$(dirname "$path")"
+    done
+
+    if [ -z "$path" ]; then
+        printf "/"
+        return 0
+    fi
+
+    printf "%s" "$path"
+}
+
+path_available_kb() {
+    path="$(closest_existing_path "$1")"
+    df -k "$path" 2>/dev/null | awk 'NR==2 {print $4+0}'
+}
+
+read_first_line() {
+    file="$1"
+    [ -f "$file" ] || return 1
+    IFS= read -r line < "$file" || return 1
+    [ -n "$line" ] || return 1
+    printf "%s" "$line"
+}
+
+pause() {
+    if [ "$COMMAND_MODE" = "1" ]; then
+        return 0
+    fi
+    printf "\nPress Enter to continue..."
+    read dummy
+}
+
+canonical_path() {
+    path="$1"
+    readlink -f "$path" 2>/dev/null || printf "%s" "$path"
+}
+
+current_script_path() {
+    if [ -n "${0:-}" ]; then
+        canonical_path "$0"
+        return 0
+    fi
+    return 1
+}
+
+password_display() {
+    if [ -n "$SOCKS_PASSWORD" ]; then
+        printf "<set>"
+    else
+        printf "<empty>"
+    fi
+}
+
 
 lan_ip() {
     uci get network.lan.ipaddr 2>/dev/null | cut -d/ -f1
@@ -131,135 +206,30 @@ is_supported_openwrt_arch() {
     return 1
 }
 
-resolved_binary_name() {
-    if [ -n "$BINARY_NAME" ]; then
-        printf "%s" "$BINARY_NAME"
-        return 0
+show_environment_checks() {
+    if is_openwrt; then
+        printf "%sOpenWrt detected%s\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "%sWarning:%s system does not look like OpenWrt\n" "$C_YELLOW" "$C_RESET"
     fi
 
-    if is_openwrt; then
-        arch="$(openwrt_arch)"
-        if [ -n "$arch" ]; then
-            binary_name_for_arch "$arch"
-            return 0
+    arch="$(openwrt_arch)"
+    if [ -n "$arch" ]; then
+        if is_supported_openwrt_arch "$arch"; then
+            printf "%sArch detected:%s %s\n" "$C_GREEN" "$C_RESET" "$arch"
+        else
+            printf "%sWarning:%s detected arch is %s and there is no dedicated release asset mapping for it yet\n" "$C_YELLOW" "$C_RESET" "$arch"
         fi
     fi
 
-    printf "%s" "$DEFAULT_BINARY_NAME"
-}
+    printf "Release asset: %s\n" "$(resolved_binary_name)"
 
-resolved_release_url() {
-    if [ -n "$RELEASE_URL" ]; then
-        printf "%s" "$RELEASE_URL"
-        return 0
+    free_kb="$(tmp_available_kb)"
+    if [ -n "$free_kb" ]; then
+        printf "tmp free: %s KB\n" "$free_kb"
     fi
-
-    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
-    if [ -n "$preview_branch" ]; then
-        printf "%s/%s/%s" "$PREVIEW_BASE_URL" "$preview_branch" "$(resolved_binary_name)"
-        return 0
-    fi
-
-    tag="$(selected_release_tag 2>/dev/null || true)"
-    if [ -n "$tag" ]; then
-        printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$tag" "$(resolved_binary_name)"
-        return 0
-    fi
-
-    printf "%s/%s" "$RELEASE_DOWNLOAD_BASE_URL" "$(resolved_binary_name)"
 }
 
-tmp_available_kb() {
-    df -k /tmp 2>/dev/null | awk 'NR==2 {print $4+0}'
-}
-
-closest_existing_path() {
-    path="$1"
-
-    while [ -n "$path" ] && [ "$path" != "/" ] && [ ! -e "$path" ]; do
-        path="$(dirname "$path")"
-    done
-
-    if [ -z "$path" ]; then
-        printf "/"
-        return 0
-    fi
-
-    printf "%s" "$path"
-}
-
-path_available_kb() {
-    path="$(closest_existing_path "$1")"
-    df -k "$path" 2>/dev/null | awk 'NR==2 {print $4+0}'
-}
-
-source_binary_size_kb() {
-    if [ ! -f "$SOURCE_BIN" ]; then
-        return 1
-    fi
-    bytes="$(wc -c < "$SOURCE_BIN" 2>/dev/null | tr -d ' ')"
-    [ -n "$bytes" ] || return 1
-    printf "%s" $(( (bytes + 1023) / 1024 ))
-}
-
-required_persistent_kb() {
-    size_kb="$(source_binary_size_kb 2>/dev/null || true)"
-    if [ -z "$size_kb" ]; then
-        printf "%s" "$REQUIRED_TMP_KB"
-        return 0
-    fi
-
-    need_kb=$((size_kb + PERSISTENT_SPACE_HEADROOM_KB))
-    if [ "$need_kb" -lt "$REQUIRED_TMP_KB" ]; then
-        need_kb="$REQUIRED_TMP_KB"
-    fi
-    printf "%s" "$need_kb"
-}
-
-read_first_line() {
-    file="$1"
-    [ -f "$file" ] || return 1
-    IFS= read -r line < "$file" || return 1
-    [ -n "$line" ] || return 1
-    printf "%s" "$line"
-}
-
-normalize_version() {
-    value="$1"
-    case "$value" in
-        v[0-9]*)
-            printf "%s" "$value"
-            return 0
-            ;;
-    esac
-    return 1
-}
-
-version_ge() {
-    left="$(normalize_version "$1" 2>/dev/null || true)"
-    right="$(normalize_version "$2" 2>/dev/null || true)"
-    [ -n "$left" ] || return 1
-    [ -n "$right" ] || return 1
-
-    awk -v left="${left#v}" -v right="${right#v}" '
-        BEGIN {
-            split(left, l, ".")
-            split(right, r, ".")
-            max = length(l) > length(r) ? length(l) : length(r)
-            for (i = 1; i <= max; i++) {
-                lv = (i in l) ? l[i] + 0 : 0
-                rv = (i in r) ? r[i] + 0 : 0
-                if (lv > rv) exit 0
-                if (lv < rv) exit 1
-            }
-            exit 0
-        }
-    '
-}
-
-release_tag_meets_minimum() {
-    version_ge "$1" "$MIN_PINNED_RELEASE_TAG"
-}
 
 read_config_value() {
     key="$1"
@@ -303,15 +273,6 @@ normalize_dc_ip_list() {
     '
 }
 
-show_dc_ip_mapping_settings() {
-    printf "%sTelegram DC mapping%s\n" "$C_BOLD" "$C_RESET"
-    if [ -n "$DC_IPS" ]; then
-        printf "  custom : %s\n" "$DC_IPS"
-    else
-        printf "  custom : <default>\n"
-    fi
-}
-
 write_settings_config() {
     bin_path="${1:-}"
 
@@ -332,6 +293,9 @@ write_settings_config() {
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
         printf "PASSWORD='%s'\n" "$SOCKS_PASSWORD"
         printf "DC_IPS='%s'\n" "$DC_IPS"
+        printf "CF_PROXY='%s'\n" "$CF_PROXY"
+        printf "CF_PROXY_FIRST='%s'\n" "$CF_PROXY_FIRST"
+        printf "CF_DOMAIN='%s'\n" "$CF_DOMAIN"
     } > "$PERSIST_CONFIG_FILE" || return 1
 }
 
@@ -363,6 +327,23 @@ load_saved_settings() {
 
     if [ -z "$DC_IPS_FROM_ENV" ]; then
         DC_IPS="$(read_config_value DC_IPS 2>/dev/null || true)"
+    fi
+
+    if [ -z "$CF_PROXY_FROM_ENV" ]; then
+        cf_proxy_value="$(read_config_value CF_PROXY 2>/dev/null || true)"
+        [ -n "$cf_proxy_value" ] && CF_PROXY="$cf_proxy_value"
+    fi
+
+    if [ -z "$CF_PROXY_FIRST_FROM_ENV" ]; then
+        cf_proxy_first_value="$(read_config_value CF_PROXY_FIRST 2>/dev/null || true)"
+        [ -n "$cf_proxy_first_value" ] && CF_PROXY_FIRST="$cf_proxy_first_value"
+    fi
+
+    if [ -z "$CF_DOMAIN_FROM_ENV" ]; then
+        CF_DOMAIN="$(read_config_value CF_DOMAIN 2>/dev/null || true)"
+    fi
+    if [ -z "$CF_DOMAIN" ]; then
+        CF_DOMAIN="$DEFAULT_CF_DOMAIN"
     fi
 }
 
@@ -472,12 +453,158 @@ show_invalid_auth_settings() {
     printf "SOCKS_USERNAME and SOCKS_PASSWORD must be both set or both empty.\n"
 }
 
-password_display() {
-    if [ -n "$SOCKS_PASSWORD" ]; then
-        printf "<set>"
+persistent_install_dir() {
+    value="$(read_first_line "$PERSIST_PATH_FILE" 2>/dev/null || true)"
+    [ -n "$value" ] || return 1
+    printf "%s" "$value"
+}
+
+persistent_bin_path() {
+    dir="$(persistent_install_dir 2>/dev/null || true)"
+    [ -n "$dir" ] || return 1
+    printf "%s/tg-ws-proxy" "$dir"
+}
+
+persistent_manager_path() {
+    dir="$(persistent_install_dir 2>/dev/null || true)"
+    [ -n "$dir" ] || return 1
+    printf "%s/%s" "$dir" "$PERSIST_MANAGER_NAME"
+}
+
+has_persistent_install() {
+    bin="$(persistent_bin_path 2>/dev/null || true)"
+    [ -n "$bin" ] || return 1
+    [ -x "$bin" ]
+}
+
+write_persistent_state() {
+    install_dir="$1"
+    version="$2"
+
+    mkdir -p "$PERSIST_STATE_DIR" || return 1
+    printf "%s\n" "$install_dir" > "$PERSIST_PATH_FILE" || return 1
+    if [ -n "$version" ]; then
+        printf "%s\n" "$version" > "$PERSIST_VERSION_FILE" || return 1
     else
-        printf "<empty>"
+        rm -f "$PERSIST_VERSION_FILE"
     fi
+}
+
+write_autostart_config() {
+    bin_path="$1"
+    write_settings_config "$bin_path"
+}
+
+sync_autostart_config_if_enabled() {
+    if ! autostart_enabled; then
+        return 0
+    fi
+
+    bin_path="$(persistent_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        return 0
+    fi
+
+    write_autostart_config "$bin_path"
+}
+
+
+resolved_binary_name() {
+    if [ -n "$BINARY_NAME" ]; then
+        printf "%s" "$BINARY_NAME"
+        return 0
+    fi
+
+    if is_openwrt; then
+        arch="$(openwrt_arch)"
+        if [ -n "$arch" ]; then
+            binary_name_for_arch "$arch"
+            return 0
+        fi
+    fi
+
+    printf "%s" "$DEFAULT_BINARY_NAME"
+}
+
+resolved_release_url() {
+    if [ -n "$RELEASE_URL" ]; then
+        printf "%s" "$RELEASE_URL"
+        return 0
+    fi
+
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview_branch" ]; then
+        printf "%s/%s/%s" "$PREVIEW_BASE_URL" "$preview_branch" "$(resolved_binary_name)"
+        return 0
+    fi
+
+    tag="$(selected_release_tag 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$tag" "$(resolved_binary_name)"
+        return 0
+    fi
+
+    printf "%s/%s" "$RELEASE_DOWNLOAD_BASE_URL" "$(resolved_binary_name)"
+}
+
+source_binary_size_kb() {
+    if [ ! -f "$SOURCE_BIN" ]; then
+        return 1
+    fi
+    bytes="$(wc -c < "$SOURCE_BIN" 2>/dev/null | tr -d ' ')"
+    [ -n "$bytes" ] || return 1
+    printf "%s" $(( (bytes + 1023) / 1024 ))
+}
+
+required_persistent_kb() {
+    size_kb="$(source_binary_size_kb 2>/dev/null || true)"
+    if [ -z "$size_kb" ]; then
+        printf "%s" "$REQUIRED_TMP_KB"
+        return 0
+    fi
+
+    need_kb=$((size_kb + PERSISTENT_SPACE_HEADROOM_KB))
+    if [ "$need_kb" -lt "$REQUIRED_TMP_KB" ]; then
+        need_kb="$REQUIRED_TMP_KB"
+    fi
+    printf "%s" "$need_kb"
+}
+
+normalize_version() {
+    value="$1"
+    case "$value" in
+        v[0-9]*)
+            printf "%s" "$value"
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+version_ge() {
+    left="$(normalize_version "$1" 2>/dev/null || true)"
+    right="$(normalize_version "$2" 2>/dev/null || true)"
+    [ -n "$left" ] || return 1
+    [ -n "$right" ] || return 1
+
+    awk -v left="${left#v}" -v right="${right#v}" '
+        BEGIN {
+            split(left, l, ".")
+            split(right, r, ".")
+            max = length(l) > length(r) ? length(l) : length(r)
+            for (i = 1; i <= max; i++) {
+                lv = (i in l) ? l[i] + 0 : 0
+                rv = (i in r) ? r[i] + 0 : 0
+                if (lv > rv) exit 0
+                if (lv < rv) exit 1
+            }
+            exit 0
+        }
+    '
+}
+
+release_tag_meets_minimum() {
+    version_ge "$1" "$MIN_PINNED_RELEASE_TAG"
 }
 
 installed_version() {
@@ -555,16 +682,16 @@ latest_release_tag() {
     case "$RELEASE_API_URL" in
         file://*)
             local_path="${RELEASE_API_URL#file://}"
-            _lrt_tag="$(tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+            _lrt_tag="$(tr -d '\n' < "$local_path" 2>/dev/null | sed 's/\"tag_name\"/\
+\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | sed -n '1p')"
             ;;
         *)
             if command -v wget >/dev/null 2>&1; then
-                _lrt_tag="$(wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+                _lrt_tag="$(wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
+\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | sed -n '1p')"
             elif command -v curl >/dev/null 2>&1; then
-                _lrt_tag="$(curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sed -n '1p')"
+                _lrt_tag="$(curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
+\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | sed -n '1p')"
             else
                 return 1
             fi
@@ -582,8 +709,8 @@ recent_release_tags() {
     case "$RELEASES_API_URL" in
         file://*)
             local_path="${RELEASES_API_URL#file://}"
-            tr -d '\n' < "$local_path" 2>/dev/null | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+            tr -d '\n' < "$local_path" 2>/dev/null | sed 's/\"tag_name\"/\
+\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | while IFS= read -r raw_tag; do
                 normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
                 [ -n "$normalized_tag" ] || continue
                 release_tag_meets_minimum "$normalized_tag" || continue
@@ -594,8 +721,8 @@ recent_release_tags() {
     esac
 
     if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+        wget -qO - "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
+\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | while IFS= read -r raw_tag; do
             normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
             [ -n "$normalized_tag" ] || continue
             release_tag_meets_minimum "$normalized_tag" || continue
@@ -605,8 +732,8 @@ recent_release_tags() {
     fi
 
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/"tag_name"/\
-"tag_name"/g' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | while IFS= read -r raw_tag; do
+        curl -fsSL "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
+\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | while IFS= read -r raw_tag; do
             normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
             [ -n "$normalized_tag" ] || continue
             release_tag_meets_minimum "$normalized_tag" || continue
@@ -618,29 +745,76 @@ recent_release_tags() {
     return 1
 }
 
-persistent_install_dir() {
-    value="$(read_first_line "$PERSIST_PATH_FILE" 2>/dev/null || true)"
-    [ -n "$value" ] || return 1
-    printf "%s" "$value"
+release_url_reachable() {
+    url="$(resolved_release_url)"
+    if command -v wget >/dev/null 2>&1; then
+        wget --spider "$url" >/dev/null 2>&1
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -I -L --fail "$url" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
 }
 
-persistent_bin_path() {
-    dir="$(persistent_install_dir 2>/dev/null || true)"
-    [ -n "$dir" ] || return 1
-    printf "%s/tg-ws-proxy" "$dir"
+script_release_url() {
+    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview_branch" ]; then
+        printf "%s/%s/%s" "$PREVIEW_BASE_URL" "$preview_branch" "$PERSIST_MANAGER_NAME"
+        return 0
+    fi
+
+    ref="$1"
+    printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$ref" "$PERSIST_MANAGER_NAME"
 }
 
-persistent_manager_path() {
-    dir="$(persistent_install_dir 2>/dev/null || true)"
-    [ -n "$dir" ] || return 1
-    printf "%s/%s" "$dir" "$PERSIST_MANAGER_NAME"
+download_binary() {
+    mkdir -p "$(dirname "$SOURCE_BIN")" || return 1
+    url="$(resolved_release_url)"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "$SOURCE_BIN" "$url"
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail -o "$SOURCE_BIN" "$url"
+        return $?
+    fi
+
+    return 1
 }
 
-has_persistent_install() {
-    bin="$(persistent_bin_path 2>/dev/null || true)"
-    [ -n "$bin" ] || return 1
-    [ -x "$bin" ]
+download_manager_script() {
+    ref="$1"
+    url="$(script_release_url "$ref")"
+
+    mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")" || return 1
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -O "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
+        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail -o "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
+        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
+        return 0
+    fi
+
+    return 1
 }
+
+write_source_version_file() {
+    version="$1"
+    [ -n "$version" ] || return 0
+    printf "%s\n" "$version" > "$SOURCE_VERSION_FILE" || return 1
+}
+
 
 runtime_bin_path() {
     if [ -x "$BIN_PATH" ]; then
@@ -654,70 +828,6 @@ runtime_bin_path() {
         return 0
     fi
 
-    return 1
-}
-
-autostart_enabled() {
-    [ -f "$INIT_SCRIPT_PATH" ] || return 1
-    ls "$RC_D_DIR"/*"$(basename "$INIT_SCRIPT_PATH")" >/dev/null 2>&1 || return 1
-    bin_path="$(persistent_bin_path 2>/dev/null || true)"
-    [ -n "$bin_path" ] || return 1
-    [ -x "$bin_path" ] || return 1
-    [ -r "$PERSIST_CONFIG_FILE" ]
-}
-
-select_persistent_dir() {
-    required_kb="$1"
-
-    for dir in $PERSISTENT_DIR_CANDIDATES; do
-        free_kb="$(path_available_kb "$dir")"
-        [ -n "$free_kb" ] || continue
-        if [ "$free_kb" -ge "$required_kb" ]; then
-            printf "%s" "$dir"
-            return 0
-        fi
-    done
-
-    return 1
-}
-
-telegram_host() {
-    case "$LISTEN_HOST" in
-        0.0.0.0|"")
-            ip="$(lan_ip)"
-            if [ -n "$ip" ]; then
-                printf "%s" "$ip"
-            else
-                printf "127.0.0.1"
-            fi
-            ;;
-        127.0.0.1|localhost)
-            printf "127.0.0.1"
-            ;;
-        *)
-            printf "%s" "$LISTEN_HOST"
-            ;;
-    esac
-}
-
-pause() {
-    if [ "$COMMAND_MODE" = "1" ]; then
-        return 0
-    fi
-    printf "\nPress Enter to continue..."
-    read dummy
-}
-
-canonical_path() {
-    path="$1"
-    readlink -f "$path" 2>/dev/null || printf "%s" "$path"
-}
-
-current_script_path() {
-    if [ -n "${0:-}" ]; then
-        canonical_path "$0"
-        return 0
-    fi
     return 1
 }
 
@@ -757,16 +867,14 @@ matching_pids_for_path() {
 
     pid_from_file="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
     if [ -n "$pid_from_file" ] && pid_matches_binary "$pid_from_file" "$path"; then
-        matches="$matches
-$pid_from_file"
+        matches="${matches}${matches:+\\n}${pid_from_file}"
     fi
 
     if command -v pgrep >/dev/null 2>&1; then
         pids="$(pgrep -f "$path" 2>/dev/null || true)"
         for pid in $pids; do
             pid_matches_binary "$pid" "$path" || continue
-            matches="$matches
-$pid"
+            matches="${matches}${matches:+\\n}${pid}"
         done
     fi
 
@@ -774,13 +882,12 @@ $pid"
         pids="$(pidof "$(basename "$path")" 2>/dev/null || true)"
         for pid in $pids; do
             pid_matches_binary "$pid" "$path" || continue
-            matches="$matches
-$pid"
+            matches="${matches}${matches:+\\n}${pid}"
         done
     fi
 
     [ -n "$matches" ] || return 1
-    printf "%s\n" "$matches" | awk 'NF && !seen[$0]++'
+    printf "%b\n" "$matches" | awk 'NF && !seen[$0]++'
 }
 
 is_running() {
@@ -793,364 +900,11 @@ current_pids() {
         [ -n "$path" ] || continue
         pids="$(matching_pids_for_path "$path" 2>/dev/null || true)"
         [ -n "$pids" ] || continue
-        all_pids="$all_pids
-$pids"
+        all_pids="${all_pids}${all_pids:+\\n}${pids}"
     done
 
     [ -n "$all_pids" ] || return 1
-    printf "%s\n" "$all_pids" | awk 'NF && !seen[$0]++'
-}
-
-current_launcher_path() {
-    if [ -f "$LAUNCHER_PATH" ]; then
-        printf "%s" "$LAUNCHER_PATH"
-        return 0
-    fi
-
-    if [ -f "/tmp/$LAUNCHER_NAME" ]; then
-        printf "%s" "/tmp/$LAUNCHER_NAME"
-        return 0
-    fi
-
-    return 1
-}
-
-show_header() {
-    if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
-        clear
-    fi
-    printf "%s+----------------------------------+%s\n" "$C_BLUE" "$C_RESET"
-    printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
-    printf "%s+----------------------------------+%s\n\n" "$C_BLUE" "$C_RESET"
-}
-
-show_telegram_settings() {
-    printf "%sTelegram SOCKS5%s\n" "$C_BOLD" "$C_RESET"
-    printf "  host     : %s\n" "$(telegram_host)"
-    printf "  port     : %s\n" "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ]; then
-        printf "  username : %s\n" "$SOCKS_USERNAME"
-    else
-        printf "  username : <empty>\n"
-    fi
-    printf "  password : %s\n" "$(password_display)"
-    if [ -n "$DC_IPS" ]; then
-        printf "  dc map   : %s\n" "$DC_IPS"
-    else
-        printf "  dc map   : <default>\n"
-    fi
-}
-
-show_current_version() {
-    version="$(installed_version 2>/dev/null || true)"
-    if [ -z "$version" ]; then
-        version="$(persistent_installed_version 2>/dev/null || true)"
-    fi
-    [ -n "$version" ] || version="-"
-    printf "%sBinary version%s\n" "$C_BOLD" "$C_RESET"
-    printf "  %s\n" "$version"
-}
-
-show_update_source_settings() {
-    channel="$(selected_update_channel 2>/dev/null || printf release)"
-    ref="$(selected_update_ref 2>/dev/null || printf latest)"
-    printf "%sUpdate source%s\n" "$C_BOLD" "$C_RESET"
-    printf "  mode     : %s\n" "$channel"
-    printf "  ref      : %s\n" "$ref"
-}
-
-can_use_arrow_update_source_picker() {
-    if [ -n "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
-        return 0
-    fi
-
-    [ -t 0 ] || return 1
-    [ -t 2 ] || return 1
-    [ "${TERM:-}" != "dumb" ] || return 1
-    command -v stty >/dev/null 2>&1 || return 1
-}
-
-can_use_numbered_update_source_picker() {
-    if [ -n "$FORCE_NUMBERED_UPDATE_SOURCE_PICKER" ]; then
-        return 0
-    fi
-
-    [ -t 0 ] || return 1
-    [ -t 2 ] || return 1
-    [ "${TERM:-}" != "dumb" ] || return 1
-}
-
-read_picker_hex_byte() {
-    dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'
-}
-
-draw_update_source_picker() {
-    current="$1"
-    if [ "$current" = "preview" ]; then
-        release_prefix="  "
-        preview_prefix="> "
-    else
-        release_prefix="> "
-        preview_prefix="  "
-    fi
-
-    printf "Mode (use arrows, Enter to confirm):\n" >&2
-    printf "%srelease\n" "$release_prefix" >&2
-    printf "%spreview\n" "$preview_prefix" >&2
-}
-
-choose_update_source_mode_numbered() {
-    current="${1:-release}"
-
-    printf "Mode:\n" >&2
-    printf "  1) release\n" >&2
-    printf "  2) preview\n" >&2
-    printf "Select mode [1-2] (Enter for %s): " "$current" >&2
-    IFS= read -r selected_mode
-
-    case "$selected_mode" in
-        "" )
-            selected_mode="$current"
-            ;;
-        1|release)
-            selected_mode="release"
-            ;;
-        2|preview)
-            selected_mode="preview"
-            ;;
-    esac
-
-    printf "%s" "$selected_mode"
-}
-
-prompt_manual_release_tag() {
-    current_tag="$(normalize_version "${1:-}" 2>/dev/null || true)"
-
-    if [ -n "$current_tag" ]; then
-        printf "Release tag (Enter to keep %s): " "$current_tag" >&2
-    else
-        printf "Release tag (for example: v1.1.28): " >&2
-    fi
-
-    IFS= read -r typed_tag
-    if [ -z "$typed_tag" ]; then
-        if [ -n "$current_tag" ]; then
-            printf "%s" "$current_tag"
-            return 0
-        fi
-        printf "\n%sRelease tag cannot be empty here%s\n" "$C_RED" "$C_RESET" >&2
-        return 1
-    fi
-
-    normalized_tag="$(normalize_version "$typed_tag" 2>/dev/null || true)"
-    if [ -z "$normalized_tag" ]; then
-        printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
-        return 1
-    fi
-    if ! release_tag_meets_minimum "$normalized_tag"; then
-        printf "\n%sRelease tag must be %s or newer%s\n" "$C_RED" "$MIN_PINNED_RELEASE_TAG" "$C_RESET" >&2
-        return 1
-    fi
-
-    printf "%s" "$normalized_tag"
-}
-
-choose_release_ref_numbered() {
-    current_ref="${1:-latest}"
-    current_tag="$(normalize_version "$current_ref" 2>/dev/null || true)"
-    tags="$(recent_release_tags 8 2>/dev/null || true)"
-
-    if [ -n "$current_tag" ] && ! printf "%s\n" "$tags" | grep -Fx "$current_tag" >/dev/null 2>&1; then
-        if [ -n "$tags" ]; then
-            tags="$current_tag
-$tags"
-        else
-            tags="$current_tag"
-        fi
-    fi
-
-    printf "Release ref:\n" >&2
-    printf "  1) latest\n" >&2
-
-    option_count=1
-    old_ifs="$IFS"
-    IFS='
-'
-    for tag in $tags; do
-        [ -n "$tag" ] || continue
-        option_count=$((option_count + 1))
-        printf "  %s) %s\n" "$option_count" "$tag" >&2
-    done
-    IFS="$old_ifs"
-
-    manual_option=$((option_count + 1))
-    printf "  %s) enter tag manually\n" "$manual_option" >&2
-    printf "Select release ref [1-%s] (Enter for %s): " "$manual_option" "$current_ref" >&2
-    IFS= read -r selected_ref
-
-    case "$selected_ref" in
-        "" )
-            case "$current_ref" in
-                latest|"")
-                    printf ""
-                    return 0
-                    ;;
-                *)
-                    printf "%s" "$current_ref"
-                    return 0
-                    ;;
-            esac
-            ;;
-        1|latest)
-            printf ""
-            return 0
-            ;;
-        "$manual_option"|m|M|manual)
-            prompt_manual_release_tag "$current_tag"
-            return $?
-            ;;
-    esac
-
-    chosen_tag="$(printf "latest\n%s\n" "$tags" | sed -n "${selected_ref}p" 2>/dev/null || true)"
-    case "$chosen_tag" in
-        "" )
-            printf "\n%sUnknown release ref selection%s\n" "$C_RED" "$C_RESET" >&2
-            return 1
-            ;;
-        latest)
-            printf ""
-            return 0
-            ;;
-        *)
-            printf "%s" "$chosen_tag"
-            return 0
-            ;;
-    esac
-}
-
-choose_release_ref() {
-    current_ref="${1:-latest}"
-
-    if can_use_numbered_update_source_picker; then
-        choose_release_ref_numbered "$current_ref"
-        return $?
-    fi
-
-    printf "Release ref (empty/latest for latest, or tag like v1.1.28): " >&2
-    IFS= read -r new_ref
-    case "$new_ref" in
-        ""|latest)
-            printf ""
-            return 0
-            ;;
-        *)
-            normalized_tag="$(normalize_version "$new_ref" 2>/dev/null || true)"
-            if [ -z "$normalized_tag" ]; then
-                printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
-                return 1
-            fi
-            printf "%s" "$normalized_tag"
-            return 0
-            ;;
-    esac
-}
-
-choose_update_source_mode() {
-    current="${1:-release}"
-
-    if can_use_arrow_update_source_picker; then
-        :
-    elif can_use_numbered_update_source_picker; then
-        choose_update_source_mode_numbered "$current"
-        return 0
-    else
-        printf "Mode [release/preview] (Enter for %s): " "$current" >&2
-        IFS= read -r selected_mode
-        if [ -z "$selected_mode" ]; then
-            selected_mode="$current"
-        fi
-        printf "%s" "$selected_mode"
-        return 0
-    fi
-
-    restore_stty=""
-    if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
-        restore_stty="$(stty -g 2>/dev/null || true)"
-        if [ -z "$restore_stty" ]; then
-            printf "Mode [release/preview] (Enter for %s): " "$current" >&2
-            IFS= read -r selected_mode
-            if [ -z "$selected_mode" ]; then
-                selected_mode="$current"
-            fi
-            printf "%s" "$selected_mode"
-            return 0
-        fi
-        stty -echo -icanon min 1 time 0 2>/dev/null || true
-    fi
-
-    redraw="0"
-    while true; do
-        if [ "$redraw" = "1" ]; then
-            printf '\033[3A\033[J' >&2
-        fi
-        draw_update_source_picker "$current"
-        redraw="1"
-
-        first_hex="$(read_picker_hex_byte)"
-        case "$first_hex" in
-            0a|0d)
-                break
-                ;;
-            1b)
-                second_hex="$(read_picker_hex_byte)"
-                third_hex="$(read_picker_hex_byte)"
-                case "$second_hex$third_hex" in
-                    5b41|5b44)
-                        current="release"
-                        ;;
-                    5b42|5b43)
-                        current="preview"
-                        ;;
-                esac
-                ;;
-        esac
-    done
-
-    if [ -n "$restore_stty" ]; then
-        stty "$restore_stty" 2>/dev/null || true
-    fi
-
-    printf "\n" >&2
-    printf "%s" "$current"
-}
-
-main_menu_track_label() {
-    channel="$(selected_update_channel 2>/dev/null || printf release)"
-    ref="$(selected_update_ref 2>/dev/null || printf latest)"
-
-    if [ "$channel" = "preview" ]; then
-        printf "preview/%s" "$ref"
-        return 0
-    fi
-
-    printf "release/%s" "$ref"
-}
-
-show_quick_commands() {
-    printf "%sQuick commands%s\n" "$C_BOLD" "$C_RESET"
-    printf "  sh %s install\n" "$0"
-    printf "  sh %s update\n" "$0"
-    printf "  sh %s enable-autostart\n" "$0"
-    printf "  sh %s disable-autostart\n" "$0"
-    printf "  sh %s start\n" "$0"
-    printf "  sh %s stop\n" "$0"
-    printf "  sh %s restart\n" "$0"
-    printf "  sh %s status\n" "$0"
-    printf "  sh %s quick\n" "$0"
-    printf "  sh %s telegram\n" "$0"
-    if launcher="$(current_launcher_path 2>/dev/null)"; then
-        printf "  %s\n" "$launcher"
-    fi
+    printf "%b\n" "$all_pids" | awk 'NF && !seen[$0]++'
 }
 
 port_in_use() {
@@ -1264,130 +1018,470 @@ prompt_restart_running_proxy() {
     esac
 }
 
-release_url_reachable() {
-    url="$(resolved_release_url)"
-    if command -v wget >/dev/null 2>&1; then
-        wget --spider "$url" >/dev/null 2>&1
-        return $?
+stop_running() {
+    if ! is_running; then
+        rm -f "$PID_FILE"
+        return 1
     fi
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -I -L --fail "$url" >/dev/null 2>&1
-        return $?
+    pids="$(current_pids)"
+    [ -n "$pids" ] || return 1
+
+    for pid in $pids; do
+        kill "$pid" 2>/dev/null
+    done
+    sleep 1
+
+    for pid in $pids; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null
+        fi
+    done
+    rm -f "$PID_FILE"
+    return 0
+}
+
+run_binary() {
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    [ -n "$bin_path" ] || return 1
+
+    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
     fi
+    if [ "$VERBOSE" = "1" ]; then
+        set -- "$@" --verbose
+    fi
+    if [ -n "$DC_IPS" ]; then
+        old_ifs="$IFS"
+        IFS=','
+        for entry in $DC_IPS; do
+            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$entry" ] || continue
+            set -- "$@" --dc-ip "$entry"
+        done
+        IFS="$old_ifs"
+    fi
+    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
+        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
+        if [ "$CF_PROXY_FIRST" = "1" ]; then
+            set -- "$@" --cf-proxy-first
+        fi
+    fi
+    "$@"
+}
+
+run_binary_background() {
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    [ -n "$bin_path" ] || return 1
+
+    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+    fi
+    if [ "$VERBOSE" = "1" ]; then
+        set -- "$@" --verbose
+    fi
+    if [ -n "$DC_IPS" ]; then
+        old_ifs="$IFS"
+        IFS=','
+        for entry in $DC_IPS; do
+            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$entry" ] || continue
+            set -- "$@" --dc-ip "$entry"
+        done
+        IFS="$old_ifs"
+    fi
+    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
+        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
+        if [ "$CF_PROXY_FIRST" = "1" ]; then
+            set -- "$@" --cf-proxy-first
+        fi
+    fi
+
+    if command -v nohup >/dev/null 2>&1; then
+        nohup "$@" >/dev/null 2>&1 &
+    else
+        "$@" >/dev/null 2>&1 &
+    fi
+
+    printf "%s" "$!"
+}
+
+start_proxy() {
+    if ! auth_settings_valid; then
+        show_header
+        show_invalid_auth_settings
+        pause
+        return 1
+    fi
+
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        show_header
+        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    if is_running; then
+        prompt_restart_running_proxy || return 1
+    fi
+
+    if port_in_use; then
+        prompt_stop_detected_proxy_for_busy_port || return 1
+    fi
+
+    show_header
+    show_environment_checks
+    printf "\n"
+    printf "%sStarting %s in terminal%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
+    printf "Logs will be printed here.\n"
+    printf "Stop with Ctrl+C\n"
+    printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
+    show_telegram_settings
+    printf "\n"
+    interrupted="0"
+    run_binary &
+    child_pid="$!"
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    trap 'interrupted="1"; kill -INT "$child_pid" 2>/dev/null' INT
+    wait "$child_pid"
+    code="$?"
+    rm -f "$PID_FILE"
+    trap - INT
+    printf "\n%s%s exited with code %s%s\n" "$C_YELLOW" "$APP_NAME" "$code" "$C_RESET"
+    if [ "$interrupted" = "1" ]; then
+        printf "Returned to menu after Ctrl+C\n"
+    fi
+    pause
+}
+
+start_proxy_background() {
+    if ! auth_settings_valid; then
+        show_header
+        show_invalid_auth_settings
+        pause
+        return 1
+    fi
+
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        show_header
+        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    if is_running; then
+        prompt_restart_running_proxy || return 1
+    fi
+
+    if port_in_use; then
+        prompt_stop_detected_proxy_for_busy_port || return 1
+    fi
+
+    show_header
+    show_environment_checks
+    printf "\n"
+    printf "%sStarting %s in background%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
+    printf "Logs will not be printed in this session.\n"
+    printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
+
+    child_pid="$(run_binary_background)" || return 1
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    sleep 1
+
+    if kill -0 "$child_pid" 2>/dev/null; then
+        printf "Background process pid:\n  %s\n" "$child_pid"
+        pause
+        return 0
+    fi
+
+    wait "$child_pid" 2>/dev/null
+    code="$?"
+    rm -f "$PID_FILE"
+    printf "%sBackground start failed%s\n\n" "$C_RED" "$C_RESET"
+    printf "Process exited with code: %s\n" "$code"
+    pause
+    return 1
+}
+
+stop_proxy() {
+    show_header
+    if stop_running; then
+        printf "%sProxy stopped%s\n" "$C_GREEN" "$C_RESET"
+    else
+        printf "%s%s is not running%s\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
+    fi
+    pause
+}
+
+restart_proxy() {
+    stop_running >/dev/null 2>&1 || true
+    start_proxy
+}
+
+restart_running_proxy_for_updated_settings() {
+    if autostart_enabled; then
+        "$INIT_SCRIPT_PATH" restart >/dev/null 2>&1 && return 0
+        "$INIT_SCRIPT_PATH" stop >/dev/null 2>&1 || true
+        "$INIT_SCRIPT_PATH" start >/dev/null 2>&1 && return 0
+        return 1
+    fi
+
+    stop_running >/dev/null 2>&1 || true
+    child_pid="$(run_binary_background)" || return 1
+    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
+    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
+    sleep 1
+
+    if kill -0 "$child_pid" 2>/dev/null; then
+        return 0
+    fi
+
+    wait "$child_pid" 2>/dev/null
+    rm -f "$PID_FILE"
+    return 1
+}
+
+prompt_restart_proxy_for_updated_settings() {
+    if ! is_running; then
+        return 0
+    fi
+
+    printf "\nProxy is currently running.\n"
+    printf "Restart now to apply the new settings? [y/N]: "
+    IFS= read -r restart_choice
+
+    case "$restart_choice" in
+        y|Y|yes|YES|Yes)
+            if restart_running_proxy_for_updated_settings; then
+                printf "\n%sProxy restarted with the updated settings%s\n" "$C_GREEN" "$C_RESET"
+            else
+                printf "\n%sProxy restart failed. Restart it manually to apply the new settings.%s\n" "$C_RED" "$C_RESET"
+            fi
+            ;;
+        *)
+            printf "\nRestart skipped. New settings will apply on the next start.\n"
+            ;;
+    esac
+}
+
+
+autostart_enabled() {
+    [ -f "$INIT_SCRIPT_PATH" ] || return 1
+    ls "$RC_D_DIR"/*"$(basename "$INIT_SCRIPT_PATH")" >/dev/null 2>&1 || return 1
+    bin_path="$(persistent_bin_path 2>/dev/null || true)"
+    [ -n "$bin_path" ] || return 1
+    [ -x "$bin_path" ] || return 1
+    [ -r "$PERSIST_CONFIG_FILE" ]
+}
+
+write_init_script() {
+    mkdir -p "$(dirname "$INIT_SCRIPT_PATH")" || return 1
+    {
+        printf '%s\n' "#!/bin/sh $RC_COMMON_PATH"
+        printf '%s\n' 'START=95'
+        printf '%s\n' 'STOP=10'
+        printf '%s\n' 'USE_PROCD=1'
+        printf '%s\n' "CONFIG_FILE='$PERSIST_CONFIG_FILE'"
+        printf '\n'
+        printf '%s\n' 'start_service() {'
+        printf '%s\n' '    [ -r "$CONFIG_FILE" ] || return 1'
+        printf '%s\n' '    . "$CONFIG_FILE"'
+        printf '%s\n' '    [ -x "$BIN" ] || return 1'
+        printf '%s\n' '    [ -n "$HOST" ] || HOST="0.0.0.0"'
+        printf '%s\n' '    [ -n "$PORT" ] || PORT="1080"'
+        printf '%s\n' '    USERNAME="${USERNAME:-}"'
+        printf '%s\n' '    PASSWORD="${PASSWORD:-}"'
+        printf '%s\n' '    DC_IPS="${DC_IPS:-}"'
+        printf '%s\n' '    CF_PROXY="${CF_PROXY:-0}"'
+        printf '%s\n' '    CF_PROXY_FIRST="${CF_PROXY_FIRST:-0}"'
+        printf '%s\n' '    CF_DOMAIN="${CF_DOMAIN:-}"'
+        printf '%s\n' '    if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
+        printf '%s\n' '        return 1'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    set -- "$BIN" --host "$HOST" --port "$PORT"'
+        printf '%s\n' '    if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then'
+        printf '%s\n' '        set -- "$@" --username "$USERNAME" --password "$PASSWORD"'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    if [ "${VERBOSE:-0}" = "1" ]; then'
+        printf '%s\n' '        set -- "$@" --verbose'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    if [ -n "$DC_IPS" ]; then'
+        printf '%s\n' '        old_ifs="$IFS"'
+        printf '%s\n' "        IFS=','"
+        printf '%s\n' '        for entry in $DC_IPS; do'
+        printf '%s\n' '            entry="$(printf "%s" "$entry" | sed '"'"'s/^[[:space:]]*//;s/[[:space:]]*$//'"'"')"'
+        printf '%s\n' '            [ -n "$entry" ] || continue'
+        printf '%s\n' '            set -- "$@" --dc-ip "$entry"'
+        printf '%s\n' '        done'
+        printf '%s\n' '        IFS="$old_ifs"'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then'
+        printf '%s\n' '        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"'
+        printf '%s\n' '        if [ "$CF_PROXY_FIRST" = "1" ]; then'
+        printf '%s\n' '            set -- "$@" --cf-proxy-first'
+        printf '%s\n' '        fi'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    procd_open_instance'
+        printf '%s\n' '    procd_set_param command "$@"'
+        printf '%s\n' '    procd_set_param respawn'
+        printf '%s\n' '    procd_set_param stdout 1'
+        printf '%s\n' '    procd_set_param stderr 1'
+        printf '%s\n' '    procd_close_instance'
+        printf '%s\n' '}'
+    } > "$INIT_SCRIPT_PATH" || return 1
+
+    chmod +x "$INIT_SCRIPT_PATH" || return 1
+}
+
+enable_autostart() {
+    show_header
+    started_now="0"
+    start_note=""
+
+    if ! auth_settings_valid; then
+        show_invalid_auth_settings
+        pause
+        return 1
+    fi
+
+    if ! is_openwrt; then
+        printf "%sAutostart is only supported on OpenWrt%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    bin_path="$(persistent_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        if ! check_tmp_space; then
+            free_kb="$(tmp_available_kb)"
+            printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
+            printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+            printf "Available: %s KB\n" "${free_kb:-unknown}"
+            pause
+            return 1
+        fi
+
+        if ! ensure_source_binary_current; then
+            pause
+            return 1
+        fi
+
+        launcher_path="$(install_persistent_binary 2>/dev/null || true)"
+        if [ -z "$launcher_path" ]; then
+            show_persistent_install_failure
+            pause
+            return 1
+        fi
+        bin_path="$(persistent_bin_path 2>/dev/null || true)"
+        printf "%sPersistent copy installed automatically%s\n\n" "$C_GREEN" "$C_RESET"
+        printf "Persistent binary:\n  %s\n" "$bin_path"
+        printf "Launcher:\n  %s\n\n" "$launcher_path"
+    fi
+
+    write_autostart_config "$bin_path" || return 1
+    write_init_script || return 1
+
+    if ! "$INIT_SCRIPT_PATH" enable >/dev/null 2>&1; then
+        printf "%sFailed to enable init.d service%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    if ! is_running; then
+        if "$INIT_SCRIPT_PATH" start >/dev/null 2>&1; then
+            started_now="1"
+        else
+            start_note="Autostart was enabled, but the service did not start immediately"
+        fi
+    fi
+
+    printf "%sAutostart enabled%s\n\n" "$C_GREEN" "$C_RESET"
+    printf "Service:\n  %s\n" "$INIT_SCRIPT_PATH"
+    printf "Binary:\n  %s\n" "$bin_path"
+    if [ "$started_now" = "1" ]; then
+        printf "\nCurrent state:\n  service started now\n"
+    elif [ -n "$start_note" ]; then
+        printf "\n%s%s%s\n" "$C_YELLOW" "$start_note" "$C_RESET"
+    fi
+    pause
+}
+
+disable_autostart() {
+    show_header
+
+    preserved_update_channel="$(selected_update_channel 2>/dev/null || printf release)"
+    preserved_update_ref="$(selected_update_ref 2>/dev/null || printf latest)"
+    persist_dir="$(persistent_install_dir 2>/dev/null || true)"
+    if [ ! -f "$INIT_SCRIPT_PATH" ] && [ -z "$persist_dir" ]; then
+        printf "%sAutostart is not configured%s\n" "$C_YELLOW" "$C_RESET"
+        pause
+        return 0
+    fi
+
+    if [ -f "$INIT_SCRIPT_PATH" ]; then
+        "$INIT_SCRIPT_PATH" disable >/dev/null 2>&1 || true
+        "$INIT_SCRIPT_PATH" stop >/dev/null 2>&1 || true
+    fi
+    if [ -n "$persist_dir" ]; then
+        rm -rf "$persist_dir"
+    fi
+    rm -rf "$PERSIST_STATE_DIR"
+    case "$preserved_update_channel:$preserved_update_ref" in
+        preview:*)
+            write_update_source_state "preview" "$preserved_update_ref" >/dev/null 2>&1 || true
+            ;;
+        release:latest|release:)
+            ;;
+        release:*)
+            write_update_source_state "release" "$preserved_update_ref" >/dev/null 2>&1 || true
+            ;;
+    esac
+    rm -f "$INIT_SCRIPT_PATH"
+
+    if [ -x "$BIN_PATH" ]; then
+        install_launcher "$0" >/dev/null 2>&1 || true
+    else
+        rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
+    fi
+
+    printf "%sAutostart disabled and persistent copy removed%s\n" "$C_GREEN" "$C_RESET"
+    pause
+}
+
+
+select_persistent_dir() {
+    required_kb="$1"
+
+    for dir in $PERSISTENT_DIR_CANDIDATES; do
+        free_kb="$(path_available_kb "$dir")"
+        [ -n "$free_kb" ] || continue
+        if [ "$free_kb" -ge "$required_kb" ]; then
+            printf "%s" "$dir"
+            return 0
+        fi
+    done
 
     return 1
 }
 
-show_environment_checks() {
-    if is_openwrt; then
-        printf "%sOpenWrt detected%s\n" "$C_GREEN" "$C_RESET"
-    else
-        printf "%sWarning:%s system does not look like OpenWrt\n" "$C_YELLOW" "$C_RESET"
+current_launcher_path() {
+    if [ -f "$LAUNCHER_PATH" ]; then
+        printf "%s" "$LAUNCHER_PATH"
+        return 0
     fi
 
-    arch="$(openwrt_arch)"
-    if [ -n "$arch" ]; then
-        if is_supported_openwrt_arch "$arch"; then
-            printf "%sArch detected:%s %s\n" "$C_GREEN" "$C_RESET" "$arch"
-        else
-            printf "%sWarning:%s detected arch is %s and there is no dedicated release asset mapping for it yet\n" "$C_YELLOW" "$C_RESET" "$arch"
-        fi
+    if [ -f "/tmp/$LAUNCHER_NAME" ]; then
+        printf "%s" "/tmp/$LAUNCHER_NAME"
+        return 0
     fi
 
-    printf "Release asset: %s\n" "$(resolved_binary_name)"
-
-    free_kb="$(tmp_available_kb)"
-    if [ -n "$free_kb" ]; then
-        printf "tmp free: %s KB\n" "$free_kb"
-    fi
-}
-
-check_tmp_space() {
-    free_kb="$(tmp_available_kb)"
-    [ -n "$free_kb" ] || return 0
-    [ "$free_kb" -ge "$REQUIRED_TMP_KB" ]
-}
-
-show_status() {
-    if [ -x "$BIN_PATH" ]; then
-        install_state="${C_GREEN}installed${C_RESET}"
-    else
-        install_state="${C_RED}not installed${C_RESET}"
-    fi
-
-    if has_persistent_install; then
-        persistent_state="${C_GREEN}installed${C_RESET}"
-        persistent_bin="$(persistent_bin_path 2>/dev/null || true)"
-        persistent_dir="$(persistent_install_dir 2>/dev/null || true)"
-        persistent_version="$(persistent_installed_version 2>/dev/null || true)"
-    else
-        persistent_state="${C_RED}not installed${C_RESET}"
-        persistent_bin="-"
-        persistent_dir="-"
-        persistent_version="-"
-    fi
-
-    if is_running; then
-        pid="$(current_pids | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-        run_state="${C_GREEN}running${C_RESET}"
-    else
-        pid="-"
-        run_state="${C_RED}stopped${C_RESET}"
-    fi
-
-    if [ "$VERBOSE" = "1" ]; then
-        verbose_state="${C_GREEN}on${C_RESET}"
-    else
-        verbose_state="${C_DIM}off${C_RESET}"
-    fi
-
-    version="$(installed_version 2>/dev/null || true)"
-    if [ -z "$version" ]; then
-        version="$persistent_version"
-    fi
-    [ -n "$version" ] || version="-"
-
-    if autostart_enabled; then
-        autostart_state="${C_GREEN}enabled${C_RESET}"
-    elif [ -f "$INIT_SCRIPT_PATH" ]; then
-        autostart_state="${C_YELLOW}installed but disabled${C_RESET}"
-    else
-        autostart_state="${C_RED}not configured${C_RESET}"
-    fi
-
-    printf "%sStatus%s\n" "$C_BOLD" "$C_RESET"
-    printf "  tmp bin   : %s\n" "$install_state"
-    printf "  persist   : %s\n" "$persistent_state"
-    printf "  process   : %s\n" "$run_state"
-    printf "  pid       : %s\n" "$pid"
-    printf "  bin ver   : %s\n" "$version"
-    printf "  source    : %s\n" "$SOURCE_BIN"
-    printf "  asset     : %s\n" "$(resolved_binary_name)"
-    printf "  src mode  : %s\n" "$(selected_update_channel 2>/dev/null || printf release)"
-    printf "  ref       : %s\n" "$(selected_update_ref 2>/dev/null || printf latest)"
-    printf "  release   : %s\n" "$(resolved_release_url)"
-    printf "  tmp path  : %s\n" "$BIN_PATH"
-    printf "  persist dir: %s\n" "$persistent_dir"
-    printf "  persist bin: %s\n" "$persistent_bin"
-    printf "  autostart : %s\n" "$autostart_state"
-    if launcher="$(current_launcher_path 2>/dev/null)"; then
-        printf "  launcher  : %s\n" "$launcher"
-    else
-        printf "  launcher  : %s\n" "-"
-    fi
-    printf "  listen    : %s:%s\n" "$LISTEN_HOST" "$LISTEN_PORT"
-    printf "  mode      : terminal logs only\n"
-    printf "  verbose   : %s\n" "$verbose_state"
-    if is_openwrt; then
-        printf "  system    : OpenWrt\n"
-    else
-        printf "  system    : not detected as OpenWrt\n"
-    fi
-    arch="$(openwrt_arch)"
-    printf "  arch      : %s\n" "${arch:--}"
-    free_kb="$(tmp_available_kb)"
-    printf "  tmp free  : %s KB\n" "${free_kb:--}"
+    return 1
 }
 
 install_launcher() {
@@ -1413,59 +1507,34 @@ install_launcher() {
     printf "%s" "$target"
 }
 
-download_binary() {
-    mkdir -p "$(dirname "$SOURCE_BIN")" || return 1
-    url="$(resolved_release_url)"
+copy_manager_bundle() {
+    src_script="$1"
+    dest_script="$2"
+    fallback_script="${3:-}"
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -O "$SOURCE_BIN" "$url"
-        return $?
+    mkdir -p "$(dirname "$dest_script")" || return 1
+    cp "$src_script" "$dest_script" || return 1
+    chmod +x "$dest_script" || return 1
+
+    src_lib_dir="$(dirname "$src_script")/lib"
+    if [ ! -d "$src_lib_dir" ] && [ -n "$fallback_script" ]; then
+        fallback_lib_dir="$(dirname "$fallback_script")/lib"
+        if [ -d "$fallback_lib_dir" ]; then
+            src_lib_dir="$fallback_lib_dir"
+        fi
     fi
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "$SOURCE_BIN" "$url"
-        return $?
+    if [ -d "$src_lib_dir" ]; then
+        dest_lib_dir="$(dirname "$dest_script")/lib"
+        rm -rf "$dest_lib_dir"
+        cp -R "$src_lib_dir" "$dest_lib_dir" || return 1
     fi
-
-    return 1
-}
-
-script_release_url() {
-    preview_branch="$(selected_preview_branch 2>/dev/null || true)"
-    if [ -n "$preview_branch" ]; then
-        printf "%s/%s/%s" "$PREVIEW_BASE_URL" "$preview_branch" "$PERSIST_MANAGER_NAME"
-        return 0
-    fi
-
-    ref="$1"
-    printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$ref" "$PERSIST_MANAGER_NAME"
 }
 
 copy_current_manager_script() {
-    mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")" || return 1
-    cp "$0" "$SOURCE_MANAGER_SCRIPT" || return 1
-    chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
-}
-
-download_manager_script() {
-    ref="$1"
-    url="$(script_release_url "$ref")"
-
-    mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")" || return 1
-
-    if command -v wget >/dev/null 2>&1; then
-        wget -O "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
-        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
-        return 0
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
-        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
-        return 0
-    fi
-
-    return 1
+    current_script="$(current_script_path 2>/dev/null || true)"
+    [ -n "$current_script" ] || current_script="$0"
+    copy_manager_bundle "$current_script" "$SOURCE_MANAGER_SCRIPT"
 }
 
 refresh_current_manager_script_from_source() {
@@ -1481,8 +1550,7 @@ refresh_current_manager_script_from_source() {
 
     [ -w "$current_script" ] || return 0
 
-    cp "$SOURCE_MANAGER_SCRIPT" "$current_script" || return 1
-    chmod +x "$current_script" || return 1
+    copy_manager_bundle "$SOURCE_MANAGER_SCRIPT" "$current_script" "$current_script"
 }
 
 ensure_source_manager_current() {
@@ -1504,18 +1572,12 @@ ensure_source_manager_current() {
     copy_current_manager_script
 }
 
-write_source_version_file() {
-    version="$1"
-    [ -n "$version" ] || return 0
-    printf "%s\n" "$version" > "$SOURCE_VERSION_FILE" || return 1
-}
-
 install_from_source() {
     mkdir -p "$INSTALL_DIR" || return 1
     cp "$SOURCE_BIN" "$BIN_PATH" || return 1
     chmod +x "$BIN_PATH" || return 1
-    cp "$SOURCE_MANAGER_SCRIPT" "$INSTALL_DIR/$PERSIST_MANAGER_NAME" || return 1
-    chmod +x "$INSTALL_DIR/$PERSIST_MANAGER_NAME" || return 1
+    current_script="$(current_script_path 2>/dev/null || true)"
+    copy_manager_bundle "$SOURCE_MANAGER_SCRIPT" "$INSTALL_DIR/$PERSIST_MANAGER_NAME" "$current_script" || return 1
 
     version="$(cached_source_version 2>/dev/null || true)"
     if [ -n "$version" ]; then
@@ -1532,100 +1594,19 @@ install_from_source() {
     printf "%s" "$launcher_path"
 }
 
-write_persistent_state() {
-    install_dir="$1"
-    version="$2"
-
-    mkdir -p "$PERSIST_STATE_DIR" || return 1
-    printf "%s\n" "$install_dir" > "$PERSIST_PATH_FILE" || return 1
-    if [ -n "$version" ]; then
-        printf "%s\n" "$version" > "$PERSIST_VERSION_FILE" || return 1
-    else
-        rm -f "$PERSIST_VERSION_FILE"
-    fi
-}
-
 install_persistent_from_source() {
     install_dir="$1"
 
     mkdir -p "$install_dir" || return 1
     cp "$SOURCE_BIN" "$install_dir/tg-ws-proxy" || return 1
     chmod +x "$install_dir/tg-ws-proxy" || return 1
-    cp "$SOURCE_MANAGER_SCRIPT" "$install_dir/$PERSIST_MANAGER_NAME" || return 1
-    chmod +x "$install_dir/$PERSIST_MANAGER_NAME" || return 1
+    current_script="$(current_script_path 2>/dev/null || true)"
+    copy_manager_bundle "$SOURCE_MANAGER_SCRIPT" "$install_dir/$PERSIST_MANAGER_NAME" "$current_script" || return 1
 
     version="$(cached_source_version 2>/dev/null || true)"
     write_persistent_state "$install_dir" "$version" || return 1
     launcher_path="$(install_launcher "$install_dir/$PERSIST_MANAGER_NAME")" || return 1
     printf "%s" "$launcher_path"
-}
-
-write_autostart_config() {
-    bin_path="$1"
-    write_settings_config "$bin_path"
-}
-
-sync_autostart_config_if_enabled() {
-    if ! autostart_enabled; then
-        return 0
-    fi
-
-    bin_path="$(persistent_bin_path 2>/dev/null || true)"
-    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        return 0
-    fi
-
-    write_autostart_config "$bin_path"
-}
-
-write_init_script() {
-    mkdir -p "$(dirname "$INIT_SCRIPT_PATH")" || return 1
-    {
-        printf '%s\n' "#!/bin/sh $RC_COMMON_PATH"
-        printf '%s\n' 'START=95'
-        printf '%s\n' 'STOP=10'
-        printf '%s\n' 'USE_PROCD=1'
-        printf '%s\n' "CONFIG_FILE='$PERSIST_CONFIG_FILE'"
-        printf '\n'
-        printf '%s\n' 'start_service() {'
-        printf '%s\n' '    [ -r "$CONFIG_FILE" ] || return 1'
-        printf '%s\n' '    . "$CONFIG_FILE"'
-        printf '%s\n' '    [ -x "$BIN" ] || return 1'
-        printf '%s\n' '    [ -n "$HOST" ] || HOST="0.0.0.0"'
-        printf '%s\n' '    [ -n "$PORT" ] || PORT="1080"'
-        printf '%s\n' '    USERNAME="${USERNAME:-}"'
-        printf '%s\n' '    PASSWORD="${PASSWORD:-}"'
-        printf '%s\n' '    DC_IPS="${DC_IPS:-}"'
-        printf '%s\n' '    if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
-        printf '%s\n' '        return 1'
-        printf '%s\n' '    fi'
-        printf '%s\n' '    set -- "$BIN" --host "$HOST" --port "$PORT"'
-        printf '%s\n' '    if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then'
-        printf '%s\n' '        set -- "$@" --username "$USERNAME" --password "$PASSWORD"'
-        printf '%s\n' '    fi'
-        printf '%s\n' '    if [ "${VERBOSE:-0}" = "1" ]; then'
-        printf '%s\n' '        set -- "$@" --verbose'
-        printf '%s\n' '    fi'
-        printf '%s\n' '    if [ -n "$DC_IPS" ]; then'
-        printf '%s\n' '        old_ifs="$IFS"'
-        printf '%s\n' "        IFS=','"
-        printf '%s\n' '        for entry in $DC_IPS; do'
-        printf '%s\n' '            entry="$(printf "%s" "$entry" | sed '"'"'s/^[[:space:]]*//;s/[[:space:]]*$//'"'"')"'
-        printf '%s\n' '            [ -n "$entry" ] || continue'
-        printf '%s\n' '            set -- "$@" --dc-ip "$entry"'
-        printf '%s\n' '        done'
-        printf '%s\n' '        IFS="$old_ifs"'
-        printf '%s\n' '    fi'
-        printf '%s\n' '    procd_open_instance'
-        printf '%s\n' '    procd_set_param command "$@"'
-        printf '%s\n' '    procd_set_param respawn'
-        printf '%s\n' '    procd_set_param stdout 1'
-        printf '%s\n' '    procd_set_param stderr 1'
-        printf '%s\n' '    procd_close_instance'
-        printf '%s\n' '}'
-    } > "$INIT_SCRIPT_PATH" || return 1
-
-    chmod +x "$INIT_SCRIPT_PATH" || return 1
 }
 
 ensure_source_binary_current() {
@@ -1686,6 +1667,12 @@ ensure_source_binary_current() {
         printf "Or check GitHub API access or network access\n"
         return 1
     fi
+}
+
+check_tmp_space() {
+    free_kb="$(tmp_available_kb)"
+    [ -n "$free_kb" ] || return 0
+    [ "$free_kb" -ge "$REQUIRED_TMP_KB" ]
 }
 
 install_binary() {
@@ -1847,313 +1834,226 @@ update_binary() {
     pause
 }
 
-run_binary() {
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    [ -n "$bin_path" ] || return 1
-
-    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
-        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
-    fi
-    if [ "$VERBOSE" = "1" ]; then
-        set -- "$@" --verbose
-    fi
-    if [ -n "$DC_IPS" ]; then
-        old_ifs="$IFS"
-        IFS=','
-        for entry in $DC_IPS; do
-            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -n "$entry" ] || continue
-            set -- "$@" --dc-ip "$entry"
-        done
-        IFS="$old_ifs"
-    fi
-    "$@"
-}
-
-run_binary_background() {
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    [ -n "$bin_path" ] || return 1
-
-    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
-        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
-    fi
-    if [ "$VERBOSE" = "1" ]; then
-        set -- "$@" --verbose
-    fi
-    if [ -n "$DC_IPS" ]; then
-        old_ifs="$IFS"
-        IFS=','
-        for entry in $DC_IPS; do
-            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -n "$entry" ] || continue
-            set -- "$@" --dc-ip "$entry"
-        done
-        IFS="$old_ifs"
-    fi
-
-    if command -v nohup >/dev/null 2>&1; then
-        nohup "$@" >/dev/null 2>&1 &
-    else
-        "$@" >/dev/null 2>&1 &
-    fi
-
-    printf "%s" "$!"
-}
-
-start_proxy() {
-    if ! auth_settings_valid; then
-        show_header
-        show_invalid_auth_settings
-        pause
-        return 1
-    fi
-
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        show_header
-        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
-        pause
-        return 1
-    fi
-
-    if is_running; then
-        prompt_restart_running_proxy || return 1
-    fi
-
-    if port_in_use; then
-        prompt_stop_detected_proxy_for_busy_port || return 1
-    fi
-
-    show_header
-    show_environment_checks
-    printf "\n"
-    printf "%sStarting %s in terminal%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
-    printf "Logs will be printed here.\n"
-    printf "Stop with Ctrl+C\n"
-    printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
-    show_telegram_settings
-    printf "\n"
-    interrupted="0"
-    run_binary &
-    child_pid="$!"
-    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
-    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
-    trap 'interrupted="1"; kill -INT "$child_pid" 2>/dev/null' INT
-    wait "$child_pid"
-    code="$?"
-    rm -f "$PID_FILE"
-    trap - INT
-    printf "\n%s%s exited with code %s%s\n" "$C_YELLOW" "$APP_NAME" "$code" "$C_RESET"
-    if [ "$interrupted" = "1" ]; then
-        printf "Returned to menu after Ctrl+C\n"
-    fi
-    pause
-}
-
-start_proxy_background() {
-    if ! auth_settings_valid; then
-        show_header
-        show_invalid_auth_settings
-        pause
-        return 1
-    fi
-
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        show_header
-        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
-        pause
-        return 1
-    fi
-
-    if is_running; then
-        prompt_restart_running_proxy || return 1
-    fi
-
-    if port_in_use; then
-        prompt_stop_detected_proxy_for_busy_port || return 1
-    fi
-
-    show_header
-    show_environment_checks
-    printf "\n"
-    printf "%sStarting %s in background%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
-    printf "Logs will not be printed in this session.\n"
-    printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
-
-    child_pid="$(run_binary_background)" || return 1
-    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
-    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
-    sleep 1
-
-    if kill -0 "$child_pid" 2>/dev/null; then
-        printf "Background process pid:\n  %s\n" "$child_pid"
-        pause
-        return 0
-    fi
-
-    wait "$child_pid" 2>/dev/null
-    code="$?"
-    rm -f "$PID_FILE"
-    printf "%sBackground start failed%s\n\n" "$C_RED" "$C_RESET"
-    printf "Process exited with code: %s\n" "$code"
-    pause
-    return 1
-}
-
-enable_autostart() {
-    show_header
-    started_now="0"
-    start_note=""
-
-    if ! auth_settings_valid; then
-        show_invalid_auth_settings
-        pause
-        return 1
-    fi
-
-    if ! is_openwrt; then
-        printf "%sAutostart is only supported on OpenWrt%s\n" "$C_RED" "$C_RESET"
-        pause
-        return 1
-    fi
-
-    bin_path="$(persistent_bin_path 2>/dev/null || true)"
-    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        if ! check_tmp_space; then
-            free_kb="$(tmp_available_kb)"
-            printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-            printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
-            printf "Available: %s KB\n" "${free_kb:-unknown}"
-            pause
-            return 1
-        fi
-
-        if ! ensure_source_binary_current; then
-            pause
-            return 1
-        fi
-
-        launcher_path="$(install_persistent_binary 2>/dev/null || true)"
-        if [ -z "$launcher_path" ]; then
-            show_persistent_install_failure
-            pause
-            return 1
-        fi
-        bin_path="$(persistent_bin_path 2>/dev/null || true)"
-        printf "%sPersistent copy installed automatically%s\n\n" "$C_GREEN" "$C_RESET"
-        printf "Persistent binary:\n  %s\n" "$bin_path"
-        printf "Launcher:\n  %s\n\n" "$launcher_path"
-    fi
-
-    write_autostart_config "$bin_path" || return 1
-    write_init_script || return 1
-
-    if ! "$INIT_SCRIPT_PATH" enable >/dev/null 2>&1; then
-        printf "%sFailed to enable init.d service%s\n" "$C_RED" "$C_RESET"
-        pause
-        return 1
-    fi
-
-    if ! is_running; then
-        if "$INIT_SCRIPT_PATH" start >/dev/null 2>&1; then
-            started_now="1"
-        else
-            start_note="Autostart was enabled, but the service did not start immediately"
-        fi
-    fi
-
-    printf "%sAutostart enabled%s\n\n" "$C_GREEN" "$C_RESET"
-    printf "Service:\n  %s\n" "$INIT_SCRIPT_PATH"
-    printf "Binary:\n  %s\n" "$bin_path"
-    if [ "$started_now" = "1" ]; then
-        printf "\nCurrent state:\n  service started now\n"
-    elif [ -n "$start_note" ]; then
-        printf "\n%s%s%s\n" "$C_YELLOW" "$start_note" "$C_RESET"
-    fi
-    pause
-}
-
-disable_autostart() {
-    show_header
-
-    preserved_update_channel="$(selected_update_channel 2>/dev/null || printf release)"
-    preserved_update_ref="$(selected_update_ref 2>/dev/null || printf latest)"
-    persist_dir="$(persistent_install_dir 2>/dev/null || true)"
-    if [ ! -f "$INIT_SCRIPT_PATH" ] && [ -z "$persist_dir" ]; then
-        printf "%sAutostart is not configured%s\n" "$C_YELLOW" "$C_RESET"
-        pause
-        return 0
-    fi
-
+remove_all() {
+    stop_running >/dev/null 2>&1 || true
     if [ -f "$INIT_SCRIPT_PATH" ]; then
         "$INIT_SCRIPT_PATH" disable >/dev/null 2>&1 || true
         "$INIT_SCRIPT_PATH" stop >/dev/null 2>&1 || true
     fi
+
+    persist_dir="$(persistent_install_dir 2>/dev/null || true)"
+    rm -rf "$INSTALL_DIR"
     if [ -n "$persist_dir" ]; then
         rm -rf "$persist_dir"
     fi
+    rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
+    rm -f "$SOURCE_MANAGER_SCRIPT"
+    rm -f "$PID_FILE"
     rm -rf "$PERSIST_STATE_DIR"
-    case "$preserved_update_channel:$preserved_update_ref" in
-        preview:*)
-            write_update_source_state "preview" "$preserved_update_ref" >/dev/null 2>&1 || true
+    rm -f "$INIT_SCRIPT_PATH"
+    rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
+
+    show_header
+    printf "%sBinary launcher autostart and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
+    pause
+}
+
+
+show_dc_ip_mapping_settings() {
+    printf "%sTelegram DC mapping%s\n" "$C_BOLD" "$C_RESET"
+    if [ -n "$DC_IPS" ]; then
+        printf "  custom : %s\n" "$DC_IPS"
+    else
+        printf "  custom : <default>\n"
+    fi
+}
+
+telegram_host() {
+    case "$LISTEN_HOST" in
+        0.0.0.0|"")
+            ip="$(lan_ip)"
+            if [ -n "$ip" ]; then
+                printf "%s" "$ip"
+            else
+                printf "127.0.0.1"
+            fi
             ;;
-        release:latest|release:)
+        127.0.0.1|localhost)
+            printf "127.0.0.1"
             ;;
-        release:*)
-            write_update_source_state "release" "$preserved_update_ref" >/dev/null 2>&1 || true
+        *)
+            printf "%s" "$LISTEN_HOST"
             ;;
     esac
-    rm -f "$INIT_SCRIPT_PATH"
+}
 
+show_header() {
+    if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
+        clear
+    fi
+    printf "%s+----------------------------------+%s\n" "$C_BLUE" "$C_RESET"
+    printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
+    printf "%s+----------------------------------+%s\n\n" "$C_BLUE" "$C_RESET"
+}
+
+show_telegram_settings() {
+    printf "%sTelegram SOCKS5%s\n" "$C_BOLD" "$C_RESET"
+    printf "  host     : %s\n" "$(telegram_host)"
+    printf "  port     : %s\n" "$LISTEN_PORT"
+    if [ -n "$SOCKS_USERNAME" ]; then
+        printf "  username : %s\n" "$SOCKS_USERNAME"
+    else
+        printf "  username : <empty>\n"
+    fi
+    printf "  password : %s\n" "$(password_display)"
+    if [ -n "$DC_IPS" ]; then
+        printf "  dc map   : %s\n" "$DC_IPS"
+    else
+        printf "  dc map   : <default>\n"
+    fi
+    if [ "$CF_PROXY" = "1" ]; then
+        printf "  cf proxy : on\n"
+    else
+        printf "  cf proxy : off\n"
+    fi
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        printf "  cf order : first\n"
+    else
+        printf "  cf order : fallback\n"
+    fi
+    if [ -n "$CF_DOMAIN" ]; then
+        printf "  cf domain: %s\n" "$CF_DOMAIN"
+    else
+        printf "  cf domain: %s\n" "$DEFAULT_CF_DOMAIN"
+    fi
+}
+
+show_current_version() {
+    version="$(installed_version 2>/dev/null || true)"
+    if [ -z "$version" ]; then
+        version="$(persistent_installed_version 2>/dev/null || true)"
+    fi
+    [ -n "$version" ] || version="-"
+    printf "%sBinary version%s\n" "$C_BOLD" "$C_RESET"
+    printf "  %s\n" "$version"
+}
+
+show_update_source_settings() {
+    channel="$(selected_update_channel 2>/dev/null || printf release)"
+    ref="$(selected_update_ref 2>/dev/null || printf latest)"
+    printf "%sUpdate source%s\n" "$C_BOLD" "$C_RESET"
+    printf "  mode     : %s\n" "$channel"
+    printf "  ref      : %s\n" "$ref"
+}
+
+main_menu_track_label() {
+    channel="$(selected_update_channel 2>/dev/null || printf release)"
+    ref="$(selected_update_ref 2>/dev/null || printf latest)"
+
+    if [ "$channel" = "preview" ]; then
+        printf "preview/%s" "$ref"
+        return 0
+    fi
+
+    printf "release/%s" "$ref"
+}
+
+show_quick_commands() {
+    printf "%sQuick commands%s\n" "$C_BOLD" "$C_RESET"
+    printf "  sh %s install\n" "$0"
+    printf "  sh %s update\n" "$0"
+    printf "  sh %s enable-autostart\n" "$0"
+    printf "  sh %s disable-autostart\n" "$0"
+    printf "  sh %s start\n" "$0"
+    printf "  sh %s stop\n" "$0"
+    printf "  sh %s restart\n" "$0"
+    printf "  sh %s status\n" "$0"
+    printf "  sh %s quick\n" "$0"
+    printf "  sh %s telegram\n" "$0"
+    if launcher="$(current_launcher_path 2>/dev/null)"; then
+        printf "  %s\n" "$launcher"
+    fi
+}
+
+show_status() {
     if [ -x "$BIN_PATH" ]; then
-        install_launcher "$0" >/dev/null 2>&1 || true
+        install_state="${C_GREEN}installed${C_RESET}"
     else
-        rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
+        install_state="${C_RED}not installed${C_RESET}"
     fi
 
-    printf "%sAutostart disabled and persistent copy removed%s\n" "$C_GREEN" "$C_RESET"
-    pause
-}
-
-stop_running() {
-    if ! is_running; then
-        rm -f "$PID_FILE"
-        return 1
-    fi
-
-    pids="$(current_pids)"
-    [ -n "$pids" ] || return 1
-
-    for pid in $pids; do
-        kill "$pid" 2>/dev/null
-    done
-    sleep 1
-
-    for pid in $pids; do
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null
-        fi
-    done
-    rm -f "$PID_FILE"
-    return 0
-}
-
-stop_proxy() {
-    show_header
-    if stop_running; then
-        printf "%sProxy stopped%s\n" "$C_GREEN" "$C_RESET"
+    if has_persistent_install; then
+        persistent_state="${C_GREEN}installed${C_RESET}"
+        persistent_bin="$(persistent_bin_path 2>/dev/null || true)"
+        persistent_dir="$(persistent_install_dir 2>/dev/null || true)"
+        persistent_version="$(persistent_installed_version 2>/dev/null || true)"
     else
-        printf "%s%s is not running%s\n" "$C_YELLOW" "$APP_NAME" "$C_RESET"
+        persistent_state="${C_RED}not installed${C_RESET}"
+        persistent_bin="-"
+        persistent_dir="-"
+        persistent_version="-"
     fi
-    pause
-}
 
-restart_proxy() {
-    stop_running >/dev/null 2>&1 || true
-    start_proxy
+    if is_running; then
+        pid="$(current_pids | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        run_state="${C_GREEN}running${C_RESET}"
+    else
+        pid="-"
+        run_state="${C_RED}stopped${C_RESET}"
+    fi
+
+    if [ "$VERBOSE" = "1" ]; then
+        verbose_state="${C_GREEN}on${C_RESET}"
+    else
+        verbose_state="${C_DIM}off${C_RESET}"
+    fi
+
+    version="$(installed_version 2>/dev/null || true)"
+    if [ -z "$version" ]; then
+        version="$persistent_version"
+    fi
+    [ -n "$version" ] || version="-"
+
+    if autostart_enabled; then
+        autostart_state="${C_GREEN}enabled${C_RESET}"
+    elif [ -f "$INIT_SCRIPT_PATH" ]; then
+        autostart_state="${C_YELLOW}installed but disabled${C_RESET}"
+    else
+        autostart_state="${C_RED}not configured${C_RESET}"
+    fi
+
+    printf "%sStatus%s\n" "$C_BOLD" "$C_RESET"
+    printf "  tmp bin   : %s\n" "$install_state"
+    printf "  persist   : %s\n" "$persistent_state"
+    printf "  process   : %s\n" "$run_state"
+    printf "  pid       : %s\n" "$pid"
+    printf "  bin ver   : %s\n" "$version"
+    printf "  source    : %s\n" "$SOURCE_BIN"
+    printf "  asset     : %s\n" "$(resolved_binary_name)"
+    printf "  src mode  : %s\n" "$(selected_update_channel 2>/dev/null || printf release)"
+    printf "  ref       : %s\n" "$(selected_update_ref 2>/dev/null || printf latest)"
+    printf "  release   : %s\n" "$(resolved_release_url)"
+    printf "  tmp path  : %s\n" "$BIN_PATH"
+    printf "  persist dir: %s\n" "$persistent_dir"
+    printf "  persist bin: %s\n" "$persistent_bin"
+    printf "  autostart : %s\n" "$autostart_state"
+    if launcher="$(current_launcher_path 2>/dev/null)"; then
+        printf "  launcher  : %s\n" "$launcher"
+    else
+        printf "  launcher  : %s\n" "-"
+    fi
+    printf "  listen    : %s:%s\n" "$LISTEN_HOST" "$LISTEN_PORT"
+    printf "  mode      : terminal logs only\n"
+    printf "  verbose   : %s\n" "$verbose_state"
+    if is_openwrt; then
+        printf "  system    : OpenWrt\n"
+    else
+        printf "  system    : not detected as OpenWrt\n"
+    fi
+    arch="$(openwrt_arch)"
+    printf "  arch      : %s\n" "${arch:--}"
+    free_kb="$(tmp_available_kb)"
+    printf "  tmp free  : %s KB\n" "${free_kb:--}"
 }
 
 show_telegram_only() {
@@ -2163,50 +2063,351 @@ show_telegram_only() {
     pause
 }
 
-restart_running_proxy_for_updated_settings() {
-    if autostart_enabled; then
-        "$INIT_SCRIPT_PATH" restart >/dev/null 2>&1 && return 0
-        "$INIT_SCRIPT_PATH" stop >/dev/null 2>&1 || true
-        "$INIT_SCRIPT_PATH" start >/dev/null 2>&1 && return 0
+show_quick_only() {
+    show_header
+    show_quick_commands
+    pause
+}
+
+menu_proxy_action_label() {
+    if [ "$1" = "1" ]; then
+        printf "Stop proxy"
+    else
+        printf "Run proxy in terminal"
+    fi
+}
+
+menu_autostart_action_label() {
+    if [ "$1" = "1" ]; then
+        printf "Disable autostart"
+    else
+        printf "Enable autostart"
+    fi
+}
+
+show_menu_summary() {
+    if [ "$1" = "1" ]; then
+        proxy_state="${C_GREEN}running${C_RESET}"
+    else
+        proxy_state="${C_RED}stopped${C_RESET}"
+    fi
+
+    if [ "$2" = "1" ]; then
+        autostart_state="${C_GREEN}enabled${C_RESET}"
+    else
+        autostart_state="${C_RED}disabled${C_RESET}"
+    fi
+
+    if [ "$VERBOSE" = "1" ]; then
+        verbose_state="${C_GREEN}on${C_RESET}"
+    else
+        verbose_state="${C_DIM}off${C_RESET}"
+    fi
+
+    if [ "$CF_PROXY" = "1" ]; then
+        cf_proxy_state="${C_GREEN}on${C_RESET}"
+    else
+        cf_proxy_state="${C_DIM}off${C_RESET}"
+    fi
+
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        cf_order_state="first"
+    else
+        cf_order_state="fallback"
+    fi
+
+    printf "%sSummary%s\n" "$C_BOLD" "$C_RESET"
+    printf "  proxy     : %s\n" "$proxy_state"
+    printf "  autostart : %s\n" "$autostart_state"
+    printf "  verbose   : %s\n" "$verbose_state"
+    printf "  cf proxy  : %s\n" "$cf_proxy_state"
+    printf "  cf order  : %s\n" "$cf_order_state"
+    printf "  track     : %s\n" "$(main_menu_track_label)"
+}
+
+show_help() {
+    show_header
+    printf "%sUsage%s\n" "$C_BOLD" "$C_RESET"
+    printf "  sh %s                start menu mode\n" "$0"
+    printf "  sh %s install        install or update binary\n" "$0"
+    printf "  sh %s update         update from configured source\n" "$0"
+    printf "  sh %s enable-autostart   enable OpenWrt autostart\n" "$0"
+    printf "  sh %s disable-autostart  disable OpenWrt autostart\n" "$0"
+    printf "  sh %s start          run proxy in terminal\n" "$0"
+    printf "  sh %s start-background start proxy in background\n" "$0"
+    printf "  sh %s stop           stop running proxy\n" "$0"
+    printf "  sh %s restart        restart proxy in terminal\n" "$0"
+    printf "  sh %s status         show status\n" "$0"
+    printf "  sh %s quick          show quick commands\n" "$0"
+    printf "  sh %s telegram       show Telegram SOCKS5 settings\n" "$0"
+    printf "  sh %s remove         remove installed binary\n" "$0"
+    printf "  sh %s help           show this help\n" "$0"
+    pause
+}
+
+
+can_use_arrow_update_source_picker() {
+    if [ -n "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+        return 0
+    fi
+
+    [ -t 0 ] || return 1
+    [ -t 2 ] || return 1
+    [ "${TERM:-}" != "dumb" ] || return 1
+    command -v stty >/dev/null 2>&1 || return 1
+}
+
+can_use_numbered_update_source_picker() {
+    if [ -n "$FORCE_NUMBERED_UPDATE_SOURCE_PICKER" ]; then
+        return 0
+    fi
+
+    [ -t 0 ] || return 1
+    [ -t 2 ] || return 1
+    [ "${TERM:-}" != "dumb" ] || return 1
+}
+
+read_picker_hex_byte() {
+    dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'
+}
+
+draw_update_source_picker() {
+    current="$1"
+    if [ "$current" = "preview" ]; then
+        release_prefix="  "
+        preview_prefix="> "
+    else
+        release_prefix="> "
+        preview_prefix="  "
+    fi
+
+    printf "Mode (use arrows, Enter to confirm):\n" >&2
+    printf "%srelease\n" "$release_prefix" >&2
+    printf "%spreview\n" "$preview_prefix" >&2
+}
+
+choose_update_source_mode_numbered() {
+    current="${1:-release}"
+
+    printf "Mode:\n" >&2
+    printf "  1) release\n" >&2
+    printf "  2) preview\n" >&2
+    printf "Select mode [1-2] (Enter for %s): " "$current" >&2
+    IFS= read -r selected_mode
+
+    case "$selected_mode" in
+        "")
+            selected_mode="$current"
+            ;;
+        1|release)
+            selected_mode="release"
+            ;;
+        2|preview)
+            selected_mode="preview"
+            ;;
+    esac
+
+    printf "%s" "$selected_mode"
+}
+
+prompt_manual_release_tag() {
+    current_tag="$(normalize_version "${1:-}" 2>/dev/null || true)"
+
+    if [ -n "$current_tag" ]; then
+        printf "Release tag (Enter to keep %s): " "$current_tag" >&2
+    else
+        printf "Release tag (for example: v1.1.28): " >&2
+    fi
+
+    IFS= read -r typed_tag
+    if [ -z "$typed_tag" ]; then
+        if [ -n "$current_tag" ]; then
+            printf "%s" "$current_tag"
+            return 0
+        fi
+        printf "\n%sRelease tag cannot be empty here%s\n" "$C_RED" "$C_RESET" >&2
         return 1
     fi
 
-    stop_running >/dev/null 2>&1 || true
-    child_pid="$(run_binary_background)" || return 1
-    mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
-    printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
-    sleep 1
-
-    if kill -0 "$child_pid" 2>/dev/null; then
-        return 0
+    normalized_tag="$(normalize_version "$typed_tag" 2>/dev/null || true)"
+    if [ -z "$normalized_tag" ]; then
+        printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+    if ! release_tag_meets_minimum "$normalized_tag"; then
+        printf "\n%sRelease tag must be %s or newer%s\n" "$C_RED" "$MIN_PINNED_RELEASE_TAG" "$C_RESET" >&2
+        return 1
     fi
 
-    wait "$child_pid" 2>/dev/null
-    rm -f "$PID_FILE"
-    return 1
+    printf "%s" "$normalized_tag"
 }
 
-prompt_restart_proxy_for_updated_settings() {
-    if ! is_running; then
+choose_release_ref_numbered() {
+    current_ref="${1:-latest}"
+    current_tag="$(normalize_version "$current_ref" 2>/dev/null || true)"
+    tags="$(recent_release_tags 8 2>/dev/null || true)"
+
+    if [ -n "$current_tag" ] && ! printf "%s\n" "$tags" | grep -Fx "$current_tag" >/dev/null 2>&1; then
+        if [ -n "$tags" ]; then
+            tags="$(printf '%s\n%s' "$current_tag" "$tags")"
+        else
+            tags="$current_tag"
+        fi
+    fi
+
+    printf "Release ref:\n" >&2
+    printf "  1) latest\n" >&2
+
+    option_count=1
+    old_ifs="$IFS"
+    IFS='
+'
+    for tag in $tags; do
+        [ -n "$tag" ] || continue
+        option_count=$((option_count + 1))
+        printf "  %s) %s\n" "$option_count" "$tag" >&2
+    done
+    IFS="$old_ifs"
+
+    manual_option=$((option_count + 1))
+    printf "  %s) enter tag manually\n" "$manual_option" >&2
+    printf "Select release ref [1-%s] (Enter for %s): " "$manual_option" "$current_ref" >&2
+    IFS= read -r selected_ref
+
+    case "$selected_ref" in
+        "")
+            case "$current_ref" in
+                latest|"")
+                    printf ""
+                    return 0
+                    ;;
+                *)
+                    printf "%s" "$current_ref"
+                    return 0
+                    ;;
+            esac
+            ;;
+        1|latest)
+            printf ""
+            return 0
+            ;;
+        "$manual_option"|m|M|manual)
+            prompt_manual_release_tag "$current_tag"
+            return $?
+            ;;
+    esac
+
+    chosen_tag="$(printf "latest\n%s\n" "$tags" | sed -n "${selected_ref}p" 2>/dev/null || true)"
+    case "$chosen_tag" in
+        "")
+            printf "\n%sUnknown release ref selection%s\n" "$C_RED" "$C_RESET" >&2
+            return 1
+            ;;
+        latest)
+            printf ""
+            return 0
+            ;;
+        *)
+            printf "%s" "$chosen_tag"
+            return 0
+            ;;
+    esac
+}
+
+choose_release_ref() {
+    current_ref="${1:-latest}"
+
+    if can_use_numbered_update_source_picker; then
+        choose_release_ref_numbered "$current_ref"
+        return $?
+    fi
+
+    printf "Release ref (empty/latest for latest, or tag like v1.1.28): " >&2
+    IFS= read -r new_ref
+    case "$new_ref" in
+        ""|latest)
+            printf ""
+            return 0
+            ;;
+        *)
+            normalized_tag="$(normalize_version "$new_ref" 2>/dev/null || true)"
+            if [ -z "$normalized_tag" ]; then
+                printf "\n%sRelease tag must look like v1.1.28%s\n" "$C_RED" "$C_RESET" >&2
+                return 1
+            fi
+            printf "%s" "$normalized_tag"
+            return 0
+            ;;
+    esac
+}
+
+choose_update_source_mode() {
+    current="${1:-release}"
+
+    if can_use_arrow_update_source_picker; then
+        :
+    elif can_use_numbered_update_source_picker; then
+        choose_update_source_mode_numbered "$current"
+        return 0
+    else
+        printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+        IFS= read -r selected_mode
+        if [ -z "$selected_mode" ]; then
+            selected_mode="$current"
+        fi
+        printf "%s" "$selected_mode"
         return 0
     fi
 
-    printf "\nProxy is currently running.\n"
-    printf "Restart now to apply the new settings? [y/N]: "
-    IFS= read -r restart_choice
-
-    case "$restart_choice" in
-        y|Y|yes|YES|Yes)
-            if restart_running_proxy_for_updated_settings; then
-                printf "\n%sProxy restarted with the updated settings%s\n" "$C_GREEN" "$C_RESET"
-            else
-                printf "\n%sProxy restart failed. Restart it manually to apply the new settings.%s\n" "$C_RED" "$C_RESET"
+    restore_stty=""
+    if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+        restore_stty="$(stty -g 2>/dev/null || true)"
+        if [ -z "$restore_stty" ]; then
+            printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+            IFS= read -r selected_mode
+            if [ -z "$selected_mode" ]; then
+                selected_mode="$current"
             fi
-            ;;
-        *)
-            printf "\nRestart skipped. New settings will apply on the next start.\n"
-            ;;
-    esac
+            printf "%s" "$selected_mode"
+            return 0
+        fi
+        stty -echo -icanon min 1 time 0 2>/dev/null || true
+    fi
+
+    redraw="0"
+    while true; do
+        if [ "$redraw" = "1" ]; then
+            printf '\033[3A\033[J' >&2
+        fi
+        draw_update_source_picker "$current"
+        redraw="1"
+
+        first_hex="$(read_picker_hex_byte)"
+        case "$first_hex" in
+            0a|0d)
+                break
+                ;;
+            1b)
+                second_hex="$(read_picker_hex_byte)"
+                third_hex="$(read_picker_hex_byte)"
+                case "$second_hex$third_hex" in
+                    5b41|5b44)
+                        current="release"
+                        ;;
+                    5b42|5b43)
+                        current="preview"
+                        ;;
+                esac
+                ;;
+        esac
+    done
+
+    if [ -n "$restore_stty" ]; then
+        stty "$restore_stty" 2>/dev/null || true
+    fi
+
+    printf "\n" >&2
+    printf "%s" "$current"
 }
 
 configure_socks_auth() {
@@ -2342,36 +2543,6 @@ configure_update_source() {
     pause
 }
 
-show_quick_only() {
-    show_header
-    show_quick_commands
-    pause
-}
-
-remove_all() {
-    stop_running >/dev/null 2>&1 || true
-    if [ -f "$INIT_SCRIPT_PATH" ]; then
-        "$INIT_SCRIPT_PATH" disable >/dev/null 2>&1 || true
-        "$INIT_SCRIPT_PATH" stop >/dev/null 2>&1 || true
-    fi
-
-    persist_dir="$(persistent_install_dir 2>/dev/null || true)"
-    rm -rf "$INSTALL_DIR"
-    if [ -n "$persist_dir" ]; then
-        rm -rf "$persist_dir"
-    fi
-    rm -f "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
-    rm -f "$SOURCE_MANAGER_SCRIPT"
-    rm -f "$PID_FILE"
-    rm -rf "$PERSIST_STATE_DIR"
-    rm -f "$INIT_SCRIPT_PATH"
-    rm -f "$LAUNCHER_PATH" "/tmp/$LAUNCHER_NAME"
-
-    show_header
-    printf "%sBinary launcher autostart and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
-    pause
-}
-
 toggle_verbose() {
     if [ "$VERBOSE" = "1" ]; then
         VERBOSE="0"
@@ -2381,46 +2552,163 @@ toggle_verbose() {
     sync_autostart_config_if_enabled >/dev/null 2>&1 || true
 }
 
-menu_proxy_action_label() {
-    if [ "$1" = "1" ]; then
-        printf "Stop proxy"
+toggle_cf_proxy() {
+    if [ "$CF_PROXY" = "1" ]; then
+        CF_PROXY="0"
     else
-        printf "Run proxy in terminal"
+        CF_PROXY="1"
     fi
+    write_settings_config >/dev/null 2>&1 || true
+    sync_autostart_config_if_enabled >/dev/null 2>&1 || true
 }
 
-menu_autostart_action_label() {
-    if [ "$1" = "1" ]; then
-        printf "Disable autostart"
+toggle_cf_proxy_first() {
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        CF_PROXY_FIRST="0"
     else
-        printf "Enable autostart"
+        CF_PROXY_FIRST="1"
     fi
+    write_settings_config >/dev/null 2>&1 || true
+    sync_autostart_config_if_enabled >/dev/null 2>&1 || true
 }
 
-show_menu_summary() {
-    if [ "$1" = "1" ]; then
-        proxy_state="${C_GREEN}running${C_RESET}"
+configure_cf_domain() {
+    show_header
+    printf "%sCloudflare proxy domain%s\n" "$C_BOLD" "$C_RESET"
+    if [ -n "$CF_DOMAIN" ]; then
+        printf "  current: %s\n" "$CF_DOMAIN"
     else
-        proxy_state="${C_RED}stopped${C_RESET}"
+        printf "  current: %s\n" "$DEFAULT_CF_DOMAIN"
+    fi
+    printf "\nEnter your Cloudflare domain (e.g. example.com).\n"
+    printf "Default domain for quick testing: %s\n" "$DEFAULT_CF_DOMAIN"
+    printf "DNS records kws1..kws5 and kws203 must point to Telegram DC IPs.\n"
+    printf "Use 'clear' to restore the default domain.\n"
+    printf "CF domain (empty to keep current): "
+    IFS= read -r new_cf_domain
+
+    if [ -z "$new_cf_domain" ]; then
+        printf "\nNo changes made.\n"
+        pause
+        return 0
     fi
 
-    if [ "$2" = "1" ]; then
-        autostart_state="${C_GREEN}enabled${C_RESET}"
-    else
-        autostart_state="${C_RED}disabled${C_RESET}"
+    case "$new_cf_domain" in
+        clear|CLEAR|Clear)
+            CF_DOMAIN="$DEFAULT_CF_DOMAIN"
+            write_settings_config || return 1
+            printf "\n%sCloudflare domain reset to default%s\n" "$C_GREEN" "$C_RESET"
+            prompt_restart_proxy_for_updated_settings
+            pause
+            return 0
+            ;;
+    esac
+
+    CF_DOMAIN="$new_cf_domain"
+    write_settings_config || return 1
+    printf "\n%sCloudflare domain saved%s\n" "$C_GREEN" "$C_RESET"
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+check_cf_endpoint() {
+    host="$1"
+    if ! command -v openssl >/dev/null 2>&1; then
+        printf "  %-24s failed            openssl not found\n" "$host"
+        return 1
     fi
 
-    if [ "$VERBOSE" = "1" ]; then
-        verbose_state="${C_GREEN}on${C_RESET}"
+    if command -v timeout >/dev/null 2>&1; then
+        output="$(
+            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                timeout 8 openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+        )"
+    elif command -v perl >/dev/null 2>&1; then
+        output="$(
+            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                perl -e 'alarm 8; exec @ARGV' openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+        )"
     else
-        verbose_state="${C_DIM}off${C_RESET}"
+        output="$(
+            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+        )"
     fi
 
-    printf "%sSummary%s\n" "$C_BOLD" "$C_RESET"
-    printf "  proxy     : %s\n" "$proxy_state"
-    printf "  autostart : %s\n" "$autostart_state"
-    printf "  verbose   : %s\n" "$verbose_state"
-    printf "  track     : %s\n" "$(main_menu_track_label)"
+    status_line="$(printf "%s\n" "$output" | sed -n '/^HTTP\//{p;q;}')"
+    if [ -n "$status_line" ]; then
+        case "$status_line" in
+            *"101 Switching Protocols"*)
+                printf "  %-24s tcp ok | tls ok | ws upgrade ok\n" "$host"
+                return 0
+                ;;
+            *)
+                printf "  %-24s tcp ok | tls ok | ws upgrade failed\n" "$host"
+                return 1
+                ;;
+        esac
+    fi
+
+    if printf "%s" "$output" | grep -E "CONNECTED|Verification: OK|SSL handshake has read|depth=" >/dev/null 2>&1; then
+        printf "  %-24s failed            no HTTP response after tcp/tls connect\n" "$host"
+        return 1
+    fi
+
+    printf "  %-24s failed            connection error\n" "$host"
+    return 1
+}
+
+check_cf_domain() {
+    show_header
+    printf "%sCheck Cloudflare domain%s\n" "$C_BOLD" "$C_RESET"
+    printf "  current: %s\n" "$CF_DOMAIN"
+    printf "\nEnter domain to check or press Enter to use current.\n"
+    printf "Domain: "
+    IFS= read -r check_domain
+
+    if [ -z "$check_domain" ]; then
+        check_domain="$CF_DOMAIN"
+    fi
+    if [ -z "$check_domain" ]; then
+        printf "\n%sNo Cloudflare domain set%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    printf "\nChecking %s\n\n" "$check_domain"
+    printf "Requests:\n"
+    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+        printf "  WS GET https://%s.%s/apiws\n" "$prefix" "$check_domain"
+    done
+    printf "\nResults:\n"
+    ok_count=0
+    ok_hosts=""
+    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+        host="$prefix.$check_domain"
+        printf "  %-24s checking...\n" "$host"
+        if check_cf_endpoint "$host"; then
+            ok_count=$((ok_count + 1))
+            if [ -z "$ok_hosts" ]; then
+                ok_hosts="$host"
+            else
+                ok_hosts="$ok_hosts\\n$host"
+            fi
+        fi
+    done
+
+    printf "\n"
+    if [ "$ok_count" -eq 6 ]; then
+        printf "%sCloudflare proxy: all tested hosts support websocket upgrade%s\n" "$C_GREEN" "$C_RESET"
+    elif [ "$ok_count" -eq 0 ]; then
+        printf "%sCloudflare proxy: none of the tested hosts support websocket upgrade%s\n" "$C_RED" "$C_RESET"
+    else
+        printf "%sCloudflare proxy: partially works (%s/%s hosts passed websocket upgrade)%s\n" "$C_YELLOW" "$ok_count" "6" "$C_RESET"
+    fi
+    if [ -n "$ok_hosts" ]; then
+        printf "Working hosts:\n"
+        printf "  %b\n" "$ok_hosts"
+    fi
+    pause
 }
 
 advanced_menu() {
@@ -2435,6 +2723,10 @@ advanced_menu() {
         printf "  6) Configure SOCKS5 auth\n"
         printf "  7) Configure Telegram DC mapping\n"
         printf "  8) Configure update source\n"
+        printf "  9) Toggle Cloudflare proxy\n"
+        printf " 10) Toggle Cloudflare first\n"
+        printf " 11) Set Cloudflare domain\n"
+        printf " 12) Check Cloudflare domain\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -2466,31 +2758,23 @@ advanced_menu() {
             8)
                 configure_update_source
                 ;;
+            9)
+                toggle_cf_proxy
+                ;;
+            10)
+                toggle_cf_proxy_first
+                ;;
+            11)
+                configure_cf_domain
+                ;;
+            12)
+                check_cf_domain
+                ;;
             *)
                 return 0
                 ;;
         esac
     done
-}
-
-show_help() {
-    show_header
-    printf "%sUsage%s\n" "$C_BOLD" "$C_RESET"
-    printf "  sh %s                start menu mode\n" "$0"
-    printf "  sh %s install        install or update binary\n" "$0"
-    printf "  sh %s update         update from configured source\n" "$0"
-    printf "  sh %s enable-autostart   enable OpenWrt autostart\n" "$0"
-    printf "  sh %s disable-autostart  disable OpenWrt autostart\n" "$0"
-    printf "  sh %s start          run proxy in terminal\n" "$0"
-    printf "  sh %s start-background start proxy in background\n" "$0"
-    printf "  sh %s stop           stop running proxy\n" "$0"
-    printf "  sh %s restart        restart proxy in terminal\n" "$0"
-    printf "  sh %s status         show status\n" "$0"
-    printf "  sh %s quick          show quick commands\n" "$0"
-    printf "  sh %s telegram       show Telegram SOCKS5 settings\n" "$0"
-    printf "  sh %s remove         remove installed binary\n" "$0"
-    printf "  sh %s help           show this help\n" "$0"
-    pause
 }
 
 menu() {
