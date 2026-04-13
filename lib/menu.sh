@@ -103,8 +103,7 @@ choose_release_ref_numbered() {
 
     if [ -n "$current_tag" ] && ! printf "%s\n" "$tags" | grep -Fx "$current_tag" >/dev/null 2>&1; then
         if [ -n "$tags" ]; then
-            tags="$current_tag
-$tags"
+            tags="$(printf '%s\n%s' "$current_tag" "$tags")"
         else
             tags="$current_tag"
         fi
@@ -407,6 +406,165 @@ toggle_verbose() {
     sync_autostart_config_if_enabled >/dev/null 2>&1 || true
 }
 
+toggle_cf_proxy() {
+    if [ "$CF_PROXY" = "1" ]; then
+        CF_PROXY="0"
+    else
+        CF_PROXY="1"
+    fi
+    write_settings_config >/dev/null 2>&1 || true
+    sync_autostart_config_if_enabled >/dev/null 2>&1 || true
+}
+
+toggle_cf_proxy_first() {
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        CF_PROXY_FIRST="0"
+    else
+        CF_PROXY_FIRST="1"
+    fi
+    write_settings_config >/dev/null 2>&1 || true
+    sync_autostart_config_if_enabled >/dev/null 2>&1 || true
+}
+
+configure_cf_domain() {
+    show_header
+    printf "%sCloudflare proxy domain%s\n" "$C_BOLD" "$C_RESET"
+    if [ -n "$CF_DOMAIN" ]; then
+        printf "  current: %s\n" "$CF_DOMAIN"
+    else
+        printf "  current: %s\n" "$DEFAULT_CF_DOMAIN"
+    fi
+    printf "\nEnter your Cloudflare domain (e.g. example.com).\n"
+    printf "Default domain for quick testing: %s\n" "$DEFAULT_CF_DOMAIN"
+    printf "DNS records kws1..kws5 and kws203 must point to Telegram DC IPs.\n"
+    printf "Use 'clear' to restore the default domain.\n"
+    printf "CF domain (empty to keep current): "
+    IFS= read -r new_cf_domain
+
+    if [ -z "$new_cf_domain" ]; then
+        printf "\nNo changes made.\n"
+        pause
+        return 0
+    fi
+
+    case "$new_cf_domain" in
+        clear|CLEAR|Clear)
+            CF_DOMAIN="$DEFAULT_CF_DOMAIN"
+            write_settings_config || return 1
+            printf "\n%sCloudflare domain reset to default%s\n" "$C_GREEN" "$C_RESET"
+            prompt_restart_proxy_for_updated_settings
+            pause
+            return 0
+            ;;
+    esac
+
+    CF_DOMAIN="$new_cf_domain"
+    write_settings_config || return 1
+    printf "\n%sCloudflare domain saved%s\n" "$C_GREEN" "$C_RESET"
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+check_cf_endpoint() {
+    host="$1"
+    if ! command -v openssl >/dev/null 2>&1; then
+        printf "  %-24s failed            openssl not found\n" "$host"
+        return 1
+    fi
+
+    if command -v timeout >/dev/null 2>&1; then
+        output="$(
+            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                timeout 8 openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+        )"
+    elif command -v perl >/dev/null 2>&1; then
+        output="$(
+            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                perl -e 'alarm 8; exec @ARGV' openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+        )"
+    else
+        output="$(
+            printf 'GET /apiws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: binary\r\n\r\n' "$host" |
+                openssl s_client -quiet -servername "$host" -connect "$host:443" 2>&1 || true
+        )"
+    fi
+
+    status_line="$(printf "%s\n" "$output" | sed -n '/^HTTP\//{p;q;}')"
+    if [ -n "$status_line" ]; then
+        case "$status_line" in
+            *"101 Switching Protocols"*)
+                printf "  %-24s tcp ok | tls ok | ws upgrade ok\n" "$host"
+                return 0
+                ;;
+            *)
+                printf "  %-24s tcp ok | tls ok | ws upgrade failed\n" "$host"
+                return 1
+                ;;
+        esac
+    fi
+
+    if printf "%s" "$output" | grep -E "CONNECTED|Verification: OK|SSL handshake has read|depth=" >/dev/null 2>&1; then
+        printf "  %-24s failed            no HTTP response after tcp/tls connect\n" "$host"
+        return 1
+    fi
+
+    printf "  %-24s failed            connection error\n" "$host"
+    return 1
+}
+
+check_cf_domain() {
+    show_header
+    printf "%sCheck Cloudflare domain%s\n" "$C_BOLD" "$C_RESET"
+    printf "  current: %s\n" "$CF_DOMAIN"
+    printf "\nEnter domain to check or press Enter to use current.\n"
+    printf "Domain: "
+    IFS= read -r check_domain
+
+    if [ -z "$check_domain" ]; then
+        check_domain="$CF_DOMAIN"
+    fi
+    if [ -z "$check_domain" ]; then
+        printf "\n%sNo Cloudflare domain set%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    printf "\nChecking %s\n\n" "$check_domain"
+    printf "Requests:\n"
+    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+        printf "  WS GET https://%s.%s/apiws\n" "$prefix" "$check_domain"
+    done
+    printf "\nResults:\n"
+    ok_count=0
+    ok_hosts=""
+    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+        host="$prefix.$check_domain"
+        printf "  %-24s checking...\n" "$host"
+        if check_cf_endpoint "$host"; then
+            ok_count=$((ok_count + 1))
+            if [ -z "$ok_hosts" ]; then
+                ok_hosts="$host"
+            else
+                ok_hosts="$ok_hosts\\n$host"
+            fi
+        fi
+    done
+
+    printf "\n"
+    if [ "$ok_count" -eq 6 ]; then
+        printf "%sCloudflare proxy: all tested hosts support websocket upgrade%s\n" "$C_GREEN" "$C_RESET"
+    elif [ "$ok_count" -eq 0 ]; then
+        printf "%sCloudflare proxy: none of the tested hosts support websocket upgrade%s\n" "$C_RED" "$C_RESET"
+    else
+        printf "%sCloudflare proxy: partially works (%s/%s hosts passed websocket upgrade)%s\n" "$C_YELLOW" "$ok_count" "6" "$C_RESET"
+    fi
+    if [ -n "$ok_hosts" ]; then
+        printf "Working hosts:\n"
+        printf "  %b\n" "$ok_hosts"
+    fi
+    pause
+}
+
 advanced_menu() {
     while true; do
         show_header
@@ -419,6 +577,10 @@ advanced_menu() {
         printf "  6) Configure SOCKS5 auth\n"
         printf "  7) Configure Telegram DC mapping\n"
         printf "  8) Configure update source\n"
+        printf "  9) Toggle Cloudflare proxy\n"
+        printf " 10) Toggle Cloudflare first\n"
+        printf " 11) Set Cloudflare domain\n"
+        printf " 12) Check Cloudflare domain\n"
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -449,6 +611,18 @@ advanced_menu() {
                 ;;
             8)
                 configure_update_source
+                ;;
+            9)
+                toggle_cf_proxy
+                ;;
+            10)
+                toggle_cf_proxy_first
+                ;;
+            11)
+                configure_cf_domain
+                ;;
+            12)
+                check_cf_domain
                 ;;
             *)
                 return 0

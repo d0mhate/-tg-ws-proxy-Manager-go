@@ -72,6 +72,30 @@ func TestWSDomains(t *testing.T) {
 	}
 }
 
+func TestCFWSDomain(t *testing.T) {
+	cases := []struct {
+		dc   int
+		want string
+	}{
+		{1, "kws1.example.com"},
+		{2, "kws2.example.com"},
+		{203, "kws203.example.com"},
+		{-2, "kws2.example.com"},
+	}
+	for _, tc := range cases {
+		if got := CFWSDomain("example.com", tc.dc); got != tc.want {
+			t.Errorf("CFWSDomain(example.com, %d) = %q, want %q", tc.dc, got, tc.want)
+		}
+	}
+}
+
+func TestCFWSDomains(t *testing.T) {
+	got := CFWSDomains("example.com", 2)
+	if len(got) != 1 || got[0] != "kws2.example.com" {
+		t.Fatalf("unexpected CF domains: %v", got)
+	}
+}
+
 func TestNormalizeDC(t *testing.T) {
 	if got := NormalizeDC(203); got != 2 {
 		t.Fatalf("unexpected normalized dc: %d", got)

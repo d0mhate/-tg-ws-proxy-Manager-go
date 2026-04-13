@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"unicode"
 
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/socks5"
@@ -39,6 +41,9 @@ func parseArgs(args []string) (config.Config, error) {
 	fs.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP dial timeout")
 	fs.DurationVar(&cfg.InitTimeout, "init-timeout", cfg.InitTimeout, "client MTProto init timeout")
 	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:149.154.167.220")
+	fs.BoolVar(&cfg.UseCFProxy, "cf-proxy", cfg.UseCFProxy, "enable Cloudflare proxy mode for websocket routing")
+	fs.BoolVar(&cfg.UseCFProxyFirst, "cf-proxy-first", cfg.UseCFProxyFirst, "try Cloudflare websocket routing before direct Telegram websocket routing")
+	fs.StringVar(&cfg.CFDomain, "cf-domain", cfg.CFDomain, "Cloudflare domain for websocket routing, e.g. example.com")
 	if err := fs.Parse(args); err != nil {
 		return config.Config{}, err
 	}
@@ -53,7 +58,48 @@ func parseArgs(args []string) (config.Config, error) {
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return config.Config{}, fmt.Errorf("--username and --password must be used together")
 	}
+	if cfg.CFDomain != "" && !isValidDomain(cfg.CFDomain) {
+		return config.Config{}, fmt.Errorf("invalid --cf-domain value: %q", cfg.CFDomain)
+	}
 	return cfg, nil
+}
+
+func isValidDomain(domain string) bool {
+	domain = strings.TrimSpace(domain)
+	if domain == "" || strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+
+	labels := strings.Split(domain, ".")
+	if len(labels) < 2 {
+		return false
+	}
+
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' {
+				continue
+			}
+			return false
+		}
+	}
+
+	last := labels[len(labels)-1]
+	if len(last) < 2 {
+		return false
+	}
+	for _, r := range last {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
 }
 
 func main() {

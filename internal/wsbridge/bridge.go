@@ -53,6 +53,12 @@ type Client struct {
 	reader *bufio.Reader
 }
 
+type WSEndpoint struct {
+	DialHost string
+	TLSHost  string
+	HTTPHost string
+}
+
 func NewClient(conn net.Conn) *Client {
 	return &Client{
 		conn:   conn,
@@ -60,8 +66,8 @@ func NewClient(conn net.Conn) *Client {
 	}
 }
 
-func Dial(ctx context.Context, cfg config.Config, targetIP string, domain string) (*Client, error) {
-	addr := net.JoinHostPort(targetIP, "443")
+func DialEndpoint(ctx context.Context, cfg config.Config, ep WSEndpoint) (*Client, error) {
+	addr := net.JoinHostPort(ep.DialHost, "443")
 	dialer := &net.Dialer{Timeout: cfg.DialTimeout}
 	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -69,9 +75,10 @@ func Dial(ctx context.Context, cfg config.Config, targetIP string, domain string
 	}
 
 	tlsConn := tls.Client(rawConn, &tls.Config{
-		ServerName:         domain,
+		ServerName:         ep.TLSHost,
 		InsecureSkipVerify: true,
 		MinVersion:         tls.VersionTLS12,
+		NextProtos:         []string{"http/1.1"},
 	})
 
 	if deadline, ok := ctx.Deadline(); ok {
@@ -86,11 +93,19 @@ func Dial(ctx context.Context, cfg config.Config, targetIP string, domain string
 
 	client := NewClient(tlsConn)
 
-	if err := client.handshake(domain, cfg.ConnectWSPath); err != nil {
+	if err := client.handshake(ep.HTTPHost, cfg.ConnectWSPath); err != nil {
 		_ = client.Close()
 		return nil, err
 	}
 	return client, nil
+}
+
+func Dial(ctx context.Context, cfg config.Config, targetIP string, domain string) (*Client, error) {
+	return DialEndpoint(ctx, cfg, WSEndpoint{
+		DialHost: targetIP,
+		TLSHost:  domain,
+		HTTPHost: domain,
+	})
 }
 
 func (c *Client) Send(data []byte) error {

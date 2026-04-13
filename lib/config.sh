@@ -62,6 +62,9 @@ write_settings_config() {
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
         printf "PASSWORD='%s'\n" "$SOCKS_PASSWORD"
         printf "DC_IPS='%s'\n" "$DC_IPS"
+        printf "CF_PROXY='%s'\n" "$CF_PROXY"
+        printf "CF_PROXY_FIRST='%s'\n" "$CF_PROXY_FIRST"
+        printf "CF_DOMAIN='%s'\n" "$CF_DOMAIN"
     } > "$PERSIST_CONFIG_FILE" || return 1
 }
 
@@ -93,6 +96,23 @@ load_saved_settings() {
 
     if [ -z "$DC_IPS_FROM_ENV" ]; then
         DC_IPS="$(read_config_value DC_IPS 2>/dev/null || true)"
+    fi
+
+    if [ -z "$CF_PROXY_FROM_ENV" ]; then
+        cf_proxy_value="$(read_config_value CF_PROXY 2>/dev/null || true)"
+        [ -n "$cf_proxy_value" ] && CF_PROXY="$cf_proxy_value"
+    fi
+
+    if [ -z "$CF_PROXY_FIRST_FROM_ENV" ]; then
+        cf_proxy_first_value="$(read_config_value CF_PROXY_FIRST 2>/dev/null || true)"
+        [ -n "$cf_proxy_first_value" ] && CF_PROXY_FIRST="$cf_proxy_first_value"
+    fi
+
+    if [ -z "$CF_DOMAIN_FROM_ENV" ]; then
+        CF_DOMAIN="$(read_config_value CF_DOMAIN 2>/dev/null || true)"
+    fi
+    if [ -z "$CF_DOMAIN" ]; then
+        CF_DOMAIN="$DEFAULT_CF_DOMAIN"
     fi
 }
 

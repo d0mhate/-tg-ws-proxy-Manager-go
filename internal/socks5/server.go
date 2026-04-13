@@ -61,6 +61,7 @@ type Server struct {
 	hsFails      *handshakeFailureTracker
 	verboseFails *connFailureTracker
 	verboseDebug *debugEventTracker
+	cfEvents     *cfEventTracker
 	wsDialFunc   wsbridge.DialFunc
 
 	proxyTCPFunc         func(ctx context.Context, conn net.Conn, host string, port int) error
@@ -132,6 +133,13 @@ type debugEventTracker struct {
 	samples map[string]string
 }
 
+type cfEventTracker struct {
+	mu        sync.Mutex
+	failed    map[string]int // "dc=N media=B err=..." -> count
+	connected map[string]int // "dc=N media=B" -> count
+	lastAddr  string
+}
+
 type handshakeError struct {
 	stage      string
 	err        error
@@ -176,6 +184,10 @@ func NewServer(cfg config.Config, logger *log.Logger) *Server {
 		verboseDebug: &debugEventTracker{
 			counts:  make(map[string]int),
 			samples: make(map[string]string),
+		},
+		cfEvents: &cfEventTracker{
+			failed:    make(map[string]int),
+			connected: make(map[string]int),
 		},
 		wsDialFunc: wsbridge.Dial,
 	}
@@ -410,10 +422,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	ws, err := s.connectWS(ctx, targetIP, effectiveDC, isMedia)
+	ws, err := s.connectTelegramThenCloudflareWS(ctx, clientAddr, dc, effectiveDC, isMedia, targetIP)
 	if err != nil {
-		s.stats.recordError("ws_connect", err)
-		s.recordVerboseConnFailure(clientAddr, "ws_connect", err)
 		s.stats.incTCPFallback()
 		s.stats.recordTCPFallbackRoute(effectiveDC, isMedia)
 		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d effective_dc=%d target=%s", clientAddr, fallbackReason(err), dc, effectiveDC, targetIP)
@@ -503,6 +513,71 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 	}
 	s.markFailureCooldown(key)
 	return nil, lastErr
+}
+
+func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string) (*wsbridge.Client, error) {
+	tryCloudflare := s.cfg.UseCFProxy && s.cfg.CFDomain != ""
+
+	tryBridgeCF := func() (*wsbridge.Client, error) {
+		cfHost := telegram.CFWSDomain(s.cfg.CFDomain, dc)
+		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v host=%s", clientAddr, dc, effectiveDC, isMedia, cfHost)
+		cfWS, cfErr := s.connectWSCF(ctx, dc, isMedia)
+		if cfErr != nil {
+			s.stats.recordError("ws_cf_connect", cfErr)
+			s.recordVerboseConnFailure(clientAddr, "ws_cf_connect", cfErr)
+			s.recordCFEvent(clientAddr, effectiveDC, isMedia, cfErr)
+			s.debugf("[%s] cloudflare websocket failed: %v", clientAddr, cfErr)
+			return nil, cfErr
+		}
+		s.recordCFEvent(clientAddr, effectiveDC, isMedia, nil)
+		return cfWS, nil
+	}
+
+	tryTelegram := func() (*wsbridge.Client, error) {
+		ws, err := s.connectWS(ctx, targetIP, effectiveDC, isMedia)
+		if err != nil {
+			s.stats.recordError("ws_connect", err)
+			s.recordVerboseConnFailure(clientAddr, "ws_connect", err)
+			return nil, err
+		}
+		return ws, nil
+	}
+
+	if tryCloudflare && s.cfg.UseCFProxyFirst {
+		if ws, err := tryBridgeCF(); err == nil {
+			s.debugf("[%s] route=websocket primary=cloudflare dc=%d effective_dc=%d media=%v", clientAddr, dc, effectiveDC, isMedia)
+			return ws, nil
+		}
+	}
+
+	ws, err := tryTelegram()
+	if err == nil {
+		return ws, nil
+	}
+
+	if tryCloudflare && !s.cfg.UseCFProxyFirst {
+		if cfWS, cfErr := tryBridgeCF(); cfErr == nil {
+			s.debugf("[%s] route=websocket fallback=cloudflare dc=%d effective_dc=%d media=%v", clientAddr, dc, effectiveDC, isMedia)
+			return cfWS, nil
+		}
+	}
+
+	if tryCloudflare && s.cfg.UseCFProxyFirst {
+		s.debugf("[%s] cloudflare-first fallback exhausted, telegram websocket failed: %v", clientAddr, err)
+	}
+	return nil, err
+}
+
+func (s *Server) connectWSCF(ctx context.Context, dc int, isMedia bool) (*wsbridge.Client, error) {
+	cfHost := telegram.CFWSDomain(s.cfg.CFDomain, dc)
+	s.debugf("ws cf fallback attempt: dc=%d media=%v cf_host=%s", dc, isMedia, cfHost)
+
+	dialCfg := s.cfg
+	ws, err := s.wsDialFunc(ctx, dialCfg, cfHost, cfHost)
+	if err != nil {
+		s.stats.incWSErrors()
+	}
+	return ws, err
 }
 
 func (s *Server) proxyTCP(ctx context.Context, conn net.Conn, host string, port int) error {
@@ -1096,6 +1171,7 @@ func (s *Server) startStatsLogger(ctx context.Context) {
 				s.flushHandshakeFailureSummary()
 				s.flushVerboseConnFailureSummary()
 				s.flushVerboseDebugSummary()
+				s.flushCFEventSummary()
 				s.logger.Printf("%s", s.stats.summaryBlock(s.blacklistSize(), s.cooldownSize()))
 				return
 			case <-ticker.C:
@@ -1103,6 +1179,7 @@ func (s *Server) startStatsLogger(ctx context.Context) {
 				s.flushHandshakeFailureSummary()
 				s.flushVerboseConnFailureSummary()
 				s.flushVerboseDebugSummary()
+				s.flushCFEventSummary()
 				s.logger.Printf("%s", s.stats.summaryBlock(s.blacklistSize(), s.cooldownSize()))
 			}
 		}
@@ -1292,6 +1369,61 @@ func (s *Server) flushVerboseConnFailureSummary() {
 	for _, item := range items {
 		s.logger.Printf("%s x%d in %s last_source=%s", item.key, item.count, statsLogEvery, lastAddrs[item.key])
 	}
+}
+
+func cfErrSummary(err error) string {
+	var hsErr *wsbridge.HandshakeError
+	if errors.As(err, &hsErr) {
+		return fmt.Sprintf("%d", hsErr.StatusCode)
+	}
+	msg := err.Error()
+	if idx := strings.LastIndex(msg, ": "); idx >= 0 {
+		return msg[idx+2:]
+	}
+	return msg
+}
+
+func (s *Server) recordCFEvent(clientAddr string, dc int, isMedia bool, err error) {
+	if s.cfEvents == nil {
+		return
+	}
+	dcKey := fmt.Sprintf("dc=%d media=%v", dc, isMedia)
+	s.cfEvents.mu.Lock()
+	s.cfEvents.lastAddr = clientAddr
+	if err != nil {
+		key := dcKey + " err=" + cfErrSummary(err)
+		s.cfEvents.failed[key]++
+	} else {
+		s.cfEvents.connected[dcKey]++
+	}
+	s.cfEvents.mu.Unlock()
+}
+
+func (s *Server) flushCFEventSummary() {
+	if s.cfEvents == nil {
+		return
+	}
+	s.cfEvents.mu.Lock()
+	failed := s.cfEvents.failed
+	connected := s.cfEvents.connected
+	lastAddr := s.cfEvents.lastAddr
+	s.cfEvents.failed = make(map[string]int)
+	s.cfEvents.connected = make(map[string]int)
+	s.cfEvents.mu.Unlock()
+
+	type entry struct{ key string; n int }
+	var parts []string
+	for key, n := range connected {
+		parts = append(parts, fmt.Sprintf("%s connected=%d", key, n))
+	}
+	for key, n := range failed {
+		parts = append(parts, fmt.Sprintf("%s failed=%d", key, n))
+	}
+	if len(parts) == 0 {
+		return
+	}
+	sort.Strings(parts)
+	s.logger.Printf("cloudflare summary in %s: %s last_source=%s", statsLogEvery, strings.Join(parts, "; "), lastAddr)
 }
 
 func normalizeVerboseMessage(msg string) string {

@@ -1164,6 +1164,124 @@ func TestConnectWSUsesNormalizedDomainsForExplicitDC203(t *testing.T) {
 	}
 }
 
+func TestConnectWSCFDialsHostname(t *testing.T) {
+	srv := NewServer(config.Config{PoolSize: 0, UseCFProxy: true, CFDomain: "cf.example.com"}, log.New(io.Discard, "", 0))
+	var seenTarget, seenDomain string
+
+	srv.wsDialFunc = func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+		seenTarget = targetIP
+		seenDomain = domain
+		return nil, io.EOF
+	}
+
+	_, _ = srv.connectWSCF(context.Background(), 2, false)
+	if seenTarget != "kws2.cf.example.com" {
+		t.Fatalf("unexpected CF dial target: %q", seenTarget)
+	}
+	if seenDomain != "kws2.cf.example.com" {
+		t.Fatalf("unexpected CF dial domain: %q", seenDomain)
+	}
+}
+
+func TestHandleConnCFFallbackTriedBeforeTCP(t *testing.T) {
+	cfg := config.Default()
+	cfg.UseCFProxy = true
+	cfg.CFDomain = "example.com"
+
+	var order []string
+	srv := NewServer(cfg, log.New(io.Discard, "", 0))
+	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+		order = append(order, "ws")
+		return nil, io.EOF
+	}
+	srv.wsDialFunc = func(ctx context.Context, dialCfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+		order = append(order, "cf")
+		return nil, io.EOF
+	}
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		order = append(order, "tcp")
+		return nil
+	}
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.220", 443), init, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	want := []string{"ws", "cf", "tcp"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("unexpected fallback order: got %v want %v", order, want)
+	}
+}
+
+func TestHandleConnTCPFallbackWhenCFDisabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.UseCFProxy = false
+
+	var order []string
+	srv := NewServer(cfg, log.New(io.Discard, "", 0))
+	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+		order = append(order, "ws")
+		return nil, io.EOF
+	}
+	srv.wsDialFunc = func(ctx context.Context, dialCfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+		order = append(order, "cf")
+		return nil, io.EOF
+	}
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		order = append(order, "tcp")
+		return nil
+	}
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.220", 443), init, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	want := []string{"ws", "tcp"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("unexpected order when CF disabled: got %v want %v", order, want)
+	}
+}
+
+func TestHandleConnCFPreferredBeforeTelegramWS(t *testing.T) {
+	cfg := config.Default()
+	cfg.UseCFProxy = true
+	cfg.UseCFProxyFirst = true
+	cfg.CFDomain = "example.com"
+
+	var order []string
+	srv := NewServer(cfg, log.New(io.Discard, "", 0))
+	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+		order = append(order, "ws")
+		return nil, io.EOF
+	}
+	srv.wsDialFunc = func(ctx context.Context, dialCfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+		order = append(order, "cf")
+		return nil, io.EOF
+	}
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		order = append(order, "tcp")
+		return nil
+	}
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.220", 443), init, func(reply []byte) {
+		if reply[1] != 0x00 {
+			t.Fatalf("unexpected socks reply status: %d", reply[1])
+		}
+	})
+
+	want := []string{"cf", "ws", "tcp"}
+	if !reflect.DeepEqual(order, want) {
+		t.Fatalf("unexpected fallback order with CF preferred: got %v want %v", order, want)
+	}
+}
+
 func runHandshakeClient(t *testing.T, request []byte) (requestOut request, err error) {
 	t.Helper()
 	return runHandshakeClientWithConfig(t, config.Default(), request[:3], nil, request[3:])

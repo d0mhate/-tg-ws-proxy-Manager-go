@@ -139,6 +139,42 @@ func TestHandshakeRejectsUnexpectedAcceptHeader(t *testing.T) {
 	}
 }
 
+func TestDialUsesDialEndpointFields(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	go func() {
+		defer serverConn.Close()
+		reader := bufio.NewReader(serverConn)
+		line, _ := reader.ReadString('\n')
+		if line != "GET /apiws HTTP/1.1\r\n" {
+			t.Errorf("unexpected request line: %q", line)
+			return
+		}
+		for {
+			header, err := reader.ReadString('\n')
+			if err != nil {
+				t.Errorf("read header: %v", err)
+				return
+			}
+			if header == "\r\n" {
+				break
+			}
+			if header == "Host: kws2.example.com\r\n" {
+				_, _ = io.WriteString(serverConn, "HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Accept: invalid\r\n\r\n")
+				return
+			}
+		}
+	}()
+
+	client := NewClient(clientConn)
+	err := client.handshake("kws2.example.com", "/apiws")
+	if err == nil {
+		t.Fatal("expected handshake validation error")
+	}
+}
+
 func TestCloseWritesCloseFrame(t *testing.T) {
 	conn := newMockConn(nil)
 	client := &Client{
@@ -199,8 +235,8 @@ func (c *mockConn) Close() error {
 	return nil
 }
 
-func (c *mockConn) LocalAddr() net.Addr  { return dummyAddr("local") }
-func (c *mockConn) RemoteAddr() net.Addr { return dummyAddr("remote") }
+func (c *mockConn) LocalAddr() net.Addr              { return dummyAddr("local") }
+func (c *mockConn) RemoteAddr() net.Addr             { return dummyAddr("remote") }
 func (c *mockConn) SetDeadline(time.Time) error      { return nil }
 func (c *mockConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *mockConn) SetWriteDeadline(time.Time) error { return nil }

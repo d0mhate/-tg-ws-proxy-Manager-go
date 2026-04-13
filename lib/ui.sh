@@ -52,6 +52,21 @@ show_telegram_settings() {
     else
         printf "  dc map   : <default>\n"
     fi
+    if [ "$CF_PROXY" = "1" ]; then
+        printf "  cf proxy : on\n"
+    else
+        printf "  cf proxy : off\n"
+    fi
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        printf "  cf order : first\n"
+    else
+        printf "  cf order : fallback\n"
+    fi
+    if [ -n "$CF_DOMAIN" ]; then
+        printf "  cf domain: %s\n" "$CF_DOMAIN"
+    else
+        printf "  cf domain: %s\n" "$DEFAULT_CF_DOMAIN"
+    fi
 }
 
 show_current_version() {
@@ -230,10 +245,24 @@ show_menu_summary() {
         verbose_state="${C_DIM}off${C_RESET}"
     fi
 
+    if [ "$CF_PROXY" = "1" ]; then
+        cf_proxy_state="${C_GREEN}on${C_RESET}"
+    else
+        cf_proxy_state="${C_DIM}off${C_RESET}"
+    fi
+
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        cf_order_state="first"
+    else
+        cf_order_state="fallback"
+    fi
+
     printf "%sSummary%s\n" "$C_BOLD" "$C_RESET"
     printf "  proxy     : %s\n" "$proxy_state"
     printf "  autostart : %s\n" "$autostart_state"
     printf "  verbose   : %s\n" "$verbose_state"
+    printf "  cf proxy  : %s\n" "$cf_proxy_state"
+    printf "  cf order  : %s\n" "$cf_order_state"
     printf "  track     : %s\n" "$(main_menu_track_label)"
 }
 

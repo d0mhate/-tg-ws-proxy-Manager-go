@@ -51,16 +51,14 @@ matching_pids_for_path() {
 
     pid_from_file="$(read_first_line "$PID_FILE" 2>/dev/null || true)"
     if [ -n "$pid_from_file" ] && pid_matches_binary "$pid_from_file" "$path"; then
-        matches="$matches
-$pid_from_file"
+        matches="${matches}${matches:+\\n}${pid_from_file}"
     fi
 
     if command -v pgrep >/dev/null 2>&1; then
         pids="$(pgrep -f "$path" 2>/dev/null || true)"
         for pid in $pids; do
             pid_matches_binary "$pid" "$path" || continue
-            matches="$matches
-$pid"
+            matches="${matches}${matches:+\\n}${pid}"
         done
     fi
 
@@ -68,13 +66,12 @@ $pid"
         pids="$(pidof "$(basename "$path")" 2>/dev/null || true)"
         for pid in $pids; do
             pid_matches_binary "$pid" "$path" || continue
-            matches="$matches
-$pid"
+            matches="${matches}${matches:+\\n}${pid}"
         done
     fi
 
     [ -n "$matches" ] || return 1
-    printf "%s\n" "$matches" | awk 'NF && !seen[$0]++'
+    printf "%b\n" "$matches" | awk 'NF && !seen[$0]++'
 }
 
 is_running() {
@@ -87,12 +84,11 @@ current_pids() {
         [ -n "$path" ] || continue
         pids="$(matching_pids_for_path "$path" 2>/dev/null || true)"
         [ -n "$pids" ] || continue
-        all_pids="$all_pids
-$pids"
+        all_pids="${all_pids}${all_pids:+\\n}${pids}"
     done
 
     [ -n "$all_pids" ] || return 1
-    printf "%s\n" "$all_pids" | awk 'NF && !seen[$0]++'
+    printf "%b\n" "$all_pids" | awk 'NF && !seen[$0]++'
 }
 
 port_in_use() {
@@ -250,6 +246,12 @@ run_binary() {
         done
         IFS="$old_ifs"
     fi
+    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
+        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
+        if [ "$CF_PROXY_FIRST" = "1" ]; then
+            set -- "$@" --cf-proxy-first
+        fi
+    fi
     "$@"
 }
 
@@ -273,6 +275,12 @@ run_binary_background() {
             set -- "$@" --dc-ip "$entry"
         done
         IFS="$old_ifs"
+    fi
+    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
+        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
+        if [ "$CF_PROXY_FIRST" = "1" ]; then
+            set -- "$@" --cf-proxy-first
+        fi
     fi
 
     if command -v nohup >/dev/null 2>&1; then

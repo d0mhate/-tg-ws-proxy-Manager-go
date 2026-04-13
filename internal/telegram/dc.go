@@ -19,19 +19,19 @@ var ipRanges = [][2]uint32{
 }
 
 var IPToDC = map[string]Endpoint{
-	"149.154.175.50": {DC: 1, IsMedia: false},
-	"149.154.175.51": {DC: 1, IsMedia: false},
-	"149.154.175.53": {DC: 1, IsMedia: false},
-	"149.154.175.54": {DC: 1, IsMedia: false},
+	"149.154.175.50":  {DC: 1, IsMedia: false},
+	"149.154.175.51":  {DC: 1, IsMedia: false},
+	"149.154.175.53":  {DC: 1, IsMedia: false},
+	"149.154.175.54":  {DC: 1, IsMedia: false},
 	"149.154.175.211": {DC: 1, IsMedia: false},
-	"149.154.175.52": {DC: 1, IsMedia: true},
-	"149.154.167.35": {DC: 2, IsMedia: false},
-	"149.154.167.41": {DC: 2, IsMedia: false},
-	"149.154.167.50": {DC: 2, IsMedia: false},
-	"149.154.167.51": {DC: 2, IsMedia: false},
+	"149.154.175.52":  {DC: 1, IsMedia: true},
+	"149.154.167.35":  {DC: 2, IsMedia: false},
+	"149.154.167.41":  {DC: 2, IsMedia: false},
+	"149.154.167.50":  {DC: 2, IsMedia: false},
+	"149.154.167.51":  {DC: 2, IsMedia: false},
 	"149.154.167.255": {DC: 2, IsMedia: false},
 	"149.154.167.220": {DC: 2, IsMedia: false},
-	"95.161.76.100":  {DC: 2, IsMedia: false},
+	"95.161.76.100":   {DC: 2, IsMedia: false},
 	"149.154.167.151": {DC: 2, IsMedia: true},
 	"149.154.167.222": {DC: 2, IsMedia: true},
 	"149.154.167.223": {DC: 2, IsMedia: true},
@@ -112,6 +112,17 @@ func WSDomains(dc int, isMedia bool) []string {
 		return []string{"kws" + itoa(dc) + "-1.web.telegram.org", "kws" + itoa(dc) + ".web.telegram.org"}
 	}
 	return []string{"kws" + itoa(dc) + ".web.telegram.org", "kws" + itoa(dc) + "-1.web.telegram.org"}
+}
+
+func CFWSDomain(baseDomain string, dc int) string {
+	if dc < 0 {
+		dc = -dc
+	}
+	return "kws" + itoa(dc) + "." + baseDomain
+}
+
+func CFWSDomains(baseDomain string, dc int) []string {
+	return []string{CFWSDomain(baseDomain, dc)}
 }
 
 func NormalizeDC(dc int) int {

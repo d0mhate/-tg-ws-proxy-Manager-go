@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	cfconfig "tg-ws-proxy/internal/config"
 )
 
 func TestManagerStatusIgnoresFalsePositivePgrepMatches(t *testing.T) {
@@ -305,6 +307,149 @@ func TestManagerConfigureDCIPMappingCanResetToDefaults(t *testing.T) {
 	}
 }
 
+func TestManagerCFDomainPersistedViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n11\nexample.com\n\n\n")
+	if err != nil {
+		t.Fatalf("configure cf domain failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Cloudflare domain saved") {
+		t.Fatalf("expected success message, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "CF_DOMAIN='example.com'") {
+		t.Fatalf("expected CF_DOMAIN to be persisted, got:\n%s", config)
+	}
+}
+
+func TestManagerToggleCFProxyViaAdvancedMenu(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "CF_PROXY", "0")
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n9\n\n\n")
+	if err != nil {
+		t.Fatalf("toggle cf proxy failed: %v\n%s", err, out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "CF_PROXY='1'") {
+		t.Fatalf("expected CF_PROXY toggled to 1 and persisted, got:\n%s\n%s", config, out)
+	}
+}
+
+func TestManagerToggleCFProxyFirstViaAdvancedMenu(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "CF_PROXY_FIRST", "0")
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n10\n\n\n")
+	if err != nil {
+		t.Fatalf("toggle cf proxy first failed: %v\n%s", err, out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "CF_PROXY_FIRST='1'") {
+		t.Fatalf("expected CF_PROXY_FIRST toggled to 1 and persisted, got:\n%s\n%s", config, out)
+	}
+}
+
+func TestManagerCFSettingsShownInTelegramSettings(t *testing.T) {
+	env := append(managerEnv(t), "CF_PROXY=1", "CF_DOMAIN=example.com")
+
+	out, err := runManagerMenu(t, env, "4\n\n\n")
+	if err != nil {
+		t.Fatalf("show settings failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "cf proxy : on") || !strings.Contains(out, "cf order : fallback") || !strings.Contains(out, "cf domain: example.com") {
+		t.Fatalf("expected cf settings in telegram screen, got:\n%s", out)
+	}
+}
+
+func TestManagerCFSettingsShownInSummary(t *testing.T) {
+	env := append(managerEnv(t), "CF_PROXY=1")
+
+	out, err := runManagerMenu(t, env, "\n")
+	if err != nil && !strings.Contains(out, "cf proxy") {
+		t.Fatalf("expected cf proxy in summary, got:\n%s", out)
+	}
+	if !strings.Contains(out, "cf proxy") {
+		t.Fatalf("expected cf proxy in main menu summary, got:\n%s", out)
+	}
+	if !strings.Contains(out, "cf order") {
+		t.Fatalf("expected cf order in main menu summary, got:\n%s", out)
+	}
+}
+
+func TestManagerCFDomainClearViaAdvancedMenu(t *testing.T) {
+	env := append(managerEnv(t), "CF_PROXY=1", "CF_DOMAIN=example.com")
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "5\n11\nclear\n\n\n")
+	if err != nil {
+		t.Fatalf("clear cf domain failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Cloudflare domain reset to default") {
+		t.Fatalf("expected reset confirmation, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, fmt.Sprintf("CF_DOMAIN='%s'", cfconfig.DefaultCFDomain)) {
+		t.Fatalf("expected CF_DOMAIN to reset to default, got:\n%s", config)
+	}
+}
+
+func TestManagerCFSettingsLoadedFromConfig(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	writeFile(t, configPath, "CF_PROXY='1'\nCF_DOMAIN='saved.example.com'\n", 0o644)
+
+	out, err := runManager(t, env, "telegram")
+	if err != nil {
+		t.Fatalf("telegram command failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "cf proxy : on") || !strings.Contains(out, "cf order : fallback") || !strings.Contains(out, "saved.example.com") {
+		t.Fatalf("expected cf settings loaded from config, got:\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainViaAdvancedMenu(t *testing.T) {
+	env := append(managerEnv(t), "CF_DOMAIN=example.com")
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
+
+	out, err := runManagerMenu(t, env, "5\n12\n\n\n\n")
+	if err != nil {
+		t.Fatalf("check cf domain failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Checking example.com") ||
+		!strings.Contains(out, "kws1.example.com") ||
+		!strings.Contains(out, "kws203.example.com") ||
+		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") ||
+		!strings.Contains(out, "tcp ok | tls ok | ws upgrade ok") {
+		t.Fatalf("unexpected cf domain check output:\n%s", out)
+	}
+}
+
 func TestManagerAdvancedShowFullStatusViaMenu(t *testing.T) {
 	env := managerEnv(t)
 	binPath := envValue(env, "BIN_PATH")
@@ -582,6 +727,60 @@ func TestManagerStartBackgroundPassesCustomDCIPFlags(t *testing.T) {
 
 	if _, err := runManager(t, env, "stop"); err != nil {
 		t.Fatalf("stop after dc-ip background start failed: %v", err)
+	}
+}
+
+func TestManagerStartBackgroundPassesCloudflareFlags(t *testing.T) {
+	env := append(managerEnv(t), "CF_PROXY=1", "CF_DOMAIN=example.com")
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--cf-proxy") || !strings.Contains(args, "--cf-domain") || !strings.Contains(args, "example.com") {
+		t.Fatalf("expected background start to pass cloudflare flags, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after cloudflare background start failed: %v", err)
+	}
+}
+
+func TestManagerStartBackgroundPassesCloudflareFirstFlag(t *testing.T) {
+	env := append(managerEnv(t), "CF_PROXY=1", "CF_PROXY_FIRST=1", "CF_DOMAIN=example.com")
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background with cf first failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--cf-proxy-first") {
+		t.Fatalf("expected background start to pass --cf-proxy-first, got args:\n%s", args)
+	}
+
+	if _, err := runManager(t, env, "stop"); err != nil {
+		t.Fatalf("stop after cloudflare-first background start failed: %v", err)
 	}
 }
 

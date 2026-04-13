@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"tg-ws-proxy/internal/config"
+)
 
 func TestDCIPFlagsSetAndString(t *testing.T) {
 	var flags dcIPFlags
@@ -69,5 +73,60 @@ func TestParseArgsRejectsPartialUsernamePassword(t *testing.T) {
 	}
 	if _, err := parseArgs([]string{"--password", "secret"}); err == nil {
 		t.Fatal("expected parseArgs to reject password without username")
+	}
+}
+
+func TestParseArgsCFProxyWithDomain(t *testing.T) {
+	cfg, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if !cfg.UseCFProxy {
+		t.Fatal("expected UseCFProxy to be true")
+	}
+	if cfg.CFDomain != "example.com" {
+		t.Fatalf("unexpected CFDomain: %q", cfg.CFDomain)
+	}
+	if cfg.UseCFProxyFirst {
+		t.Fatal("expected CF proxy first to stay disabled unless requested")
+	}
+}
+
+func TestParseArgsCFProxyFirst(t *testing.T) {
+	cfg, err := parseArgs([]string{"--cf-proxy", "--cf-proxy-first", "--cf-domain", "example.com"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if !cfg.UseCFProxyFirst {
+		t.Fatal("expected UseCFProxyFirst to be true")
+	}
+}
+
+func TestParseArgsCFProxyDefaultsDisabled(t *testing.T) {
+	cfg, err := parseArgs(nil)
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if cfg.UseCFProxy {
+		t.Fatal("expected CF proxy to be disabled by default")
+	}
+	if cfg.CFDomain != config.DefaultCFDomain {
+		t.Fatalf("expected CF domain %q, got %q", config.DefaultCFDomain, cfg.CFDomain)
+	}
+}
+
+func TestParseArgsCFDomainValidation(t *testing.T) {
+	invalid := []string{"not-a-domain", "example", "has space.com"}
+	for _, d := range invalid {
+		if _, err := parseArgs([]string{"--cf-domain", d}); err == nil {
+			t.Errorf("expected invalid domain %q to be rejected", d)
+		}
+	}
+
+	valid := []string{"example.com", "sub.example.com", "my-domain.org"}
+	for _, d := range valid {
+		if _, err := parseArgs([]string{"--cf-domain", d}); err != nil {
+			t.Errorf("expected valid domain %q, got %v", d, err)
+		}
 	}
 }

@@ -61,6 +61,19 @@ func TestFormatDCIPMap(t *testing.T) {
 	}
 }
 
+func TestDefaultCFProxyDisabled(t *testing.T) {
+	cfg := Default()
+	if cfg.UseCFProxy {
+		t.Fatal("expected UseCFProxy to default to false")
+	}
+	if cfg.UseCFProxyFirst {
+		t.Fatal("expected UseCFProxyFirst to default to false")
+	}
+	if cfg.CFDomain != DefaultCFDomain {
+		t.Fatalf("expected CFDomain %q, got %q", DefaultCFDomain, cfg.CFDomain)
+	}
+}
+
 func TestDefaultIncludesCommonWSDCs(t *testing.T) {
 	cfg := Default()
 
