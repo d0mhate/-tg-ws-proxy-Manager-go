@@ -62,10 +62,16 @@ show_telegram_settings() {
     else
         printf "  cf order : fallback\n"
     fi
-    if [ -n "$CF_DOMAIN" ]; then
-        printf "  cf domain: %s\n" "$CF_DOMAIN"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "  cf domain: not set\n"
     else
-        printf "  cf domain: %s\n" "$DEFAULT_CF_DOMAIN"
+        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
+        if [ "$_cf_commas" -eq 0 ]; then
+            printf "  cf domain: %s\n" "$CF_DOMAIN"
+        else
+            _cf_count=$((_cf_commas + 1))
+            printf "  cf domain: %d domains\n" "$_cf_count"
+        fi
     fi
 }
 

@@ -1013,12 +1013,10 @@ func TestManagerInstallShowsRateLimitHintWhenAPIReturnsEmpty(t *testing.T) {
 		t.Fatal("missing SOURCE_BIN in env")
 	}
 
-	// Remove source binary so the script must download it
 	if err := os.Remove(sourceBin); err != nil {
 		t.Fatalf("remove source bin: %v", err)
 	}
 
-	// Point API to a file with a rate-limit response (no tag_name field)
 	rateLimitFile := sourceBin + ".ratelimit.json"
 	writeFile(t, rateLimitFile, "{\"message\":\"API rate limit exceeded\"}\n", 0o644)
 	env = setEnvValue(env, "RELEASE_API_URL", "file://"+rateLimitFile)
@@ -1038,7 +1036,6 @@ func TestManagerInstallShowsRateLimitHintWhenAPIReturnsEmpty(t *testing.T) {
 func TestManagerUpdateShowsRateLimitHintWhenAPIReturnsEmpty(t *testing.T) {
 	env := managerEnv(t)
 
-	// Point API to a file with a rate-limit response (no tag_name field)
 	rateLimitFile := t.TempDir() + "/ratelimit.json"
 	writeFile(t, rateLimitFile, "{\"message\":\"API rate limit exceeded\"}\n", 0o644)
 	env = setEnvValue(env, "RELEASE_API_URL", "file://"+rateLimitFile)

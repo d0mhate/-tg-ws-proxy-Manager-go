@@ -429,16 +429,20 @@ toggle_cf_proxy_first() {
 configure_cf_domain() {
     show_header
     printf "%sCloudflare proxy domain%s\n" "$C_BOLD" "$C_RESET"
-    if [ -n "$CF_DOMAIN" ]; then
-        printf "  current: %s\n" "$CF_DOMAIN"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "  current: not set\n"
     else
-        printf "  current: %s\n" "$DEFAULT_CF_DOMAIN"
+        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
+        if [ "$_cf_commas" -eq 0 ]; then
+            printf "  current: %s\n" "$CF_DOMAIN"
+        else
+            printf "  current: %s\n" "$CF_DOMAIN"
+        fi
     fi
-    printf "\nEnter your Cloudflare domain (e.g. example.com).\n"
-    printf "Default domain for quick testing: %s\n" "$DEFAULT_CF_DOMAIN"
+    printf "\nEnter your Cloudflare domain(s), comma-separated (e.g. domain1.com,domain2.com).\n"
     printf "DNS records kws1..kws5 and kws203 must point to Telegram DC IPs.\n"
-    printf "Use 'clear' to restore the default domain.\n"
-    printf "CF domain (empty to keep current): "
+    printf "Use 'clear' to remove the domain.\n"
+    printf "CF domain(s) (empty to keep current): "
     IFS= read -r new_cf_domain
 
     if [ -z "$new_cf_domain" ]; then
@@ -449,9 +453,9 @@ configure_cf_domain() {
 
     case "$new_cf_domain" in
         clear|CLEAR|Clear)
-            CF_DOMAIN="$DEFAULT_CF_DOMAIN"
+            CF_DOMAIN=""
             write_settings_config || return 1
-            printf "\n%sCloudflare domain reset to default%s\n" "$C_GREEN" "$C_RESET"
+            printf "\n%sCloudflare domain cleared%s\n" "$C_GREEN" "$C_RESET"
             prompt_restart_proxy_for_updated_settings
             pause
             return 0
@@ -525,7 +529,11 @@ check_cf_endpoint() {
 check_cf_domain() {
     show_header
     printf "%sCheck Cloudflare domain%s\n" "$C_BOLD" "$C_RESET"
-    printf "  current: %s\n" "$CF_DOMAIN"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "  current: not set\n"
+    else
+        printf "  current: %s\n" "$CF_DOMAIN"
+    fi
     printf "\nEnter domain to check or press Enter to use current.\n"
     printf "Domain: "
     IFS= read -r check_domain

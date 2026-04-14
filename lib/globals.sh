@@ -1,10 +1,6 @@
 # globals.sh
 
-_decode_domain() { printf '%s' "$1" | tr 'a-z' 'uvwxyzabcdefghijklmnopqrst'; }
-_DEFAULT_CF_DOMAIN_ENC="virkgj.iu.aq"
-
 APP_NAME="tg-ws-proxy"
-DEFAULT_CF_DOMAIN="${DEFAULT_CF_DOMAIN:-$(_decode_domain "$_DEFAULT_CF_DOMAIN_ENC")}"
 LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
 REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
@@ -61,7 +57,7 @@ SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
 DC_IPS="${DC_IPS:-}"
 CF_PROXY="${CF_PROXY:-0}"
 CF_PROXY_FIRST="${CF_PROXY_FIRST:-0}"
-CF_DOMAIN="${CF_DOMAIN:-$DEFAULT_CF_DOMAIN}"
+CF_DOMAIN="${CF_DOMAIN:-}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"

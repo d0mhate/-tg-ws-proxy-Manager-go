@@ -1165,7 +1165,7 @@ func TestConnectWSUsesNormalizedDomainsForExplicitDC203(t *testing.T) {
 }
 
 func TestConnectWSCFDialsHostname(t *testing.T) {
-	srv := NewServer(config.Config{PoolSize: 0, UseCFProxy: true, CFDomain: "cf.example.com"}, log.New(io.Discard, "", 0))
+	srv := NewServer(config.Config{PoolSize: 0, UseCFProxy: true, CFDomains: []string{"cf.example.com"}}, log.New(io.Discard, "", 0))
 	var seenTarget, seenDomain string
 
 	srv.wsDialFunc = func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
@@ -1186,7 +1186,7 @@ func TestConnectWSCFDialsHostname(t *testing.T) {
 func TestHandleConnCFFallbackTriedBeforeTCP(t *testing.T) {
 	cfg := config.Default()
 	cfg.UseCFProxy = true
-	cfg.CFDomain = "example.com"
+	cfg.CFDomains = []string{"example.com"}
 
 	var order []string
 	srv := NewServer(cfg, log.New(io.Discard, "", 0))
@@ -1252,7 +1252,7 @@ func TestHandleConnCFPreferredBeforeTelegramWS(t *testing.T) {
 	cfg := config.Default()
 	cfg.UseCFProxy = true
 	cfg.UseCFProxyFirst = true
-	cfg.CFDomain = "example.com"
+	cfg.CFDomains = []string{"example.com"}
 
 	var order []string
 	srv := NewServer(cfg, log.New(io.Discard, "", 0))

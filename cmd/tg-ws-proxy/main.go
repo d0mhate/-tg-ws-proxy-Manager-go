@@ -41,9 +41,10 @@ func parseArgs(args []string) (config.Config, error) {
 	fs.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP dial timeout")
 	fs.DurationVar(&cfg.InitTimeout, "init-timeout", cfg.InitTimeout, "client MTProto init timeout")
 	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:149.154.167.220")
+	var cfDomainFlag string
 	fs.BoolVar(&cfg.UseCFProxy, "cf-proxy", cfg.UseCFProxy, "enable Cloudflare proxy mode for websocket routing")
 	fs.BoolVar(&cfg.UseCFProxyFirst, "cf-proxy-first", cfg.UseCFProxyFirst, "try Cloudflare websocket routing before direct Telegram websocket routing")
-	fs.StringVar(&cfg.CFDomain, "cf-domain", cfg.CFDomain, "Cloudflare domain for websocket routing, e.g. example.com")
+	fs.StringVar(&cfDomainFlag, "cf-domain", "", "Cloudflare domain(s) for websocket routing, e.g. example.com or domain1.com,domain2.com (required for CF proxy mode)")
 	if err := fs.Parse(args); err != nil {
 		return config.Config{}, err
 	}
@@ -58,8 +59,24 @@ func parseArgs(args []string) (config.Config, error) {
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return config.Config{}, fmt.Errorf("--username and --password must be used together")
 	}
-	if cfg.CFDomain != "" && !isValidDomain(cfg.CFDomain) {
-		return config.Config{}, fmt.Errorf("invalid --cf-domain value: %q", cfg.CFDomain)
+	if cfDomainFlag != "" {
+		parts := strings.Split(cfDomainFlag, ",")
+		domains := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			if !isValidDomain(p) {
+				return config.Config{}, fmt.Errorf("invalid --cf-domain value: %q", p)
+			}
+			domains = append(domains, p)
+		}
+		if len(domains) == 0 {
+			return config.Config{}, fmt.Errorf("--cf-domain: no valid domains provided")
+		}
+		cfg.CFDomain = domains[0]
+		cfg.CFDomains = domains
 	}
 	return cfg, nil
 }

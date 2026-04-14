@@ -111,9 +111,6 @@ load_saved_settings() {
     if [ -z "$CF_DOMAIN_FROM_ENV" ]; then
         CF_DOMAIN="$(read_config_value CF_DOMAIN 2>/dev/null || true)"
     fi
-    if [ -z "$CF_DOMAIN" ]; then
-        CF_DOMAIN="$DEFAULT_CF_DOMAIN"
-    fi
 }
 
 selected_update_channel() {

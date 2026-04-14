@@ -2,8 +2,6 @@ package main
 
 import (
 	"testing"
-
-	"tg-ws-proxy/internal/config"
 )
 
 func TestDCIPFlagsSetAndString(t *testing.T) {
@@ -87,6 +85,9 @@ func TestParseArgsCFProxyWithDomain(t *testing.T) {
 	if cfg.CFDomain != "example.com" {
 		t.Fatalf("unexpected CFDomain: %q", cfg.CFDomain)
 	}
+	if len(cfg.CFDomains) != 1 || cfg.CFDomains[0] != "example.com" {
+		t.Fatalf("expected CFDomains to be [%q], got %v", "example.com", cfg.CFDomains)
+	}
 	if cfg.UseCFProxyFirst {
 		t.Fatal("expected CF proxy first to stay disabled unless requested")
 	}
@@ -110,8 +111,11 @@ func TestParseArgsCFProxyDefaultsDisabled(t *testing.T) {
 	if cfg.UseCFProxy {
 		t.Fatal("expected CF proxy to be disabled by default")
 	}
-	if cfg.CFDomain != config.DefaultCFDomain {
-		t.Fatalf("expected CF domain %q, got %q", config.DefaultCFDomain, cfg.CFDomain)
+	if cfg.CFDomain != "" {
+		t.Fatalf("expected empty CFDomain when no --cf-domain given, got %q", cfg.CFDomain)
+	}
+	if len(cfg.CFDomains) != 0 {
+		t.Fatalf("expected empty CFDomains by default, got %v", cfg.CFDomains)
 	}
 }
 

@@ -516,11 +516,10 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 }
 
 func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string) (*wsbridge.Client, error) {
-	tryCloudflare := s.cfg.UseCFProxy && s.cfg.CFDomain != ""
+	tryCloudflare := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
 
 	tryBridgeCF := func() (*wsbridge.Client, error) {
-		cfHost := telegram.CFWSDomain(s.cfg.CFDomain, dc)
-		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v host=%s", clientAddr, dc, effectiveDC, isMedia, cfHost)
+		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, s.cfg.CFDomains)
 		cfWS, cfErr := s.connectWSCF(ctx, dc, isMedia)
 		if cfErr != nil {
 			s.stats.recordError("ws_cf_connect", cfErr)
@@ -569,15 +568,19 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 }
 
 func (s *Server) connectWSCF(ctx context.Context, dc int, isMedia bool) (*wsbridge.Client, error) {
-	cfHost := telegram.CFWSDomain(s.cfg.CFDomain, dc)
-	s.debugf("ws cf fallback attempt: dc=%d media=%v cf_host=%s", dc, isMedia, cfHost)
-
-	dialCfg := s.cfg
-	ws, err := s.wsDialFunc(ctx, dialCfg, cfHost, cfHost)
-	if err != nil {
+	var lastErr error
+	for _, domain := range s.cfg.CFDomains {
+		cfHost := telegram.CFWSDomain(domain, dc)
+		s.debugf("ws cf attempt: dc=%d media=%v cf_host=%s", dc, isMedia, cfHost)
+		dialCfg := s.cfg
+		ws, err := s.wsDialFunc(ctx, dialCfg, cfHost, cfHost)
+		if err == nil {
+			return ws, nil
+		}
 		s.stats.incWSErrors()
+		lastErr = err
 	}
-	return ws, err
+	return nil, lastErr
 }
 
 func (s *Server) proxyTCP(ctx context.Context, conn net.Conn, host string, port int) error {

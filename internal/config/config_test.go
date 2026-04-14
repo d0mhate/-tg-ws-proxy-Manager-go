@@ -69,8 +69,8 @@ func TestDefaultCFProxyDisabled(t *testing.T) {
 	if cfg.UseCFProxyFirst {
 		t.Fatal("expected UseCFProxyFirst to default to false")
 	}
-	if cfg.CFDomain != DefaultCFDomain {
-		t.Fatalf("expected CFDomain %q, got %q", DefaultCFDomain, cfg.CFDomain)
+	if len(cfg.CFDomains) != 0 {
+		t.Fatalf("expected empty CFDomains by default, got %v", cfg.CFDomains)
 	}
 }
 

@@ -23,23 +23,8 @@ type Config struct {
 	DCIPs           map[int]string
 	UseCFProxy      bool
 	UseCFProxyFirst bool
-	CFDomain        string
-}
-
-const defaultCFDomainEnc = "virkgj.iu.aq"
-
-var DefaultCFDomain = decodeDomain(defaultCFDomainEnc)
-
-func decodeDomain(s string) string {
-	b := make([]byte, len(s))
-	for i := range s {
-		c := s[i]
-		if c >= 'a' && c <= 'z' {
-			c = (c-'a'+20)%26 + 'a'
-		}
-		b[i] = c
-	}
-	return string(b)
+	CFDomain  string
+	CFDomains []string
 }
 
 func Default() Config {
@@ -52,7 +37,7 @@ func Default() Config {
 		DialTimeout:   10 * time.Second,
 		InitTimeout:   15 * time.Second,
 		ConnectWSPath: "/apiws",
-		CFDomain:      DefaultCFDomain,
+		CFDomains:     nil,
 		DCIPs: map[int]string{
 			1: "149.154.175.205",
 			2: "149.154.167.220",

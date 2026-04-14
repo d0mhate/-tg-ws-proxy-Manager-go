@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	cfconfig "tg-ws-proxy/internal/config"
 )
 
 func TestManagerStatusIgnoresFalsePositivePgrepMatches(t *testing.T) {
@@ -402,13 +401,13 @@ func TestManagerCFDomainClearViaAdvancedMenu(t *testing.T) {
 	if err != nil {
 		t.Fatalf("clear cf domain failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Cloudflare domain reset to default") {
-		t.Fatalf("expected reset confirmation, got:\n%s", out)
+	if !strings.Contains(out, "Cloudflare domain cleared") {
+		t.Fatalf("expected cleared confirmation, got:\n%s", out)
 	}
 
 	config := readTrimmed(t, configPath)
-	if !strings.Contains(config, fmt.Sprintf("CF_DOMAIN='%s'", cfconfig.DefaultCFDomain)) {
-		t.Fatalf("expected CF_DOMAIN to reset to default, got:\n%s", config)
+	if !strings.Contains(config, "CF_DOMAIN=''") {
+		t.Fatalf("expected CF_DOMAIN to be cleared, got:\n%s", config)
 	}
 }
 
