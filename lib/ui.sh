@@ -32,8 +32,20 @@ show_header() {
     if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
         clear
     fi
+    version="$(installed_version 2>/dev/null || true)"
+    if [ -z "$version" ]; then
+        version="$(persistent_installed_version 2>/dev/null || true)"
+    fi
     printf "%s+----------------------------------+%s\n" "$C_BLUE" "$C_RESET"
-    printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
+    if [ -n "$version" ]; then
+        ver_len=${#version}
+        pad=$((11 - ver_len))
+        [ "$pad" -lt 1 ] && pad=1
+        printf "%s|%s %s%s Go manager%s" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET"
+        printf "%${pad}s %s%s%s|%s\n" "" "$C_DIM" "$version" "$C_RESET" "$C_BLUE"
+    else
+        printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
+    fi
     printf "%s+----------------------------------+%s\n\n" "$C_BLUE" "$C_RESET"
 }
 
@@ -85,6 +97,48 @@ show_current_version() {
     printf "  %s\n" "$version"
 }
 
+show_telegram_settings_compact() {
+    host="$(telegram_host)"
+    if [ -n "$SOCKS_USERNAME" ]; then
+        if [ -n "$SOCKS_PASSWORD" ]; then
+            auth_part="user:$SOCKS_USERNAME/<set>"
+        else
+            auth_part="user:$SOCKS_USERNAME"
+        fi
+    else
+        auth_part="no auth"
+    fi
+    if [ -n "$DC_IPS" ]; then
+        dc_part="dc:custom"
+    else
+        dc_part="dc:default"
+    fi
+    printf "  SOCKS5  %s:%s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part"
+
+    if [ "$CF_PROXY" = "1" ]; then
+        cf_on="${C_GREEN}on${C_RESET}"
+    else
+        cf_on="${C_DIM}off${C_RESET}"
+    fi
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        cf_order="first"
+    else
+        cf_order="fallback"
+    fi
+    if [ -z "$CF_DOMAIN" ]; then
+        cf_domain_part="domain:none"
+    else
+        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
+        if [ "$_cf_commas" -eq 0 ]; then
+            cf_domain_part="domain:$CF_DOMAIN"
+        else
+            _cf_count=$((_cf_commas + 1))
+            cf_domain_part="domain:${_cf_count} set"
+        fi
+    fi
+    printf "  CF      %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_domain_part"
+}
+
 show_update_source_settings() {
     channel="$(selected_update_channel 2>/dev/null || printf release)"
     ref="$(selected_update_ref 2>/dev/null || printf latest)"
@@ -109,14 +163,18 @@ show_quick_commands() {
     printf "%sQuick commands%s\n" "$C_BOLD" "$C_RESET"
     printf "  sh %s install\n" "$0"
     printf "  sh %s update\n" "$0"
+    printf "  sh %s persist\n" "$0"
     printf "  sh %s enable-autostart\n" "$0"
     printf "  sh %s disable-autostart\n" "$0"
     printf "  sh %s start\n" "$0"
+    printf "  sh %s start-background\n" "$0"
     printf "  sh %s stop\n" "$0"
     printf "  sh %s restart\n" "$0"
     printf "  sh %s status\n" "$0"
     printf "  sh %s quick\n" "$0"
     printf "  sh %s telegram\n" "$0"
+    printf "  sh %s remove\n" "$0"
+    printf "  sh %s help\n" "$0"
     if launcher="$(current_launcher_path 2>/dev/null)"; then
         printf "  %s\n" "$launcher"
     fi
@@ -220,7 +278,7 @@ menu_proxy_action_label() {
     if [ "$1" = "1" ]; then
         printf "Stop proxy"
     else
-        printf "Run proxy in terminal"
+        printf "Start proxy"
     fi
 }
 
@@ -251,25 +309,8 @@ show_menu_summary() {
         verbose_state="${C_DIM}off${C_RESET}"
     fi
 
-    if [ "$CF_PROXY" = "1" ]; then
-        cf_proxy_state="${C_GREEN}on${C_RESET}"
-    else
-        cf_proxy_state="${C_DIM}off${C_RESET}"
-    fi
-
-    if [ "$CF_PROXY_FIRST" = "1" ]; then
-        cf_order_state="first"
-    else
-        cf_order_state="fallback"
-    fi
-
-    printf "%sSummary%s\n" "$C_BOLD" "$C_RESET"
-    printf "  proxy     : %s\n" "$proxy_state"
-    printf "  autostart : %s\n" "$autostart_state"
-    printf "  verbose   : %s\n" "$verbose_state"
-    printf "  cf proxy  : %s\n" "$cf_proxy_state"
-    printf "  cf order  : %s\n" "$cf_order_state"
-    printf "  track     : %s\n" "$(main_menu_track_label)"
+    printf "  proxy: %s | autostart: %s | verbose: %s | track: %s\n" \
+        "$proxy_state" "$autostart_state" "$verbose_state" "$(main_menu_track_label)"
 }
 
 show_help() {

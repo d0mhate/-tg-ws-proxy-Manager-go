@@ -21,6 +21,32 @@ can_use_numbered_update_source_picker() {
     [ "${TERM:-}" != "dumb" ] || return 1
 }
 
+confirm_yn() {
+    # $1 = prompt text
+    # Returns 0 if confirmed (y/Y), 1 otherwise
+    # Uses single-keypress if stty is available, falls back to line read
+    if [ -t 0 ] && [ -t 2 ] && [ "${TERM:-}" != "dumb" ] && command -v stty >/dev/null 2>&1; then
+        restore_stty="$(stty -g 2>/dev/null || true)"
+        if [ -n "$restore_stty" ]; then
+            printf "%s [y/n]: " "$1" >&2
+            stty -echo raw min 1 time 0 2>/dev/null || true
+            key_hex="$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            stty "$restore_stty" 2>/dev/null || true
+            printf "\n" >&2
+            case "$key_hex" in
+                79|59) return 0 ;;  # y or Y
+                *)     return 1 ;;
+            esac
+        fi
+    fi
+    printf "%s [y/N]: " "$1" >&2
+    IFS= read -r _confirm_input
+    case "$_confirm_input" in
+        y|Y|yes|YES) return 0 ;;
+        *)           return 1 ;;
+    esac
+}
+
 read_picker_hex_byte() {
     dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n'
 }
@@ -555,7 +581,10 @@ check_cf_domain() {
     printf "\nResults:\n"
     ok_count=0
     ok_hosts=""
+    _cf_interrupted=0
+    trap '_cf_interrupted=1' INT
     for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+        [ "$_cf_interrupted" = "0" ] || break
         host="$prefix.$check_domain"
         printf "  %-24s checking...\n" "$host"
         if check_cf_endpoint "$host"; then
@@ -567,6 +596,13 @@ check_cf_domain() {
             fi
         fi
     done
+    trap - INT
+
+    if [ "$_cf_interrupted" = "1" ]; then
+        printf "\nCancelled.\n"
+        pause
+        return 0
+    fi
 
     printf "\n"
     if [ "$ok_count" -eq 6 ]; then
@@ -586,20 +622,37 @@ check_cf_domain() {
 advanced_menu() {
     while true; do
         show_header
-        printf "%sAdvanced%s\n\n" "$C_BOLD" "$C_RESET"
-        printf "  1) Show full status\n"
-        printf "  2) Toggle verbose\n"
-        printf "  3) Restart proxy\n"
-        printf "  4) Show quick commands\n"
-        printf "  5) Remove binary and runtime files\n"
-        printf "  6) Configure SOCKS5 auth\n"
-        printf "  7) Configure Telegram DC mapping\n"
-        printf "  8) Configure update source\n"
-        printf "  9) Toggle Cloudflare proxy\n"
-        printf " 10) Toggle Cloudflare first\n"
-        printf " 11) Set Cloudflare domain\n"
-        printf " 12) Check Cloudflare domain\n"
-        printf "  Enter) Back\n\n"
+        printf "%sAdvanced%s\n" "$C_BOLD" "$C_RESET"
+        printf "\n  Info\n"
+        printf "  1) Full status\n"
+        printf "  2) Telegram SOCKS5 settings\n"
+        printf "  3) Quick commands\n"
+        printf "\n  Proxy\n"
+        if [ "$VERBOSE" = "1" ]; then
+            printf "  4) Toggle verbose (%son%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "  4) Toggle verbose (%soff%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        printf "  5) Restart proxy\n"
+        printf "\n  Cloudflare\n"
+        if [ "$CF_PROXY" = "1" ]; then
+            printf "  6) Toggle proxy (%son%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "  6) Toggle proxy (%soff%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        if [ "$CF_PROXY_FIRST" = "1" ]; then
+            printf "  7) Toggle order (%sfirst%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "  7) Toggle order (%sfallback%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        printf "  8) Set domain\n"
+        printf "  9) Check domain\n"
+        printf "\n  Settings\n"
+        printf " 10) SOCKS5 auth\n"
+        printf " 11) DC mapping\n"
+        printf " 12) Update source\n"
+        printf " 13) Remove binary\n"
+        printf "\n  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
 
@@ -610,37 +663,40 @@ advanced_menu() {
                 pause
                 ;;
             2)
-                toggle_verbose
+                show_telegram_only
                 ;;
             3)
-                restart_proxy
-                ;;
-            4)
                 show_quick_only
                 ;;
+            4)
+                toggle_verbose
+                ;;
             5)
-                remove_all
+                restart_proxy
                 ;;
             6)
-                configure_socks_auth
-                ;;
-            7)
-                configure_dc_ip_mapping
-                ;;
-            8)
-                configure_update_source
-                ;;
-            9)
                 toggle_cf_proxy
                 ;;
-            10)
+            7)
                 toggle_cf_proxy_first
                 ;;
-            11)
+            8)
                 configure_cf_domain
                 ;;
-            12)
+            9)
                 check_cf_domain
+                ;;
+            10)
+                configure_socks_auth
+                ;;
+            11)
+                configure_dc_ip_mapping
+                ;;
+            12)
+                configure_update_source
+                ;;
+            13)
+                remove_all
                 ;;
             *)
                 return 0
@@ -661,29 +717,38 @@ menu() {
     fi
 
     show_header
-    show_current_version
-    printf "\n"
-    show_telegram_settings
+    show_telegram_settings_compact
     printf "\n"
     show_menu_summary "$running_now" "$autostart_now"
     printf "\n%sActions%s\n" "$C_BOLD" "$C_RESET"
     printf "  1) Setup / Update\n"
     printf "  2) %s\n" "$(menu_proxy_action_label "$running_now")"
     printf "  3) %s\n" "$(menu_autostart_action_label "$autostart_now")"
-    printf "  4) Show Telegram SOCKS5 settings\n"
-    printf "  5) Advanced\n"
-    printf "  6) Start in background\n"
+    printf "  4) Advanced\n"
     printf "  Enter) Exit\n\n"
     printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
     read choice
 
     case "$choice" in
-        1) update_binary ;;
+        1)
+            if confirm_yn "  Install / update binary?"; then
+                update_binary
+            fi
+            ;;
         2)
             if [ "$running_now" = "1" ]; then
                 stop_proxy
             else
-                start_proxy
+                printf "  (t)erminal or (b)ackground [t]: "
+                IFS= read -r start_mode
+                case "$start_mode" in
+                    b|B|bg|background)
+                        start_proxy_background
+                        ;;
+                    *)
+                        start_proxy
+                        ;;
+                esac
             fi
             ;;
         3)
@@ -693,9 +758,7 @@ menu() {
                 enable_autostart
             fi
             ;;
-        4) show_telegram_only ;;
-        5) advanced_menu ;;
-        6) start_proxy_background ;;
+        4) advanced_menu ;;
         *) exit 0 ;;
     esac
 }
