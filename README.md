@@ -152,6 +152,8 @@ Script создаёт короткий launcher `tgm`. Обычно это `/usr
 
 ## Cloudflare proxy
 
+How to configure your own cf proxy? read this -> [CF-proxy](https://github.com/Flowseal/tg-ws-proxy/blob/main/docs/CfProxy.md)
+
 Cloudflare proxy - дополнительный режим маршрутизации, при котором трафик до TG идёт через WebSocket-соединение к домену, защищённому Cloudflare. Помогает в сетях, где прямые соединения с серверами TG нестабильны.
 
 По умолчанию режим **выключен**.
