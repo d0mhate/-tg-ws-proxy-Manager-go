@@ -50,15 +50,37 @@ show_header() {
 }
 
 show_telegram_settings() {
-    printf "%sTelegram SOCKS5%s\n" "$C_BOLD" "$C_RESET"
-    printf "  host     : %s\n" "$(telegram_host)"
-    printf "  port     : %s\n" "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ]; then
-        printf "  username : %s\n" "$SOCKS_USERNAME"
+    if [ "$PROXY_MODE" = "mtproto" ]; then
+        printf "%sTelegram MTProto%s\n" "$C_BOLD" "$C_RESET"
+        printf "  mode     : mtproto\n"
+        printf "  host     : %s\n" "$(telegram_host)"
+        printf "  port     : %s\n" "$LISTEN_PORT"
+        if mt_secret_valid 2>/dev/null; then
+            printf "  secret   : %s\n" "$MT_SECRET"
+        else
+            printf "  secret   : %s<not set>%s\n" "$C_RED" "$C_RESET"
+        fi
+        if [ -n "$MT_LINK_IP" ]; then
+            printf "  link ip  : %s\n" "$MT_LINK_IP"
+            link="$(mt_proxy_link 2>/dev/null || true)"
+            if [ -n "$link" ]; then
+                printf "  tg link  : %s\n" "$link"
+            fi
+        else
+            printf "  link ip  : <not set>\n"
+        fi
     else
-        printf "  username : <empty>\n"
+        printf "%sTelegram SOCKS5%s\n" "$C_BOLD" "$C_RESET"
+        printf "  mode     : socks5\n"
+        printf "  host     : %s\n" "$(telegram_host)"
+        printf "  port     : %s\n" "$LISTEN_PORT"
+        if [ -n "$SOCKS_USERNAME" ]; then
+            printf "  username : %s\n" "$SOCKS_USERNAME"
+        else
+            printf "  username : <empty>\n"
+        fi
+        printf "  password : %s\n" "$(password_display)"
     fi
-    printf "  password : %s\n" "$(password_display)"
     if [ -n "$DC_IPS" ]; then
         printf "  dc map   : %s\n" "$DC_IPS"
     else
@@ -99,21 +121,39 @@ show_current_version() {
 
 show_telegram_settings_compact() {
     host="$(telegram_host)"
-    if [ -n "$SOCKS_USERNAME" ]; then
-        if [ -n "$SOCKS_PASSWORD" ]; then
-            auth_part="user:$SOCKS_USERNAME/<set>"
-        else
-            auth_part="user:$SOCKS_USERNAME"
-        fi
-    else
-        auth_part="no auth"
-    fi
     if [ -n "$DC_IPS" ]; then
         dc_part="dc:custom"
     else
         dc_part="dc:default"
     fi
-    printf "  SOCKS5  %s:%s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part"
+
+    if [ "$PROXY_MODE" = "mtproto" ]; then
+        if mt_secret_valid 2>/dev/null; then
+            secret_part="secret:set"
+        else
+            secret_part="${C_RED}secret:missing${C_RESET}"
+        fi
+        if [ -n "$MT_LINK_IP" ]; then
+            ip_part="ip:$MT_LINK_IP"
+        else
+            ip_part="${C_DIM}ip:none${C_RESET}"
+        fi
+        printf "  MTProto %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part"
+        if [ -n "$MT_LINK_IP" ] && mt_secret_valid 2>/dev/null; then
+            printf "  tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
+        fi
+    else
+        if [ -n "$SOCKS_USERNAME" ]; then
+            if [ -n "$SOCKS_PASSWORD" ]; then
+                auth_part="user:$SOCKS_USERNAME/<set>"
+            else
+                auth_part="user:$SOCKS_USERNAME"
+            fi
+        else
+            auth_part="no auth"
+        fi
+        printf "  SOCKS5  %s:%s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part"
+    fi
 
     if [ "$CF_PROXY" = "1" ]; then
         cf_on="${C_GREEN}on${C_RESET}"

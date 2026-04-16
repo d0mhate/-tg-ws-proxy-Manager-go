@@ -230,8 +230,15 @@ run_binary() {
     [ -n "$bin_path" ] || return 1
 
     set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
-        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+    if [ "$PROXY_MODE" = "mtproto" ]; then
+        set -- "$@" --mode mtproto --secret "$MT_SECRET"
+        if [ -n "$MT_LINK_IP" ]; then
+            set -- "$@" --link-ip "$MT_LINK_IP"
+        fi
+    else
+        if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+            set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+        fi
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
@@ -260,8 +267,15 @@ run_binary_background() {
     [ -n "$bin_path" ] || return 1
 
     set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
-        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+    if [ "$PROXY_MODE" = "mtproto" ]; then
+        set -- "$@" --mode mtproto --secret "$MT_SECRET"
+        if [ -n "$MT_LINK_IP" ]; then
+            set -- "$@" --link-ip "$MT_LINK_IP"
+        fi
+    else
+        if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+            set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+        fi
     fi
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose

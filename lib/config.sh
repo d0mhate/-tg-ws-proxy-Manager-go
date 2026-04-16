@@ -65,6 +65,9 @@ write_settings_config() {
         printf "CF_PROXY='%s'\n" "$CF_PROXY"
         printf "CF_PROXY_FIRST='%s'\n" "$CF_PROXY_FIRST"
         printf "CF_DOMAIN='%s'\n" "$CF_DOMAIN"
+        printf "PROXY_MODE='%s'\n" "$PROXY_MODE"
+        printf "MT_SECRET='%s'\n" "$MT_SECRET"
+        printf "MT_LINK_IP='%s'\n" "$MT_LINK_IP"
     } > "$PERSIST_CONFIG_FILE" || return 1
 }
 
@@ -110,6 +113,19 @@ load_saved_settings() {
 
     if [ -z "$CF_DOMAIN_FROM_ENV" ]; then
         CF_DOMAIN="$(read_config_value CF_DOMAIN 2>/dev/null || true)"
+    fi
+
+    if [ -z "$PROXY_MODE_FROM_ENV" ]; then
+        proxy_mode_value="$(read_config_value PROXY_MODE 2>/dev/null || true)"
+        [ -n "$proxy_mode_value" ] && PROXY_MODE="$proxy_mode_value"
+    fi
+
+    if [ -z "$MT_SECRET_FROM_ENV" ]; then
+        MT_SECRET="$(read_config_value MT_SECRET 2>/dev/null || true)"
+    fi
+
+    if [ -z "$MT_LINK_IP_FROM_ENV" ]; then
+        MT_LINK_IP="$(read_config_value MT_LINK_IP 2>/dev/null || true)"
     fi
 }
 
@@ -217,6 +233,27 @@ auth_settings_valid() {
 show_invalid_auth_settings() {
     printf "%sSOCKS5 auth settings are incomplete%s\n\n" "$C_RED" "$C_RESET"
     printf "SOCKS_USERNAME and SOCKS_PASSWORD must be both set or both empty.\n"
+}
+
+mt_secret_valid() {
+    [ ${#MT_SECRET} -eq 32 ] || return 1
+    printf "%s" "$MT_SECRET" | grep -qE '^[0-9a-fA-F]{32}$'
+}
+
+generate_mt_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 16 2>/dev/null && return 0
+    fi
+    if [ -r /dev/urandom ]; then
+        dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n' && return 0
+    fi
+    return 1
+}
+
+mt_proxy_link() {
+    [ -n "$MT_LINK_IP" ] || return 1
+    [ -n "$MT_SECRET" ] || return 1
+    printf "tg://proxy?server=%s&port=%s&secret=%s" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
 }
 
 persistent_install_dir() {

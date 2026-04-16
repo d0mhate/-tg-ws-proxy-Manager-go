@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
@@ -12,6 +13,7 @@ import (
 	"unicode"
 
 	"tg-ws-proxy/internal/config"
+	"tg-ws-proxy/internal/mtpserver"
 	"tg-ws-proxy/internal/socks5"
 )
 
@@ -26,13 +28,20 @@ func (f *dcIPFlags) Set(value string) error {
 	return nil
 }
 
-func parseArgs(args []string) (config.Config, error) {
+type parsedArgs struct {
+	cfg    config.Config
+	mode   string
+	secret []byte
+	linkIP string
+}
+
+func parseArgs(args []string) (parsedArgs, error) {
 	cfg := config.Default()
 	var dcIPs dcIPFlags
 
 	fs := flag.NewFlagSet("tg-ws-proxy", flag.ContinueOnError)
-	fs.StringVar(&cfg.Host, "host", cfg.Host, "SOCKS5 listen host")
-	fs.IntVar(&cfg.Port, "port", cfg.Port, "SOCKS5 listen port")
+	fs.StringVar(&cfg.Host, "host", cfg.Host, "listen host")
+	fs.IntVar(&cfg.Port, "port", cfg.Port, "listen port")
 	fs.StringVar(&cfg.Username, "username", cfg.Username, "SOCKS5 username auth")
 	fs.StringVar(&cfg.Password, "password", cfg.Password, "SOCKS5 password auth")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
@@ -45,19 +54,27 @@ func parseArgs(args []string) (config.Config, error) {
 	fs.BoolVar(&cfg.UseCFProxy, "cf-proxy", cfg.UseCFProxy, "enable Cloudflare proxy mode for websocket routing")
 	fs.BoolVar(&cfg.UseCFProxyFirst, "cf-proxy-first", cfg.UseCFProxyFirst, "try Cloudflare websocket routing before direct Telegram websocket routing")
 	fs.StringVar(&cfDomainFlag, "cf-domain", "", "Cloudflare domain(s) for websocket routing, e.g. example.com or domain1.com,domain2.com (required for CF proxy mode)")
+
+	var mode string
+	var secretHex string
+	var linkIP string
+	fs.StringVar(&mode, "mode", "socks5", "proxy mode: socks5 or mtproto")
+	fs.StringVar(&secretHex, "secret", "", "MTProto proxy secret (32 hex chars, required for --mode mtproto)")
+	fs.StringVar(&linkIP, "link-ip", "", "public IP to include in the tg:// proxy link (mtproto mode)")
+
 	if err := fs.Parse(args); err != nil {
-		return config.Config{}, err
+		return parsedArgs{}, err
 	}
 
 	if len(dcIPs) > 0 {
 		parsed, err := config.ParseDCIPList(dcIPs)
 		if err != nil {
-			return config.Config{}, fmt.Errorf("invalid --dc-ip: %w", err)
+			return parsedArgs{}, fmt.Errorf("invalid --dc-ip: %w", err)
 		}
 		cfg.DCIPs = parsed
 	}
 	if (cfg.Username == "") != (cfg.Password == "") {
-		return config.Config{}, fmt.Errorf("--username and --password must be used together")
+		return parsedArgs{}, fmt.Errorf("--username and --password must be used together")
 	}
 	if cfDomainFlag != "" {
 		parts := strings.Split(cfDomainFlag, ",")
@@ -68,17 +85,34 @@ func parseArgs(args []string) (config.Config, error) {
 				continue
 			}
 			if !isValidDomain(p) {
-				return config.Config{}, fmt.Errorf("invalid --cf-domain value: %q", p)
+				return parsedArgs{}, fmt.Errorf("invalid --cf-domain value: %q", p)
 			}
 			domains = append(domains, p)
 		}
 		if len(domains) == 0 {
-			return config.Config{}, fmt.Errorf("--cf-domain: no valid domains provided")
+			return parsedArgs{}, fmt.Errorf("--cf-domain: no valid domains provided")
 		}
 		cfg.CFDomain = domains[0]
 		cfg.CFDomains = domains
 	}
-	return cfg, nil
+
+	if mode != "socks5" && mode != "mtproto" {
+		return parsedArgs{}, fmt.Errorf("--mode must be socks5 or mtproto, got %q", mode)
+	}
+
+	var secret []byte
+	if mode == "mtproto" {
+		if secretHex == "" {
+			return parsedArgs{}, fmt.Errorf("--secret is required for --mode mtproto")
+		}
+		decoded, err := hex.DecodeString(secretHex)
+		if err != nil || len(decoded) != 16 {
+			return parsedArgs{}, fmt.Errorf("--secret must be exactly 32 hex characters (16 bytes), got %q", secretHex)
+		}
+		secret = decoded
+	}
+
+	return parsedArgs{cfg: cfg, mode: mode, secret: secret, linkIP: linkIP}, nil
 }
 
 func isValidDomain(domain string) bool {
@@ -120,20 +154,32 @@ func isValidDomain(domain string) bool {
 }
 
 func main() {
-	cfg, err := parseArgs(os.Args[1:])
+	pa, err := parseArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	logger := log.New(os.Stdout, "tg-ws-proxy ", log.LstdFlags)
-	if cfg.Verbose {
+	if pa.cfg.Verbose {
 		logger.Printf("starting with verbose logging enabled")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	srv := socks5.NewServer(cfg, logger)
+	if pa.mode == "mtproto" {
+		if pa.linkIP != "" {
+			logger.Printf("tg://proxy?server=%s&port=%d&secret=dd%s",
+				pa.linkIP, pa.cfg.Port, hex.EncodeToString(pa.secret))
+		}
+		srv := mtpserver.NewMTServer(pa.cfg, pa.secret, logger)
+		if err := srv.Run(ctx); err != nil {
+			logger.Fatalf("mtproto server stopped with error: %v", err)
+		}
+		return
+	}
+
+	srv := socks5.NewServer(pa.cfg, logger)
 	if err := srv.Run(ctx); err != nil {
 		logger.Fatalf("server stopped with error: %v", err)
 	}

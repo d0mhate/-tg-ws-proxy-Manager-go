@@ -290,6 +290,399 @@ choose_update_source_mode() {
     printf "%s" "$current"
 }
 
+configure_proxy_mode() {
+    show_header
+    printf "%sProxy mode%s\n" "$C_BOLD" "$C_RESET"
+    printf "  current: %s\n" "$PROXY_MODE"
+    printf "\nChoose mode:\n"
+    printf "  1) socks5  - standard SOCKS5 (default)\n"
+    printf "  2) mtproto - MTProto obfuscated proxy\n"
+    printf "\nSelect [1-2] (Enter to keep current): "
+    IFS= read -r mode_choice
+
+    case "$mode_choice" in
+        "")
+            printf "\nNo changes made.\n"
+            pause
+            return 0
+            ;;
+        1|socks5)
+            PROXY_MODE="socks5"
+            ;;
+        2|mtproto)
+            PROXY_MODE="mtproto"
+            ;;
+        *)
+            printf "\n%sUnknown mode%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+            ;;
+    esac
+
+    write_settings_config || return 1
+    printf "\n%sProxy mode set to %s%s\n" "$C_GREEN" "$PROXY_MODE" "$C_RESET"
+    if [ "$PROXY_MODE" = "mtproto" ] && ! mt_secret_valid 2>/dev/null; then
+        printf "\n%sSecret is not configured - set it in Advanced -> MTProto secret%s\n" "$C_YELLOW" "$C_RESET"
+    fi
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+draw_mt_secret_picker() {
+    _cur="$1"
+    printf "Action (use arrows, Enter to confirm):\n" >&2
+    for _opt in generate clear enter back; do
+        if [ "$_opt" = "$_cur" ]; then
+            printf "> %s\n" "$_opt" >&2
+        else
+            printf "  %s\n" "$_opt" >&2
+        fi
+    done
+}
+
+configure_mt_secret() {
+    show_header
+    printf "%sMTProto secret%s\n" "$C_BOLD" "$C_RESET"
+    if mt_secret_valid 2>/dev/null; then
+        printf "  current: %s\n" "$MT_SECRET"
+    else
+        printf "  current: %s<not set>%s\n" "$C_RED" "$C_RESET"
+    fi
+    printf "\n"
+
+    new_secret=""
+    action=""
+
+    # --- Arrow picker ---
+    if can_use_arrow_update_source_picker; then
+        restore_stty=""
+        if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+            restore_stty="$(stty -g 2>/dev/null || true)"
+            if [ -n "$restore_stty" ]; then
+                stty -echo -icanon min 1 time 0 2>/dev/null || true
+            fi
+        else
+            restore_stty="forced"
+        fi
+        if [ -n "$restore_stty" ]; then
+            action="generate"
+            redraw="0"
+            while true; do
+                if [ "$redraw" = "1" ]; then
+                    printf '\033[5A\033[J' >&2
+                fi
+                draw_mt_secret_picker "$action"
+                redraw="1"
+                first_hex="$(read_picker_hex_byte)"
+                case "$first_hex" in
+                    0a|0d) break ;;
+                    1b)
+                        second_hex="$(read_picker_hex_byte)"
+                        third_hex="$(read_picker_hex_byte)"
+                        case "$second_hex$third_hex" in
+                            5b41|5b44)
+                                case "$action" in
+                                    generate) action="back"     ;;
+                                    clear)    action="generate" ;;
+                                    enter)    action="clear"    ;;
+                                    back)     action="enter"    ;;
+                                esac
+                                ;;
+                            5b42|5b43)
+                                case "$action" in
+                                    generate) action="clear"    ;;
+                                    clear)    action="enter"    ;;
+                                    enter)    action="back"     ;;
+                                    back)     action="generate" ;;
+                                esac
+                                ;;
+                        esac
+                        ;;
+                esac
+            done
+            if [ "$restore_stty" != "forced" ]; then
+                stty "$restore_stty" 2>/dev/null || true
+            fi
+            printf "\n" >&2
+        fi
+    fi
+
+    # --- Numbered fallback ---
+    if [ -z "$action" ] && can_use_numbered_update_source_picker; then
+        printf "  1) generate - random 16-byte secret\n"
+        printf "  2) clear    - remove current secret\n"
+        printf "  3) enter    - type hex value\n"
+        printf "  4) back     - return without changes\n"
+        printf "Select [1-4] (Enter to go back): "
+        IFS= read -r sel
+        printf "\n"
+        case "$sel" in
+            1|generate) action="generate" ;;
+            2|clear)    action="clear"    ;;
+            3|enter)    action="enter"    ;;
+            4|back|"")
+                printf "No changes made.\n"
+                pause
+                return 0
+                ;;
+            *)          action="enter"    ;;
+        esac
+    fi
+
+    # --- Text fallback (no interactive terminal) ---
+    if [ -z "$action" ]; then
+        printf "Enter 32 hex characters (16 bytes) or 'gen' to generate a random secret.\n"
+        printf "Use 'clear' to remove the secret.\n"
+        printf "Secret (empty to keep current): "
+        IFS= read -r new_secret
+        case "$new_secret" in
+            "")
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+                ;;
+            generate|GENERATE|gen) action="generate" ;;
+            clear|CLEAR|Clear)     action="clear"    ;;
+            *)                     action="enter"    ;;
+        esac
+    fi
+
+    # --- Execute action ---
+    case "$action" in
+        back)
+            return 0
+            ;;
+        generate)
+            generated="$(generate_mt_secret 2>/dev/null || true)"
+            if [ -z "$generated" ]; then
+                printf "\n%sFailed to generate secret (no openssl or /dev/urandom)%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+            fi
+            new_secret="$generated"
+            printf "\nGenerated: %s\n" "$new_secret"
+            ;;
+        clear)
+            MT_SECRET=""
+            write_settings_config || return 1
+            printf "\n%sSecret cleared%s\n" "$C_GREEN" "$C_RESET"
+            prompt_restart_proxy_for_updated_settings
+            pause
+            return 0
+            ;;
+        enter)
+            if [ -z "$new_secret" ]; then
+                printf "Enter 32 hex characters (16 bytes): "
+                IFS= read -r new_secret
+            fi
+            if [ -z "$new_secret" ]; then
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+            fi
+            ;;
+    esac
+
+    # Validate: must be 32 hex chars
+    case "$new_secret" in
+        *[!0-9a-fA-F]*)
+            printf "\n%sSecret must contain only hex characters (0-9, a-f)%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+            ;;
+    esac
+    if [ ${#new_secret} -ne 32 ]; then
+        printf "\n%sSecret must be exactly 32 hex characters (16 bytes), got %d%s\n" \
+            "$C_RED" "${#new_secret}" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    MT_SECRET="$new_secret"
+    write_settings_config || return 1
+    printf "\n%sSecret saved%s\n" "$C_GREEN" "$C_RESET"
+    if [ -n "$MT_LINK_IP" ]; then
+        printf "tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
+    fi
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+detect_wan_ip() {
+    # Try the interface used for the default route
+    _wan_iface="$(ip route show default 2>/dev/null | awk 'NR==1 { for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit} }')"
+    if [ -n "$_wan_iface" ]; then
+        _wan_ip="$(ip -4 addr show dev "$_wan_iface" 2>/dev/null | awk '/inet / { split($2,a,"/"); print a[1]; exit }')"
+        if [ -n "$_wan_ip" ]; then
+            printf "%s" "$_wan_ip"
+            return 0
+        fi
+    fi
+    # Fallback: src address from ip route get
+    _wan_ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{ for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit} }')"
+    [ -n "$_wan_ip" ] && printf "%s" "$_wan_ip"
+}
+
+configure_mt_link_ip() {
+    show_header
+    printf "%sMTProto public IP (for tg:// link)%s\n" "$C_BOLD" "$C_RESET"
+    if [ -n "$MT_LINK_IP" ]; then
+        printf "  current: %s\n" "$MT_LINK_IP"
+    else
+        printf "  current: <not set>\n"
+    fi
+
+    _suggested_ip=""
+    if [ -z "$MT_LINK_IP" ]; then
+        _suggested_ip="$(detect_wan_ip 2>/dev/null || true)"
+    fi
+
+    printf "\nEnter the public IP of this server (shown in the tg:// proxy link).\n"
+    printf "Use 'clear' to remove.\n"
+    if [ -n "$MT_LINK_IP" ]; then
+        printf "IP (Enter to keep %s): " "$MT_LINK_IP"
+    elif [ -n "$_suggested_ip" ]; then
+        printf "IP (Enter for %s): " "$_suggested_ip"
+    else
+        printf "IP: "
+    fi
+    IFS= read -r new_ip
+
+    case "$new_ip" in
+        "")
+            if [ -n "$_suggested_ip" ] && [ -z "$MT_LINK_IP" ]; then
+                new_ip="$_suggested_ip"
+            else
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+            fi
+            ;;
+        clear|CLEAR|Clear)
+            MT_LINK_IP=""
+            write_settings_config || return 1
+            printf "\n%sPublic IP cleared%s\n" "$C_GREEN" "$C_RESET"
+            pause
+            return 0
+            ;;
+    esac
+
+    MT_LINK_IP="$new_ip"
+    write_settings_config || return 1
+    printf "\n%sPublic IP saved%s\n" "$C_GREEN" "$C_RESET"
+    if mt_secret_valid 2>/dev/null; then
+        printf "tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
+    fi
+    pause
+}
+
+_qr_est_kb() {
+    case "$1" in
+        opkg)
+            _q="$(opkg info qrencode 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
+            _l="$(opkg info libqrencode4 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
+            [ -z "$_l" ] && _l="$(opkg info libqrencode 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
+            if [ -n "$_q" ] && [ -n "$_l" ]; then
+                printf "%d" "$(( (_q + _l + 1023) / 1024 ))"
+            elif [ -n "$_q" ]; then
+                printf "%d" "$(( (_q + 1023) / 1024 ))"
+            fi
+            ;;
+        apt)
+            _q="$(apt-cache show qrencode 2>/dev/null | grep '^Installed-Size:' | head -1 | awk '{print $2}')"
+            [ -n "$_q" ] && printf "%s" "$_q"
+            ;;
+        brew)
+            printf "300"
+            ;;
+    esac
+}
+
+show_mt_qr() {
+    show_header
+    printf "%sMTProto QR code%s\n" "$C_BOLD" "$C_RESET"
+
+    link="tg://proxy?server=${MT_LINK_IP}&port=${LISTEN_PORT}&secret=${MT_SECRET}"
+    printf "\n  %s\n\n" "$link"
+
+    if qrencode --version >/dev/null 2>&1; then
+        qrencode -t UTF8 "$link"
+        pause
+        return 0
+    fi
+
+    # Detect package manager
+    if command -v opkg >/dev/null 2>&1; then
+        _pm="opkg"
+        _pm_cmd="opkg install qrencode"
+        _pm_path="/"
+    elif command -v apt-get >/dev/null 2>&1; then
+        _pm="apt"
+        if [ "$(id -u)" = "0" ]; then
+            _pm_cmd="apt-get install -y qrencode"
+        else
+            _pm_cmd="sudo apt-get install -y qrencode"
+        fi
+        _pm_path="/usr"
+    elif command -v brew >/dev/null 2>&1; then
+        _pm="brew"
+        _pm_cmd="brew install qrencode"
+        if [ -d "/opt/homebrew" ]; then
+            _pm_path="/opt/homebrew"
+        else
+            _pm_path="/usr/local"
+        fi
+    else
+        printf "  %sqrencode not found%s\n" "$C_YELLOW" "$C_RESET"
+        printf "  No supported package manager found.\n"
+        printf "  Install manually and re-run.\n"
+        pause
+        return 1
+    fi
+
+    printf "  %sqrencode not found%s\n\n" "$C_YELLOW" "$C_RESET"
+    printf "  Command: %s\n" "$_pm_cmd"
+
+    _est="$(_qr_est_kb "$_pm")"
+    [ -n "$_est" ] && printf "  Size:    ~%s KB\n" "$_est"
+
+    _free="$(df -k "$_pm_path" 2>/dev/null | awk 'NR==2 {print $4}')"
+    if [ -n "$_free" ]; then
+        printf "  Free:    %s KB on %s\n" "$_free" "$_pm_path"
+        if [ -n "$_est" ] && [ "$_free" -lt "$_est" ] 2>/dev/null; then
+            printf "\n  %sNot enough free space to install%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+        fi
+    fi
+
+    printf "\n"
+    if confirm_yn "  Install now?"; then
+        printf "\n"
+        case "$_pm" in
+            opkg) opkg install qrencode ;;
+            apt)
+                if [ "$(id -u)" = "0" ]; then
+                    apt-get install -y qrencode
+                else
+                    sudo apt-get install -y qrencode
+                fi
+                ;;
+            brew) brew install qrencode ;;
+        esac
+        printf "\n"
+        if qrencode --version >/dev/null 2>&1; then
+            printf "%sInstalled successfully%s\n\n" "$C_GREEN" "$C_RESET"
+            qrencode -t UTF8 "$link"
+        else
+            printf "%sInstallation failed%s\n" "$C_RED" "$C_RESET"
+            printf "  Try manually: %s\n" "$_pm_cmd"
+        fi
+    fi
+
+    pause
+}
+
 configure_socks_auth() {
     show_header
     show_telegram_settings
@@ -625,7 +1018,7 @@ advanced_menu() {
         printf "%sAdvanced%s\n" "$C_BOLD" "$C_RESET"
         printf "\n  Info\n"
         printf "  1) Full status\n"
-        printf "  2) Telegram SOCKS5 settings\n"
+        printf "  2) Proxy settings\n"
         printf "  3) Quick commands\n"
         printf "\n  Proxy\n"
         if [ "$VERBOSE" = "1" ]; then
@@ -652,6 +1045,25 @@ advanced_menu() {
         printf " 11) DC mapping\n"
         printf " 12) Update source\n"
         printf " 13) Remove binary\n"
+        printf "\n  MTProto\n"
+        if [ "$PROXY_MODE" = "mtproto" ]; then
+            printf " 14) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf " 14) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        if mt_secret_valid 2>/dev/null; then
+            printf " 15) Secret (%sset%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf " 15) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
+        fi
+        if [ -n "$MT_LINK_IP" ]; then
+            printf " 16) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
+        else
+            printf " 16) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        if [ "$PROXY_MODE" = "mtproto" ] && mt_secret_valid 2>/dev/null && [ -n "$MT_LINK_IP" ]; then
+            printf " 17) Show QR code\n"
+        fi
         printf "\n  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
@@ -697,6 +1109,18 @@ advanced_menu() {
                 ;;
             13)
                 remove_all
+                ;;
+            14)
+                configure_proxy_mode
+                ;;
+            15)
+                configure_mt_secret
+                ;;
+            16)
+                configure_mt_link_ip
+                ;;
+            17)
+                show_mt_qr
                 ;;
             *)
                 return 0
