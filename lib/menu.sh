@@ -477,7 +477,7 @@ configure_mt_secret() {
             esac
             generated="$(generate_mt_secret "$_gen_fmt" "$_gen_domain" 2>/dev/null || true)"
             if [ -z "$generated" ]; then
-                printf "\n%sFailed to generate secret (no openssl or /dev/urandom)%s\n" "$C_RED" "$C_RESET"
+                printf "\n%sFailed to generate secret (need openssl, hexdump, or od + /dev/urandom)%s\n" "$C_RED" "$C_RESET"
                 pause
                 return 1
             fi

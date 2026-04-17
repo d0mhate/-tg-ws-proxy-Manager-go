@@ -283,15 +283,27 @@ generate_mt_secret() {
         _gsm_hex="$(openssl rand -hex 16 2>/dev/null)" || true
     fi
     if [ -z "$_gsm_hex" ] && [ -r /dev/urandom ]; then
-        _gsm_hex="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" || true
+        if command -v hexdump >/dev/null 2>&1; then
+            _gsm_hex="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | hexdump -v -e '1/1 "%02x"')" || true
+        elif command -v od >/dev/null 2>&1; then
+            _gsm_hex="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" || true
+        fi
     fi
     [ -n "$_gsm_hex" ] || return 1
+
+    _hex_encode() {
+        if command -v hexdump >/dev/null 2>&1; then
+            printf '%s' "$1" | hexdump -v -e '1/1 "%02x"'
+        else
+            printf '%s' "$1" | od -An -tx1 | tr -d ' \n'
+        fi
+    }
 
     case "$_gsm_fmt" in
         dd) printf "dd%s" "$_gsm_hex" ;;
         ee)
             [ -n "$_gsm_domain" ] || return 1
-            _gsm_dhex="$(printf '%s' "$_gsm_domain" | od -An -tx1 | tr -d ' \n')"
+            _gsm_dhex="$(_hex_encode "$_gsm_domain")"
             [ -n "$_gsm_dhex" ] || return 1
             printf "ee%s%s" "$_gsm_hex" "$_gsm_dhex"
             ;;
