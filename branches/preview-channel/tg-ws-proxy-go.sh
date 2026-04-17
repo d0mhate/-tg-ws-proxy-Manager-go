@@ -2955,19 +2955,41 @@ configure_mt_secret() {
     pause
 }
 
-detect_wan_ip() {
-    # Try the interface used for the default route
-    _wan_iface="$(ip route show default 2>/dev/null | awk 'NR==1 { for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit} }')"
-    if [ -n "$_wan_iface" ]; then
-        _wan_ip="$(ip -4 addr show dev "$_wan_iface" 2>/dev/null | awk '/inet / { split($2,a,"/"); print a[1]; exit }')"
-        if [ -n "$_wan_ip" ]; then
-            printf "%s" "$_wan_ip"
-            return 0
-        fi
+_ip_is_private() {
+    case "$1" in
+        10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*|127.*|169.254.*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+_fetch_public_ip() {
+    _fpi=""
+    if command -v curl >/dev/null 2>&1; then
+        _fpi="$(curl -sf --max-time 4 https://ifconfig.me 2>/dev/null || true)"
     fi
-    # Fallback: src address from ip route get
-    _wan_ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{ for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit} }')"
-    [ -n "$_wan_ip" ] && printf "%s" "$_wan_ip"
+    if [ -z "$_fpi" ] && command -v wget >/dev/null 2>&1; then
+        _fpi="$(wget -q -O - --timeout=4 https://ifconfig.me 2>/dev/null || true)"
+    fi
+    [ -n "$_fpi" ] && printf "%s" "$_fpi"
+}
+
+_detect_local_wan_ip() {
+    _dlw_iface="$(ip route show default 2>/dev/null | awk 'NR==1 { for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit} }')"
+    if [ -n "$_dlw_iface" ]; then
+        _dlw_ip="$(ip -4 addr show dev "$_dlw_iface" 2>/dev/null | awk '/inet / { split($2,a,"/"); print a[1]; exit }')"
+        [ -n "$_dlw_ip" ] && printf "%s" "$_dlw_ip" && return 0
+    fi
+    ip route get 1.1.1.1 2>/dev/null | awk '{ for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit} }'
+}
+
+detect_wan_ip() {
+    _dw_local="$(_detect_local_wan_ip 2>/dev/null || true)"
+    if [ -n "$_dw_local" ] && ! _ip_is_private "$_dw_local"; then
+        printf "%s" "$_dw_local"
+        return 0
+    fi
+    # Double-NAT detected: try to get real public IP from external service
+    _fetch_public_ip
 }
 
 configure_mt_link_ip() {
@@ -2980,20 +3002,46 @@ configure_mt_link_ip() {
     fi
 
     _suggested_ip=""
+    _double_nat=0
     if [ -z "$MT_LINK_IP" ]; then
+        _local_wan="$(_detect_local_wan_ip 2>/dev/null || true)"
+        if [ -n "$_local_wan" ] && _ip_is_private "$_local_wan"; then
+            _double_nat=1
+        fi
         _suggested_ip="$(detect_wan_ip 2>/dev/null || true)"
     fi
 
     printf "\nEnter the public IP of this server (shown in the tg:// proxy link).\n"
+    if [ "$_double_nat" -eq 1 ]; then
+        printf "%sDouble NAT detected - your WAN IP is private.%s\n" "$C_YELLOW" "$C_RESET"
+    fi
     printf "Use 'clear' to remove.\n"
-    if [ -n "$MT_LINK_IP" ]; then
+
+    new_ip=""
+
+    if [ "$_double_nat" -eq 1 ] && [ -n "$_suggested_ip" ]; then
+        printf "\nDetected public IP: %s%s%s\n" "$C_BOLD" "$_suggested_ip" "$C_RESET"
+        printf "Is this correct? [Y/n]: "
+        IFS= read -r _confirm
+        case "$_confirm" in
+            ""|[Yy]|[Yy][Ee][Ss])
+                new_ip="$_suggested_ip"
+                ;;
+            *)
+                printf "IP: "
+                IFS= read -r new_ip
+                ;;
+        esac
+    elif [ -n "$MT_LINK_IP" ]; then
         printf "IP (Enter to keep %s): " "$MT_LINK_IP"
+        IFS= read -r new_ip
     elif [ -n "$_suggested_ip" ]; then
         printf "IP (Enter for %s): " "$_suggested_ip"
+        IFS= read -r new_ip
     else
         printf "IP: "
+        IFS= read -r new_ip
     fi
-    IFS= read -r new_ip
 
     case "$new_ip" in
         "")
