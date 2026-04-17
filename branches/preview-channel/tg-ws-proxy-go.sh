@@ -3004,11 +3004,14 @@ configure_mt_link_ip() {
     _suggested_ip=""
     _double_nat=0
     if [ -z "$MT_LINK_IP" ]; then
-        _local_wan="$(_detect_local_wan_ip 2>/dev/null || true)"
-        if [ -n "$_local_wan" ] && _ip_is_private "$_local_wan"; then
-            _double_nat=1
+        _suggested_ip="$(lan_ip 2>/dev/null || true)"
+        if [ -z "$_suggested_ip" ]; then
+            _local_wan="$(_detect_local_wan_ip 2>/dev/null || true)"
+            if [ -n "$_local_wan" ] && _ip_is_private "$_local_wan"; then
+                _double_nat=1
+            fi
+            _suggested_ip="$(detect_wan_ip 2>/dev/null || true)"
         fi
-        _suggested_ip="$(detect_wan_ip 2>/dev/null || true)"
     fi
 
     printf "\nEnter the public IP of this server (shown in the tg:// proxy link).\n"
