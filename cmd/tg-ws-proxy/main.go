@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"unicode"
 
+	"rsc.io/qr"
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/mtpserver"
 	"tg-ws-proxy/internal/socks5"
@@ -204,6 +205,39 @@ func isValidDomain(domain string) bool {
 }
 
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "qr" {
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: tg-ws-proxy qr <link>")
+			os.Exit(1)
+		}
+		code, err := qr.Encode(os.Args[2], qr.L)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		size := code.Size
+		blk := func(x, y int) bool {
+			return x >= 0 && x < size && y >= 0 && y < size && code.Black(x, y)
+		}
+		for y := -2; y < size+2; y += 2 {
+			for x := -2; x < size+2; x++ {
+				t, b := blk(x, y), blk(x, y+1)
+				switch {
+				case t && b:
+					fmt.Fprint(os.Stdout, "█")
+				case t:
+					fmt.Fprint(os.Stdout, "▀")
+				case b:
+					fmt.Fprint(os.Stdout, "▄")
+				default:
+					fmt.Fprint(os.Stdout, " ")
+				}
+			}
+			fmt.Fprintln(os.Stdout)
+		}
+		return
+	}
+
 	pa, err := parseArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
