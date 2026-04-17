@@ -24,11 +24,7 @@ else
 fi
 
 
-_decode_domain() { printf '%s' "$1" | tr 'a-z' 'uvwxyzabcdefghijklmnopqrst'; }
-_DEFAULT_CF_DOMAIN_ENC="virkgj.iu.aq"
-
 APP_NAME="tg-ws-proxy"
-DEFAULT_CF_DOMAIN="${DEFAULT_CF_DOMAIN:-$(_decode_domain "$_DEFAULT_CF_DOMAIN_ENC")}"
 LAUNCHER_NAME="${LAUNCHER_NAME:-tgm}"
 REPO_OWNER="${REPO_OWNER:-d0mhate}"
 REPO_NAME="${REPO_NAME:--tg-ws-proxy-Manager-go}"
@@ -43,6 +39,10 @@ DC_IPS_FROM_ENV="${DC_IPS+x}"
 CF_PROXY_FROM_ENV="${CF_PROXY+x}"
 CF_PROXY_FIRST_FROM_ENV="${CF_PROXY_FIRST+x}"
 CF_DOMAIN_FROM_ENV="${CF_DOMAIN+x}"
+PROXY_MODE_FROM_ENV="${PROXY_MODE+x}"
+MT_SECRET_FROM_ENV="${MT_SECRET+x}"
+MT_LINK_IP_FROM_ENV="${MT_LINK_IP+x}"
+MT_UPSTREAM_PROXIES_FROM_ENV="${MT_UPSTREAM_PROXIES+x}"
 UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
 PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
@@ -85,7 +85,11 @@ SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
 DC_IPS="${DC_IPS:-}"
 CF_PROXY="${CF_PROXY:-0}"
 CF_PROXY_FIRST="${CF_PROXY_FIRST:-0}"
-CF_DOMAIN="${CF_DOMAIN:-$DEFAULT_CF_DOMAIN}"
+CF_DOMAIN="${CF_DOMAIN:-}"
+PROXY_MODE="${PROXY_MODE:-socks5}"
+MT_SECRET="${MT_SECRET:-}"
+MT_LINK_IP="${MT_LINK_IP:-}"
+MT_UPSTREAM_PROXIES="${MT_UPSTREAM_PROXIES:-}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
@@ -296,6 +300,10 @@ write_settings_config() {
         printf "CF_PROXY='%s'\n" "$CF_PROXY"
         printf "CF_PROXY_FIRST='%s'\n" "$CF_PROXY_FIRST"
         printf "CF_DOMAIN='%s'\n" "$CF_DOMAIN"
+        printf "PROXY_MODE='%s'\n" "$PROXY_MODE"
+        printf "MT_SECRET='%s'\n" "$MT_SECRET"
+        printf "MT_LINK_IP='%s'\n" "$MT_LINK_IP"
+        printf "MT_UPSTREAM_PROXIES='%s'\n" "$MT_UPSTREAM_PROXIES"
     } > "$PERSIST_CONFIG_FILE" || return 1
 }
 
@@ -342,8 +350,22 @@ load_saved_settings() {
     if [ -z "$CF_DOMAIN_FROM_ENV" ]; then
         CF_DOMAIN="$(read_config_value CF_DOMAIN 2>/dev/null || true)"
     fi
-    if [ -z "$CF_DOMAIN" ]; then
-        CF_DOMAIN="$DEFAULT_CF_DOMAIN"
+
+    if [ -z "$PROXY_MODE_FROM_ENV" ]; then
+        proxy_mode_value="$(read_config_value PROXY_MODE 2>/dev/null || true)"
+        [ -n "$proxy_mode_value" ] && PROXY_MODE="$proxy_mode_value"
+    fi
+
+    if [ -z "$MT_SECRET_FROM_ENV" ]; then
+        MT_SECRET="$(read_config_value MT_SECRET 2>/dev/null || true)"
+    fi
+
+    if [ -z "$MT_LINK_IP_FROM_ENV" ]; then
+        MT_LINK_IP="$(read_config_value MT_LINK_IP 2>/dev/null || true)"
+    fi
+
+    if [ -z "$MT_UPSTREAM_PROXIES_FROM_ENV" ]; then
+        MT_UPSTREAM_PROXIES="$(read_config_value MT_UPSTREAM_PROXIES 2>/dev/null || true)"
     fi
 }
 
@@ -451,6 +473,101 @@ auth_settings_valid() {
 show_invalid_auth_settings() {
     printf "%sSOCKS5 auth settings are incomplete%s\n\n" "$C_RED" "$C_RESET"
     printf "SOCKS_USERNAME and SOCKS_PASSWORD must be both set or both empty.\n"
+}
+
+mt_secret_valid() {
+    [ -n "$MT_SECRET" ] || return 1
+    case "$MT_SECRET" in
+        *[!0-9a-fA-F]*) return 1 ;;
+    esac
+    _msv_len=${#MT_SECRET}
+    case "$MT_SECRET" in
+        [dD][dD]*) [ "$_msv_len" -eq 34 ] ;;
+        [eE][eE]*) [ "$_msv_len" -ge 34 ] && [ "$(( _msv_len % 2 ))" -eq 0 ] ;;
+        *)         [ "$_msv_len" -eq 32 ] ;;
+    esac
+}
+
+# Prints the format label of MT_SECRET: plain / dd / ee:hostname
+mt_secret_type() {
+    case "$MT_SECRET" in
+        [dD][dD]*) printf "dd" ;;
+        [eE][eE]*)
+            _mst_host_hex="$(printf '%s' "$MT_SECRET" | cut -c35-)"
+            if [ -n "$_mst_host_hex" ]; then
+                _mst_host="$(printf "%b" "$(printf "%s" "$_mst_host_hex" | sed 's/../\\x&/g')" 2>/dev/null || true)"
+                if [ -n "$_mst_host" ]; then
+                    printf "ee:%s" "$_mst_host"
+                    return
+                fi
+            fi
+            printf "ee"
+            ;;
+        *) printf "plain" ;;
+    esac
+}
+
+# $1 = format: plain (default) | dd | ee
+# $2 = hostname (required for ee)
+generate_mt_secret() {
+    _gsm_fmt="${1:-plain}"
+    _gsm_domain="${2:-}"
+
+    _gsm_hex=""
+    if command -v openssl >/dev/null 2>&1; then
+        _gsm_hex="$(openssl rand -hex 16 2>/dev/null)" || true
+    fi
+    if [ -z "$_gsm_hex" ] && [ -r /dev/urandom ]; then
+        _gsm_hex="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')" || true
+    fi
+    [ -n "$_gsm_hex" ] || return 1
+
+    case "$_gsm_fmt" in
+        dd) printf "dd%s" "$_gsm_hex" ;;
+        ee)
+            [ -n "$_gsm_domain" ] || return 1
+            _gsm_dhex="$(printf '%s' "$_gsm_domain" | od -An -tx1 | tr -d ' \n')"
+            [ -n "$_gsm_dhex" ] || return 1
+            printf "ee%s%s" "$_gsm_hex" "$_gsm_dhex"
+            ;;
+        *) printf "%s" "$_gsm_hex" ;;
+    esac
+}
+
+# Returns 0 if HOST:PORT:SECRET entry is valid, 1 otherwise.
+validate_upstream_proxy_entry() {
+    _vup_entry="$1"
+    _vup_host="$(printf "%s" "$_vup_entry" | cut -d: -f1)"
+    _vup_port="$(printf "%s" "$_vup_entry" | cut -d: -f2)"
+    _vup_secret="$(printf "%s" "$_vup_entry" | cut -d: -f3-)"
+
+    [ -n "$_vup_host" ]   || return 1
+    [ -n "$_vup_port" ]   || return 1
+    [ -n "$_vup_secret" ] || return 1
+
+    case "$_vup_port" in *[!0-9]*) return 1 ;; esac
+    [ "$_vup_port" -ge 1 ] && [ "$_vup_port" -le 65535 ] || return 1
+
+    case "$_vup_secret" in *[!0-9a-fA-F]*) return 1 ;; esac
+    _vup_slen=${#_vup_secret}
+    case "$_vup_secret" in
+        [dD][dD]*) [ "$_vup_slen" -eq 34 ]  || return 1 ;;
+        [eE][eE]*) [ "$_vup_slen" -ge 34 ]  || return 1 ;;
+        *)         [ "$_vup_slen" -eq 32 ]  || return 1 ;;
+    esac
+    return 0
+}
+
+mt_proxy_link() {
+    [ -n "$MT_LINK_IP" ] || return 1
+    mt_secret_valid 2>/dev/null || return 1
+    # Plain secrets get dd-prefix in the link so Telegram uses padded intermediate mode.
+    _mpl_secret="$MT_SECRET"
+    case "$MT_SECRET" in
+        [dD][dD]*|[eE][eE]*) : ;;
+        *) _mpl_secret="dd${MT_SECRET}" ;;
+    esac
+    printf "tg://proxy?server=%s&port=%s&secret=%s" "$MT_LINK_IP" "$LISTEN_PORT" "$_mpl_secret"
 }
 
 persistent_install_dir() {
@@ -1041,71 +1158,81 @@ stop_running() {
     return 0
 }
 
-run_binary() {
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    [ -n "$bin_path" ] || return 1
+# _run_proxy_cmd fg|bg
+# Builds the full proxy command from current settings and executes it.
+# fg: runs directly (blocking). bg: runs in background, prints PID to stdout.
+_run_proxy_cmd() {
+    _rpc_mode="$1"
+    _rpc_bin="$(runtime_bin_path 2>/dev/null || true)"
+    [ -n "$_rpc_bin" ] || return 1
 
-    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
-        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+    set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+
+    if [ "$PROXY_MODE" = "mtproto" ]; then
+        set -- "$@" --mode mtproto --secret "$MT_SECRET"
+        if [ -n "$MT_LINK_IP" ]; then
+            set -- "$@" --link-ip "$MT_LINK_IP"
+        fi
+    else
+        if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+            set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
+        fi
     fi
+
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
     fi
+
     if [ -n "$DC_IPS" ]; then
-        old_ifs="$IFS"
+        _rpc_old_ifs="$IFS"
         IFS=','
-        for entry in $DC_IPS; do
-            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -n "$entry" ] || continue
-            set -- "$@" --dc-ip "$entry"
+        for _rpc_dc in $DC_IPS; do
+            _rpc_dc="$(printf "%s" "$_rpc_dc" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$_rpc_dc" ] || continue
+            set -- "$@" --dc-ip "$_rpc_dc"
         done
-        IFS="$old_ifs"
+        IFS="$_rpc_old_ifs"
     fi
+
     if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
         set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
         if [ "$CF_PROXY_FIRST" = "1" ]; then
             set -- "$@" --cf-proxy-first
         fi
     fi
-    "$@"
+
+    if [ "$PROXY_MODE" = "mtproto" ] && [ -n "$MT_UPSTREAM_PROXIES" ]; then
+        _rpc_old_ifs="$IFS"
+        IFS=','
+        for _rpc_up in $MT_UPSTREAM_PROXIES; do
+            _rpc_up="$(printf "%s" "$_rpc_up" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$_rpc_up" ] || continue
+            set -- "$@" --mtproto-proxy "$_rpc_up"
+        done
+        IFS="$_rpc_old_ifs"
+    fi
+
+    case "$_rpc_mode" in
+        bg)
+            if command -v nohup >/dev/null 2>&1; then
+                nohup "$@" >/dev/null 2>&1 &
+            else
+                "$@" >/dev/null 2>&1 &
+            fi
+            printf "%s" "$!"
+            ;;
+        *)
+            "$@"
+            ;;
+    esac
+}
+
+run_binary() {
+    _run_proxy_cmd fg
 }
 
 run_binary_background() {
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    [ -n "$bin_path" ] || return 1
-
-    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
-        set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
-    fi
-    if [ "$VERBOSE" = "1" ]; then
-        set -- "$@" --verbose
-    fi
-    if [ -n "$DC_IPS" ]; then
-        old_ifs="$IFS"
-        IFS=','
-        for entry in $DC_IPS; do
-            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -n "$entry" ] || continue
-            set -- "$@" --dc-ip "$entry"
-        done
-        IFS="$old_ifs"
-    fi
-    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
-        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
-        if [ "$CF_PROXY_FIRST" = "1" ]; then
-            set -- "$@" --cf-proxy-first
-        fi
-    fi
-
-    if command -v nohup >/dev/null 2>&1; then
-        nohup "$@" >/dev/null 2>&1 &
-    else
-        "$@" >/dev/null 2>&1 &
-    fi
-
-    printf "%s" "$!"
+    _run_proxy_cmd bg
 }
 
 start_proxy() {
@@ -1301,12 +1428,27 @@ write_init_script() {
         printf '%s\n' '    CF_PROXY="${CF_PROXY:-0}"'
         printf '%s\n' '    CF_PROXY_FIRST="${CF_PROXY_FIRST:-0}"'
         printf '%s\n' '    CF_DOMAIN="${CF_DOMAIN:-}"'
-        printf '%s\n' '    if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
-        printf '%s\n' '        return 1'
+        printf '%s\n' '    PROXY_MODE="${PROXY_MODE:-socks5}"'
+        printf '%s\n' '    MT_SECRET="${MT_SECRET:-}"'
+        printf '%s\n' '    MT_LINK_IP="${MT_LINK_IP:-}"'
+        printf '%s\n' '    MT_UPSTREAM_PROXIES="${MT_UPSTREAM_PROXIES:-}"'
+        printf '%s\n' '    if [ "$PROXY_MODE" = "mtproto" ]; then'
+        printf '%s\n' '        [ -n "$MT_SECRET" ] || return 1'
+        printf '%s\n' '    else'
+        printf '%s\n' '        if { [ -n "$USERNAME" ] && [ -z "$PASSWORD" ]; } || { [ -z "$USERNAME" ] && [ -n "$PASSWORD" ]; }; then'
+        printf '%s\n' '            return 1'
+        printf '%s\n' '        fi'
         printf '%s\n' '    fi'
         printf '%s\n' '    set -- "$BIN" --host "$HOST" --port "$PORT"'
-        printf '%s\n' '    if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then'
-        printf '%s\n' '        set -- "$@" --username "$USERNAME" --password "$PASSWORD"'
+        printf '%s\n' '    if [ "$PROXY_MODE" = "mtproto" ]; then'
+        printf '%s\n' '        set -- "$@" --mode mtproto --secret "$MT_SECRET"'
+        printf '%s\n' '        if [ -n "$MT_LINK_IP" ]; then'
+        printf '%s\n' '            set -- "$@" --link-ip "$MT_LINK_IP"'
+        printf '%s\n' '        fi'
+        printf '%s\n' '    else'
+        printf '%s\n' '        if [ -n "$USERNAME" ] && [ -n "$PASSWORD" ]; then'
+        printf '%s\n' '            set -- "$@" --username "$USERNAME" --password "$PASSWORD"'
+        printf '%s\n' '        fi'
         printf '%s\n' '    fi'
         printf '%s\n' '    if [ "${VERBOSE:-0}" = "1" ]; then'
         printf '%s\n' '        set -- "$@" --verbose'
@@ -1326,6 +1468,16 @@ write_init_script() {
         printf '%s\n' '        if [ "$CF_PROXY_FIRST" = "1" ]; then'
         printf '%s\n' '            set -- "$@" --cf-proxy-first'
         printf '%s\n' '        fi'
+        printf '%s\n' '    fi'
+        printf '%s\n' '    if [ "$PROXY_MODE" = "mtproto" ] && [ -n "$MT_UPSTREAM_PROXIES" ]; then'
+        printf '%s\n' '        old_ifs="$IFS"'
+        printf '%s\n' "        IFS=','"
+        printf '%s\n' '        for up_entry in $MT_UPSTREAM_PROXIES; do'
+        printf '%s\n' '            up_entry="$(printf "%s" "$up_entry" | sed '"'"'s/^[[:space:]]*//;s/[[:space:]]*$//'"'"')"'
+        printf '%s\n' '            [ -n "$up_entry" ] || continue'
+        printf '%s\n' '            set -- "$@" --mtproto-proxy "$up_entry"'
+        printf '%s\n' '        done'
+        printf '%s\n' '        IFS="$old_ifs"'
         printf '%s\n' '    fi'
         printf '%s\n' '    procd_open_instance'
         printf '%s\n' '    procd_set_param command "$@"'
@@ -1891,21 +2043,55 @@ show_header() {
     if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
         clear
     fi
+    version="$(installed_version 2>/dev/null || true)"
+    if [ -z "$version" ]; then
+        version="$(persistent_installed_version 2>/dev/null || true)"
+    fi
     printf "%s+----------------------------------+%s\n" "$C_BLUE" "$C_RESET"
-    printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
+    if [ -n "$version" ]; then
+        ver_len=${#version}
+        pad=$((11 - ver_len))
+        [ "$pad" -lt 1 ] && pad=1
+        printf "%s|%s %s%s Go manager%s" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET"
+        printf "%${pad}s %s%s%s|%s\n" "" "$C_DIM" "$version" "$C_RESET" "$C_BLUE"
+    else
+        printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
+    fi
     printf "%s+----------------------------------+%s\n\n" "$C_BLUE" "$C_RESET"
 }
 
 show_telegram_settings() {
-    printf "%sTelegram SOCKS5%s\n" "$C_BOLD" "$C_RESET"
-    printf "  host     : %s\n" "$(telegram_host)"
-    printf "  port     : %s\n" "$LISTEN_PORT"
-    if [ -n "$SOCKS_USERNAME" ]; then
-        printf "  username : %s\n" "$SOCKS_USERNAME"
+    if [ "$PROXY_MODE" = "mtproto" ]; then
+        printf "%sTelegram MTProto%s\n" "$C_BOLD" "$C_RESET"
+        printf "  mode     : mtproto\n"
+        printf "  host     : %s\n" "$(telegram_host)"
+        printf "  port     : %s\n" "$LISTEN_PORT"
+        if mt_secret_valid 2>/dev/null; then
+            printf "  secret   : %s\n" "$MT_SECRET"
+        else
+            printf "  secret   : %s<not set>%s\n" "$C_RED" "$C_RESET"
+        fi
+        if [ -n "$MT_LINK_IP" ]; then
+            printf "  link ip  : %s\n" "$MT_LINK_IP"
+            link="$(mt_proxy_link 2>/dev/null || true)"
+            if [ -n "$link" ]; then
+                printf "  tg link  : %s\n" "$link"
+            fi
+        else
+            printf "  link ip  : <not set>\n"
+        fi
     else
-        printf "  username : <empty>\n"
+        printf "%sTelegram SOCKS5%s\n" "$C_BOLD" "$C_RESET"
+        printf "  mode     : socks5\n"
+        printf "  host     : %s\n" "$(telegram_host)"
+        printf "  port     : %s\n" "$LISTEN_PORT"
+        if [ -n "$SOCKS_USERNAME" ]; then
+            printf "  username : %s\n" "$SOCKS_USERNAME"
+        else
+            printf "  username : <empty>\n"
+        fi
+        printf "  password : %s\n" "$(password_display)"
     fi
-    printf "  password : %s\n" "$(password_display)"
     if [ -n "$DC_IPS" ]; then
         printf "  dc map   : %s\n" "$DC_IPS"
     else
@@ -1921,10 +2107,16 @@ show_telegram_settings() {
     else
         printf "  cf order : fallback\n"
     fi
-    if [ -n "$CF_DOMAIN" ]; then
-        printf "  cf domain: %s\n" "$CF_DOMAIN"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "  cf domain: not set\n"
     else
-        printf "  cf domain: %s\n" "$DEFAULT_CF_DOMAIN"
+        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
+        if [ "$_cf_commas" -eq 0 ]; then
+            printf "  cf domain: %s\n" "$CF_DOMAIN"
+        else
+            _cf_count=$((_cf_commas + 1))
+            printf "  cf domain: %d domains\n" "$_cf_count"
+        fi
     fi
 }
 
@@ -1936,6 +2128,66 @@ show_current_version() {
     [ -n "$version" ] || version="-"
     printf "%sBinary version%s\n" "$C_BOLD" "$C_RESET"
     printf "  %s\n" "$version"
+}
+
+show_telegram_settings_compact() {
+    host="$(telegram_host)"
+    if [ -n "$DC_IPS" ]; then
+        dc_part="dc:custom"
+    else
+        dc_part="dc:default"
+    fi
+
+    if [ "$PROXY_MODE" = "mtproto" ]; then
+        if mt_secret_valid 2>/dev/null; then
+            secret_part="secret:set"
+        else
+            secret_part="${C_RED}secret:missing${C_RESET}"
+        fi
+        if [ -n "$MT_LINK_IP" ]; then
+            ip_part="ip:$MT_LINK_IP"
+        else
+            ip_part="${C_DIM}ip:none${C_RESET}"
+        fi
+        printf "  MTProto %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part"
+        if [ -n "$MT_LINK_IP" ] && mt_secret_valid 2>/dev/null; then
+            printf "  tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
+        fi
+    else
+        if [ -n "$SOCKS_USERNAME" ]; then
+            if [ -n "$SOCKS_PASSWORD" ]; then
+                auth_part="user:$SOCKS_USERNAME/<set>"
+            else
+                auth_part="user:$SOCKS_USERNAME"
+            fi
+        else
+            auth_part="no auth"
+        fi
+        printf "  SOCKS5  %s:%s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part"
+    fi
+
+    if [ "$CF_PROXY" = "1" ]; then
+        cf_on="${C_GREEN}on${C_RESET}"
+    else
+        cf_on="${C_DIM}off${C_RESET}"
+    fi
+    if [ "$CF_PROXY_FIRST" = "1" ]; then
+        cf_order="first"
+    else
+        cf_order="fallback"
+    fi
+    if [ -z "$CF_DOMAIN" ]; then
+        cf_domain_part="domain:none"
+    else
+        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
+        if [ "$_cf_commas" -eq 0 ]; then
+            cf_domain_part="domain:$CF_DOMAIN"
+        else
+            _cf_count=$((_cf_commas + 1))
+            cf_domain_part="domain:${_cf_count} set"
+        fi
+    fi
+    printf "  CF      %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_domain_part"
 }
 
 show_update_source_settings() {
@@ -1962,14 +2214,18 @@ show_quick_commands() {
     printf "%sQuick commands%s\n" "$C_BOLD" "$C_RESET"
     printf "  sh %s install\n" "$0"
     printf "  sh %s update\n" "$0"
+    printf "  sh %s persist\n" "$0"
     printf "  sh %s enable-autostart\n" "$0"
     printf "  sh %s disable-autostart\n" "$0"
     printf "  sh %s start\n" "$0"
+    printf "  sh %s start-background\n" "$0"
     printf "  sh %s stop\n" "$0"
     printf "  sh %s restart\n" "$0"
     printf "  sh %s status\n" "$0"
     printf "  sh %s quick\n" "$0"
     printf "  sh %s telegram\n" "$0"
+    printf "  sh %s remove\n" "$0"
+    printf "  sh %s help\n" "$0"
     if launcher="$(current_launcher_path 2>/dev/null)"; then
         printf "  %s\n" "$launcher"
     fi
@@ -2073,7 +2329,7 @@ menu_proxy_action_label() {
     if [ "$1" = "1" ]; then
         printf "Stop proxy"
     else
-        printf "Run proxy in terminal"
+        printf "Start proxy"
     fi
 }
 
@@ -2104,25 +2360,8 @@ show_menu_summary() {
         verbose_state="${C_DIM}off${C_RESET}"
     fi
 
-    if [ "$CF_PROXY" = "1" ]; then
-        cf_proxy_state="${C_GREEN}on${C_RESET}"
-    else
-        cf_proxy_state="${C_DIM}off${C_RESET}"
-    fi
-
-    if [ "$CF_PROXY_FIRST" = "1" ]; then
-        cf_order_state="first"
-    else
-        cf_order_state="fallback"
-    fi
-
-    printf "%sSummary%s\n" "$C_BOLD" "$C_RESET"
-    printf "  proxy     : %s\n" "$proxy_state"
-    printf "  autostart : %s\n" "$autostart_state"
-    printf "  verbose   : %s\n" "$verbose_state"
-    printf "  cf proxy  : %s\n" "$cf_proxy_state"
-    printf "  cf order  : %s\n" "$cf_order_state"
-    printf "  track     : %s\n" "$(main_menu_track_label)"
+    printf "  proxy: %s | autostart: %s | verbose: %s | track: %s\n" \
+        "$proxy_state" "$autostart_state" "$verbose_state" "$(main_menu_track_label)"
 }
 
 show_help() {
@@ -2165,6 +2404,32 @@ can_use_numbered_update_source_picker() {
     [ -t 0 ] || return 1
     [ -t 2 ] || return 1
     [ "${TERM:-}" != "dumb" ] || return 1
+}
+
+confirm_yn() {
+    # $1 = prompt text
+    # Returns 0 if confirmed (y/Y), 1 otherwise
+    # Uses single-keypress if stty is available, falls back to line read
+    if [ -t 0 ] && [ -t 2 ] && [ "${TERM:-}" != "dumb" ] && command -v stty >/dev/null 2>&1; then
+        restore_stty="$(stty -g 2>/dev/null || true)"
+        if [ -n "$restore_stty" ]; then
+            printf "%s [y/n]: " "$1" >&2
+            stty -echo raw min 1 time 0 2>/dev/null || true
+            key_hex="$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+            stty "$restore_stty" 2>/dev/null || true
+            printf "\n" >&2
+            case "$key_hex" in
+                79|59) return 0 ;;  # y or Y
+                *)     return 1 ;;
+            esac
+        fi
+    fi
+    printf "%s [y/N]: " "$1" >&2
+    IFS= read -r _confirm_input
+    case "$_confirm_input" in
+        y|Y|yes|YES) return 0 ;;
+        *)           return 1 ;;
+    esac
 }
 
 read_picker_hex_byte() {
@@ -2410,6 +2675,453 @@ choose_update_source_mode() {
     printf "%s" "$current"
 }
 
+configure_proxy_mode() {
+    show_header
+    printf "%sProxy mode%s\n" "$C_BOLD" "$C_RESET"
+    printf "  current: %s\n" "$PROXY_MODE"
+    printf "\nChoose mode:\n"
+    printf "  1) socks5  - standard SOCKS5 (default)\n"
+    printf "  2) mtproto - MTProto obfuscated proxy\n"
+    printf "\nSelect [1-2] (Enter to keep current): "
+    IFS= read -r mode_choice
+
+    case "$mode_choice" in
+        "")
+            printf "\nNo changes made.\n"
+            pause
+            return 0
+            ;;
+        1|socks5)
+            PROXY_MODE="socks5"
+            ;;
+        2|mtproto)
+            PROXY_MODE="mtproto"
+            ;;
+        *)
+            printf "\n%sUnknown mode%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+            ;;
+    esac
+
+    write_settings_config || return 1
+    printf "\n%sProxy mode set to %s%s\n" "$C_GREEN" "$PROXY_MODE" "$C_RESET"
+    if [ "$PROXY_MODE" = "mtproto" ] && ! mt_secret_valid 2>/dev/null; then
+        printf "\n%sSecret is not configured - set it in Advanced -> MTProto secret%s\n" "$C_YELLOW" "$C_RESET"
+    fi
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+draw_mt_secret_picker() {
+    _cur="$1"
+    printf "Action (use arrows, Enter to confirm):\n" >&2
+    for _opt in generate clear enter back; do
+        if [ "$_opt" = "$_cur" ]; then
+            printf "> %s\n" "$_opt" >&2
+        else
+            printf "  %s\n" "$_opt" >&2
+        fi
+    done
+}
+
+configure_mt_secret() {
+    show_header
+    printf "%sMTProto secret%s\n" "$C_BOLD" "$C_RESET"
+    if mt_secret_valid 2>/dev/null; then
+        printf "  current: %s\n" "$MT_SECRET"
+    else
+        printf "  current: %s<not set>%s\n" "$C_RED" "$C_RESET"
+    fi
+    printf "\n"
+
+    new_secret=""
+    action=""
+
+    # --- Arrow picker ---
+    if can_use_arrow_update_source_picker; then
+        restore_stty=""
+        if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
+            restore_stty="$(stty -g 2>/dev/null || true)"
+            if [ -n "$restore_stty" ]; then
+                stty -echo -icanon min 1 time 0 2>/dev/null || true
+            fi
+        else
+            restore_stty="forced"
+        fi
+        if [ -n "$restore_stty" ]; then
+            action="generate"
+            redraw="0"
+            while true; do
+                if [ "$redraw" = "1" ]; then
+                    printf '\033[5A\033[J' >&2
+                fi
+                draw_mt_secret_picker "$action"
+                redraw="1"
+                first_hex="$(read_picker_hex_byte)"
+                case "$first_hex" in
+                    0a|0d) break ;;
+                    1b)
+                        second_hex="$(read_picker_hex_byte)"
+                        third_hex="$(read_picker_hex_byte)"
+                        case "$second_hex$third_hex" in
+                            5b41|5b44)
+                                case "$action" in
+                                    generate) action="back"     ;;
+                                    clear)    action="generate" ;;
+                                    enter)    action="clear"    ;;
+                                    back)     action="enter"    ;;
+                                esac
+                                ;;
+                            5b42|5b43)
+                                case "$action" in
+                                    generate) action="clear"    ;;
+                                    clear)    action="enter"    ;;
+                                    enter)    action="back"     ;;
+                                    back)     action="generate" ;;
+                                esac
+                                ;;
+                        esac
+                        ;;
+                esac
+            done
+            if [ "$restore_stty" != "forced" ]; then
+                stty "$restore_stty" 2>/dev/null || true
+            fi
+            printf "\n" >&2
+        fi
+    fi
+
+    # --- Numbered fallback ---
+    if [ -z "$action" ] && can_use_numbered_update_source_picker; then
+        printf "  1) generate - random secret (plain, dd, or ee)\n"
+        printf "  2) clear    - remove current secret\n"
+        printf "  3) enter    - type hex value\n"
+        printf "  4) back     - return without changes\n"
+        printf "Select [1-4] (Enter to go back): "
+        IFS= read -r sel
+        printf "\n"
+        case "$sel" in
+            1|generate) action="generate" ;;
+            2|clear)    action="clear"    ;;
+            3|enter)    action="enter"    ;;
+            4|back|"")
+                printf "No changes made.\n"
+                pause
+                return 0
+                ;;
+            *)          action="enter"    ;;
+        esac
+    fi
+
+    # --- Text fallback (no interactive terminal) ---
+    if [ -z "$action" ]; then
+        printf "Enter secret or 'gen' to generate.\n"
+        printf "Formats: 32 hex (plain) | dd+32 hex (34 total) | ee+32 hex+hostname_hex (34+ total)\n"
+        printf "Use 'clear' to remove the secret.\n"
+        printf "Secret (empty to keep current): "
+        IFS= read -r new_secret
+        case "$new_secret" in
+            "")
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+                ;;
+            generate|GENERATE|gen) action="generate" ;;
+            clear|CLEAR|Clear)     action="clear"    ;;
+            *)                     action="enter"    ;;
+        esac
+    fi
+
+    # --- Execute action ---
+    case "$action" in
+        back)
+            return 0
+            ;;
+        generate)
+            printf "\nSecret format:\n"
+            printf "  1) plain - 32 hex, standard obfuscation\n"
+            printf "  2) dd    - 34 hex, padded intermediate (recommended)\n"
+            printf "  3) ee    - FakeTLS, needs a hostname\n"
+            printf "Select [1-3] (Enter for 2): "
+            IFS= read -r _fmt_sel
+            _gen_fmt="dd"
+            _gen_domain=""
+            case "$_fmt_sel" in
+                1|plain) _gen_fmt="plain" ;;
+                3|ee)
+                    _gen_fmt="ee"
+                    printf "Hostname for FakeTLS SNI (e.g. google.com): "
+                    IFS= read -r _gen_domain
+                    if [ -z "$_gen_domain" ]; then
+                        printf "\n%sHostname is required for ee format%s\n" "$C_RED" "$C_RESET"
+                        pause
+                        return 1
+                    fi
+                    ;;
+            esac
+            generated="$(generate_mt_secret "$_gen_fmt" "$_gen_domain" 2>/dev/null || true)"
+            if [ -z "$generated" ]; then
+                printf "\n%sFailed to generate secret (no openssl or /dev/urandom)%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+            fi
+            new_secret="$generated"
+            printf "\nGenerated: %s\n" "$new_secret"
+            ;;
+        clear)
+            MT_SECRET=""
+            write_settings_config || return 1
+            printf "\n%sSecret cleared%s\n" "$C_GREEN" "$C_RESET"
+            prompt_restart_proxy_for_updated_settings
+            pause
+            return 0
+            ;;
+        enter)
+            if [ -z "$new_secret" ]; then
+                printf "Formats: 32 hex (plain) | dd+32 hex | ee+32 hex+hostname_hex\n"
+                printf "Secret: "
+                IFS= read -r new_secret
+            fi
+            if [ -z "$new_secret" ]; then
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+            fi
+            ;;
+    esac
+
+    # Validate secret format
+    case "$new_secret" in
+        *[!0-9a-fA-F]*)
+            printf "\n%sSecret must contain only hex characters (0-9, a-f)%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+            ;;
+    esac
+    _new_secret_len=${#new_secret}
+    case "$new_secret" in
+        [dD][dD]*)
+            if [ "$_new_secret_len" -ne 34 ]; then
+                printf "\n%sdd-prefix secret must be exactly 34 hex chars, got %d%s\n" \
+                    "$C_RED" "$_new_secret_len" "$C_RESET"
+                pause
+                return 1
+            fi
+            ;;
+        [eE][eE]*)
+            if [ "$_new_secret_len" -lt 34 ]; then
+                printf "\n%see-prefix secret must be at least 34 hex chars, got %d%s\n" \
+                    "$C_RED" "$_new_secret_len" "$C_RESET"
+                pause
+                return 1
+            fi
+            if [ "$(( _new_secret_len % 2 ))" -ne 0 ]; then
+                printf "\n%sSecret must have an even number of hex chars%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+            fi
+            ;;
+        *)
+            if [ "$_new_secret_len" -ne 32 ]; then
+                printf "\n%sPlain secret must be exactly 32 hex chars (16 bytes), got %d%s\n" \
+                    "$C_RED" "$_new_secret_len" "$C_RESET"
+                pause
+                return 1
+            fi
+            ;;
+    esac
+
+    MT_SECRET="$new_secret"
+    write_settings_config || return 1
+    printf "\n%sSecret saved%s\n" "$C_GREEN" "$C_RESET"
+    if [ -n "$MT_LINK_IP" ]; then
+        _saved_link="$(mt_proxy_link 2>/dev/null || true)"
+        [ -n "$_saved_link" ] && printf "%s\n" "$_saved_link"
+    fi
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+detect_wan_ip() {
+    # Try the interface used for the default route
+    _wan_iface="$(ip route show default 2>/dev/null | awk 'NR==1 { for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit} }')"
+    if [ -n "$_wan_iface" ]; then
+        _wan_ip="$(ip -4 addr show dev "$_wan_iface" 2>/dev/null | awk '/inet / { split($2,a,"/"); print a[1]; exit }')"
+        if [ -n "$_wan_ip" ]; then
+            printf "%s" "$_wan_ip"
+            return 0
+        fi
+    fi
+    # Fallback: src address from ip route get
+    _wan_ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{ for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit} }')"
+    [ -n "$_wan_ip" ] && printf "%s" "$_wan_ip"
+}
+
+configure_mt_link_ip() {
+    show_header
+    printf "%sMTProto public IP (for tg:// link)%s\n" "$C_BOLD" "$C_RESET"
+    if [ -n "$MT_LINK_IP" ]; then
+        printf "  current: %s\n" "$MT_LINK_IP"
+    else
+        printf "  current: <not set>\n"
+    fi
+
+    _suggested_ip=""
+    if [ -z "$MT_LINK_IP" ]; then
+        _suggested_ip="$(detect_wan_ip 2>/dev/null || true)"
+    fi
+
+    printf "\nEnter the public IP of this server (shown in the tg:// proxy link).\n"
+    printf "Use 'clear' to remove.\n"
+    if [ -n "$MT_LINK_IP" ]; then
+        printf "IP (Enter to keep %s): " "$MT_LINK_IP"
+    elif [ -n "$_suggested_ip" ]; then
+        printf "IP (Enter for %s): " "$_suggested_ip"
+    else
+        printf "IP: "
+    fi
+    IFS= read -r new_ip
+
+    case "$new_ip" in
+        "")
+            if [ -n "$_suggested_ip" ] && [ -z "$MT_LINK_IP" ]; then
+                new_ip="$_suggested_ip"
+            else
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+            fi
+            ;;
+        clear|CLEAR|Clear)
+            MT_LINK_IP=""
+            write_settings_config || return 1
+            printf "\n%sPublic IP cleared%s\n" "$C_GREEN" "$C_RESET"
+            pause
+            return 0
+            ;;
+    esac
+
+    MT_LINK_IP="$new_ip"
+    write_settings_config || return 1
+    printf "\n%sPublic IP saved%s\n" "$C_GREEN" "$C_RESET"
+    _saved_link="$(mt_proxy_link 2>/dev/null || true)"
+    [ -n "$_saved_link" ] && printf "%s\n" "$_saved_link"
+    pause
+}
+
+_qr_est_kb() {
+    case "$1" in
+        opkg)
+            _q="$(opkg info qrencode 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
+            _l="$(opkg info libqrencode4 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
+            [ -z "$_l" ] && _l="$(opkg info libqrencode 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
+            if [ -n "$_q" ] && [ -n "$_l" ]; then
+                printf "%d" "$(( (_q + _l + 1023) / 1024 ))"
+            elif [ -n "$_q" ]; then
+                printf "%d" "$(( (_q + 1023) / 1024 ))"
+            fi
+            ;;
+        apt)
+            _q="$(apt-cache show qrencode 2>/dev/null | grep '^Installed-Size:' | head -1 | awk '{print $2}')"
+            [ -n "$_q" ] && printf "%s" "$_q"
+            ;;
+        brew)
+            printf "300"
+            ;;
+    esac
+}
+
+show_mt_qr() {
+    show_header
+    printf "%sMTProto QR code%s\n" "$C_BOLD" "$C_RESET"
+
+    link="$(mt_proxy_link 2>/dev/null || true)"
+    if [ -z "$link" ]; then
+        printf "\n%sSecret or public IP not set%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+    printf "\n  %s\n\n" "$link"
+
+    if qrencode --version >/dev/null 2>&1; then
+        qrencode -t UTF8 "$link"
+        pause
+        return 0
+    fi
+
+    # Detect package manager
+    if command -v opkg >/dev/null 2>&1; then
+        _pm="opkg"
+        _pm_cmd="opkg install qrencode"
+        _pm_path="/"
+    elif command -v apt-get >/dev/null 2>&1; then
+        _pm="apt"
+        if [ "$(id -u)" = "0" ]; then
+            _pm_cmd="apt-get install -y qrencode"
+        else
+            _pm_cmd="sudo apt-get install -y qrencode"
+        fi
+        _pm_path="/usr"
+    elif command -v brew >/dev/null 2>&1; then
+        _pm="brew"
+        _pm_cmd="brew install qrencode"
+        if [ -d "/opt/homebrew" ]; then
+            _pm_path="/opt/homebrew"
+        else
+            _pm_path="/usr/local"
+        fi
+    else
+        printf "  %sqrencode not found%s\n" "$C_YELLOW" "$C_RESET"
+        printf "  No supported package manager found.\n"
+        printf "  Install manually and re-run.\n"
+        pause
+        return 1
+    fi
+
+    printf "  %sqrencode not found%s\n\n" "$C_YELLOW" "$C_RESET"
+    printf "  Command: %s\n" "$_pm_cmd"
+
+    _est="$(_qr_est_kb "$_pm")"
+    [ -n "$_est" ] && printf "  Size:    ~%s KB\n" "$_est"
+
+    _free="$(df -k "$_pm_path" 2>/dev/null | awk 'NR==2 {print $4}')"
+    if [ -n "$_free" ]; then
+        printf "  Free:    %s KB on %s\n" "$_free" "$_pm_path"
+        if [ -n "$_est" ] && [ "$_free" -lt "$_est" ] 2>/dev/null; then
+            printf "\n  %sNot enough free space to install%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+        fi
+    fi
+
+    printf "\n"
+    if confirm_yn "  Install now?"; then
+        printf "\n"
+        case "$_pm" in
+            opkg) opkg install qrencode ;;
+            apt)
+                if [ "$(id -u)" = "0" ]; then
+                    apt-get install -y qrencode
+                else
+                    sudo apt-get install -y qrencode
+                fi
+                ;;
+            brew) brew install qrencode ;;
+        esac
+        printf "\n"
+        if qrencode --version >/dev/null 2>&1; then
+            printf "%sInstalled successfully%s\n\n" "$C_GREEN" "$C_RESET"
+            qrencode -t UTF8 "$link"
+        else
+            printf "%sInstallation failed%s\n" "$C_RED" "$C_RESET"
+            printf "  Try manually: %s\n" "$_pm_cmd"
+        fi
+    fi
+
+    pause
+}
+
 configure_socks_auth() {
     show_header
     show_telegram_settings
@@ -2440,6 +3152,42 @@ configure_socks_auth() {
     write_settings_config || return 1
 
     printf "\n%sSOCKS5 auth saved%s\n" "$C_GREEN" "$C_RESET"
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+configure_listen_port() {
+    show_header
+    printf "%sListen port%s\n" "$C_BOLD" "$C_RESET"
+    printf "  current: %s\n" "$LISTEN_PORT"
+    printf "\nPort the proxy will listen on (1-65535).\n"
+    printf "Port (Enter to keep %s): " "$LISTEN_PORT"
+    IFS= read -r new_port
+
+    case "$new_port" in
+        "")
+            printf "\nNo changes made.\n"
+            pause
+            return 0
+            ;;
+    esac
+
+    case "$new_port" in
+        *[!0-9]*)
+            printf "\n%sPort must be a number%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+            ;;
+    esac
+    if [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ] 2>/dev/null; then
+        printf "\n%sPort must be between 1 and 65535%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    LISTEN_PORT="$new_port"
+    write_settings_config || return 1
+    printf "\n%sPort saved: %s%s\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
     prompt_restart_proxy_for_updated_settings
     pause
 }
@@ -2575,16 +3323,23 @@ toggle_cf_proxy_first() {
 configure_cf_domain() {
     show_header
     printf "%sCloudflare proxy domain%s\n" "$C_BOLD" "$C_RESET"
-    if [ -n "$CF_DOMAIN" ]; then
-        printf "  current: %s\n" "$CF_DOMAIN"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "  current: not set\n"
     else
-        printf "  current: %s\n" "$DEFAULT_CF_DOMAIN"
+        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
+        if [ "$_cf_commas" -eq 0 ]; then
+            printf "  current: %s\n" "$CF_DOMAIN"
+        else
+            printf "  current: %s\n" "$CF_DOMAIN"
+        fi
     fi
-    printf "\nEnter your Cloudflare domain (e.g. example.com).\n"
-    printf "Default domain for quick testing: %s\n" "$DEFAULT_CF_DOMAIN"
+    printf "\nEnter your Cloudflare domain(s), comma-separated (e.g. domain1.com,domain2.com).\n"
     printf "DNS records kws1..kws5 and kws203 must point to Telegram DC IPs.\n"
-    printf "Use 'clear' to restore the default domain.\n"
-    printf "CF domain (empty to keep current): "
+    if [ "$CF_PROXY" != "1" ]; then
+        printf "%sWarning:%s CF proxy is currently off. Saving a domain does not enable CF routing.\n" "$C_YELLOW" "$C_RESET"
+    fi
+    printf "Use 'clear' to remove the domain.\n"
+    printf "CF domain(s) (empty to keep current): "
     IFS= read -r new_cf_domain
 
     if [ -z "$new_cf_domain" ]; then
@@ -2595,9 +3350,9 @@ configure_cf_domain() {
 
     case "$new_cf_domain" in
         clear|CLEAR|Clear)
-            CF_DOMAIN="$DEFAULT_CF_DOMAIN"
+            CF_DOMAIN=""
             write_settings_config || return 1
-            printf "\n%sCloudflare domain reset to default%s\n" "$C_GREEN" "$C_RESET"
+            printf "\n%sCloudflare domain cleared%s\n" "$C_GREEN" "$C_RESET"
             prompt_restart_proxy_for_updated_settings
             pause
             return 0
@@ -2607,6 +3362,9 @@ configure_cf_domain() {
     CF_DOMAIN="$new_cf_domain"
     write_settings_config || return 1
     printf "\n%sCloudflare domain saved%s\n" "$C_GREEN" "$C_RESET"
+    if [ "$CF_PROXY" != "1" ]; then
+        printf "%sWarning:%s domain saved, but CF route is disabled until you turn on CF proxy.\n" "$C_YELLOW" "$C_RESET"
+    fi
     prompt_restart_proxy_for_updated_settings
     pause
 }
@@ -2671,7 +3429,11 @@ check_cf_endpoint() {
 check_cf_domain() {
     show_header
     printf "%sCheck Cloudflare domain%s\n" "$C_BOLD" "$C_RESET"
-    printf "  current: %s\n" "$CF_DOMAIN"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "  current: not set\n"
+    else
+        printf "  current: %s\n" "$CF_DOMAIN"
+    fi
     printf "\nEnter domain to check or press Enter to use current.\n"
     printf "Domain: "
     IFS= read -r check_domain
@@ -2693,7 +3455,10 @@ check_cf_domain() {
     printf "\nResults:\n"
     ok_count=0
     ok_hosts=""
+    _cf_interrupted=0
+    trap '_cf_interrupted=1' INT
     for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+        [ "$_cf_interrupted" = "0" ] || break
         host="$prefix.$check_domain"
         printf "  %-24s checking...\n" "$host"
         if check_cf_endpoint "$host"; then
@@ -2705,6 +3470,13 @@ check_cf_domain() {
             fi
         fi
     done
+    trap - INT
+
+    if [ "$_cf_interrupted" = "1" ]; then
+        printf "\nCancelled.\n"
+        pause
+        return 0
+    fi
 
     printf "\n"
     if [ "$ok_count" -eq 6 ]; then
@@ -2721,23 +3493,180 @@ check_cf_domain() {
     pause
 }
 
+configure_mt_upstream_proxies() {
+    while true; do
+        show_header
+        printf "%sMTProto upstream proxies%s\n" "$C_BOLD" "$C_RESET"
+        printf "\nUsed as fallback when WebSocket to Telegram is unavailable.\n"
+        printf "Format: HOST:PORT:SECRET\n\n"
+
+        _up_count=0
+        if [ -n "$MT_UPSTREAM_PROXIES" ]; then
+            _up_old_ifs="$IFS"
+            IFS=','
+            for _up_e in $MT_UPSTREAM_PROXIES; do
+                _up_e="$(printf "%s" "$_up_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                [ -n "$_up_e" ] || continue
+                _up_count=$((_up_count + 1))
+                printf "  %d. %s\n" "$_up_count" "$_up_e"
+            done
+            IFS="$_up_old_ifs"
+        fi
+        if [ "$_up_count" -eq 0 ]; then
+            printf "  (none)\n"
+        fi
+
+        printf "\n  1) Add proxy\n"
+        if [ "$_up_count" -gt 0 ]; then
+            printf "  2) Remove proxy\n"
+            printf "  3) Clear all\n"
+        fi
+        printf "  Enter) Back\n\n"
+        printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
+        IFS= read -r _up_choice
+
+        case "$_up_choice" in
+            1|add)
+                printf "\nEnter HOST:PORT:SECRET\n"
+                printf "Example: proxy.example.com:443:ddf0e1d2c3b4a5968778695a4b3c2d1e0f\n"
+                printf "Entry: "
+                IFS= read -r _up_new
+                if [ -z "$_up_new" ]; then
+                    continue
+                fi
+                if ! validate_upstream_proxy_entry "$_up_new" 2>/dev/null; then
+                    printf "\n%sInvalid entry. Expected HOST:PORT:SECRET\n" "$C_RED"
+                    printf "SECRET: 32 hex (plain) | 34 hex dd-prefix | 34+ hex ee-prefix%s\n" "$C_RESET"
+                    pause
+                    continue
+                fi
+                if [ -z "$MT_UPSTREAM_PROXIES" ]; then
+                    MT_UPSTREAM_PROXIES="$_up_new"
+                else
+                    MT_UPSTREAM_PROXIES="$MT_UPSTREAM_PROXIES,$_up_new"
+                fi
+                write_settings_config || { pause; continue; }
+                printf "\n%sProxy added%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            2|remove)
+                [ "$_up_count" -gt 0 ] || continue
+                if [ "$_up_count" -eq 1 ]; then
+                    MT_UPSTREAM_PROXIES=""
+                    write_settings_config || { pause; continue; }
+                    printf "\n%sProxy removed%s\n" "$C_GREEN" "$C_RESET"
+                    prompt_restart_proxy_for_updated_settings
+                    pause
+                    continue
+                fi
+                printf "\nRemove which? [1-%d]: " "$_up_count"
+                IFS= read -r _up_rm
+                case "$_up_rm" in *[!0-9]*|"") continue ;; esac
+                [ "$_up_rm" -ge 1 ] && [ "$_up_rm" -le "$_up_count" ] || continue
+                _up_i=0
+                _up_new_list=""
+                _up_old_ifs="$IFS"
+                IFS=','
+                for _up_e in $MT_UPSTREAM_PROXIES; do
+                    _up_e="$(printf "%s" "$_up_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                    [ -n "$_up_e" ] || continue
+                    _up_i=$((_up_i + 1))
+                    [ "$_up_i" -eq "$_up_rm" ] && continue
+                    if [ -z "$_up_new_list" ]; then
+                        _up_new_list="$_up_e"
+                    else
+                        _up_new_list="$_up_new_list,$_up_e"
+                    fi
+                done
+                IFS="$_up_old_ifs"
+                MT_UPSTREAM_PROXIES="$_up_new_list"
+                write_settings_config || { pause; continue; }
+                printf "\n%sProxy removed%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            3|clear)
+                [ "$_up_count" -gt 0 ] || continue
+                MT_UPSTREAM_PROXIES=""
+                write_settings_config || { pause; continue; }
+                printf "\n%sAll upstream proxies cleared%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
 advanced_menu() {
     while true; do
         show_header
-        printf "%sAdvanced%s\n\n" "$C_BOLD" "$C_RESET"
-        printf "  1) Show full status\n"
-        printf "  2) Toggle verbose\n"
-        printf "  3) Restart proxy\n"
-        printf "  4) Show quick commands\n"
-        printf "  5) Remove binary and runtime files\n"
-        printf "  6) Configure SOCKS5 auth\n"
-        printf "  7) Configure Telegram DC mapping\n"
-        printf "  8) Configure update source\n"
-        printf "  9) Toggle Cloudflare proxy\n"
-        printf " 10) Toggle Cloudflare first\n"
-        printf " 11) Set Cloudflare domain\n"
-        printf " 12) Check Cloudflare domain\n"
-        printf "  Enter) Back\n\n"
+        printf "%sAdvanced%s\n" "$C_BOLD" "$C_RESET"
+        printf "\n  Info\n"
+        printf "  1) Full status\n"
+        printf "  2) Proxy settings\n"
+        printf "  3) Quick commands\n"
+        printf "\n  Proxy\n"
+        if [ "$VERBOSE" = "1" ]; then
+            printf "  4) Toggle verbose (%son%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "  4) Toggle verbose (%soff%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        printf "  5) Restart proxy\n"
+        printf "\n  Cloudflare\n"
+        if [ "$CF_PROXY" = "1" ]; then
+            printf "  6) Toggle proxy (%son%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "  6) Toggle proxy (%soff%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        if [ "$CF_PROXY_FIRST" = "1" ]; then
+            printf "  7) Toggle order (%sfirst%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "  7) Toggle order (%sfallback%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        printf "  8) Set domain\n"
+        printf "  9) Check domain\n"
+        printf "\n  Settings\n"
+        printf " 10) SOCKS5 auth\n"
+        printf " 11) DC mapping\n"
+        printf " 12) Port (%s%s%s)\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
+        printf " 13) Update source\n"
+        printf " 14) Remove binary\n"
+        printf "\n  MTProto\n"
+        if [ "$PROXY_MODE" = "mtproto" ]; then
+            printf " 15) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
+        else
+            printf " 15) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        if mt_secret_valid 2>/dev/null; then
+            _sec_type="$(mt_secret_type 2>/dev/null || printf "set")"
+            printf " 16) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
+        else
+            printf " 16) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
+        fi
+        if [ -n "$MT_LINK_IP" ]; then
+            printf " 17) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
+        else
+            printf " 17) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        if [ "$PROXY_MODE" = "mtproto" ] && mt_secret_valid 2>/dev/null && [ -n "$MT_LINK_IP" ]; then
+            printf " 18) Show QR code\n"
+        fi
+        _adv_up_count=0
+        if [ -n "$MT_UPSTREAM_PROXIES" ]; then
+            _adv_old_ifs="$IFS"; IFS=','
+            for _adv_e in $MT_UPSTREAM_PROXIES; do
+                [ -n "$_adv_e" ] && _adv_up_count=$((_adv_up_count + 1))
+            done
+            IFS="$_adv_old_ifs"
+        fi
+        if [ "$_adv_up_count" -gt 0 ]; then
+            printf " 19) Upstream proxies (%s%d set%s)\n" "$C_GREEN" "$_adv_up_count" "$C_RESET"
+        else
+            printf " 19) Upstream proxies (%snone%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        printf "\n  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
         read advanced_choice
 
@@ -2748,37 +3677,58 @@ advanced_menu() {
                 pause
                 ;;
             2)
-                toggle_verbose
+                show_telegram_only
                 ;;
             3)
-                restart_proxy
-                ;;
-            4)
                 show_quick_only
                 ;;
+            4)
+                toggle_verbose
+                ;;
             5)
-                remove_all
+                restart_proxy
                 ;;
             6)
-                configure_socks_auth
-                ;;
-            7)
-                configure_dc_ip_mapping
-                ;;
-            8)
-                configure_update_source
-                ;;
-            9)
                 toggle_cf_proxy
                 ;;
-            10)
+            7)
                 toggle_cf_proxy_first
                 ;;
-            11)
+            8)
                 configure_cf_domain
                 ;;
-            12)
+            9)
                 check_cf_domain
+                ;;
+            10)
+                configure_socks_auth
+                ;;
+            11)
+                configure_dc_ip_mapping
+                ;;
+            12)
+                configure_listen_port
+                ;;
+            13)
+                configure_update_source
+                ;;
+            14)
+                remove_all
+                ;;
+            15)
+                configure_proxy_mode
+                ;;
+            16)
+                configure_mt_secret
+                ;;
+            17)
+                configure_mt_link_ip
+                ;;
+            18)
+                show_mt_qr
+                ;;
+            19)
+                configure_mt_upstream_proxies
                 ;;
             *)
                 return 0
@@ -2799,29 +3749,38 @@ menu() {
     fi
 
     show_header
-    show_current_version
-    printf "\n"
-    show_telegram_settings
+    show_telegram_settings_compact
     printf "\n"
     show_menu_summary "$running_now" "$autostart_now"
     printf "\n%sActions%s\n" "$C_BOLD" "$C_RESET"
     printf "  1) Setup / Update\n"
     printf "  2) %s\n" "$(menu_proxy_action_label "$running_now")"
     printf "  3) %s\n" "$(menu_autostart_action_label "$autostart_now")"
-    printf "  4) Show Telegram SOCKS5 settings\n"
-    printf "  5) Advanced\n"
-    printf "  6) Start in background\n"
+    printf "  4) Advanced\n"
     printf "  Enter) Exit\n\n"
     printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
     read choice
 
     case "$choice" in
-        1) update_binary ;;
+        1)
+            if confirm_yn "  Install / update binary?"; then
+                update_binary
+            fi
+            ;;
         2)
             if [ "$running_now" = "1" ]; then
                 stop_proxy
             else
-                start_proxy
+                printf "  (t)erminal or (b)ackground [t]: "
+                IFS= read -r start_mode
+                case "$start_mode" in
+                    b|B|bg|background)
+                        start_proxy_background
+                        ;;
+                    *)
+                        start_proxy
+                        ;;
+                esac
             fi
             ;;
         3)
@@ -2831,9 +3790,7 @@ menu() {
                 enable_autostart
             fi
             ;;
-        4) show_telegram_only ;;
-        5) advanced_menu ;;
-        6) start_proxy_background ;;
+        4) advanced_menu ;;
         *) exit 0 ;;
     esac
 }
