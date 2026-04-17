@@ -262,14 +262,13 @@ func abs(v int) int {
 	return v
 }
 
-// ErrInvalidSecret is returned when the handshake does not match the expected secret.
+// handshake did not match the expected secret.
 var ErrInvalidSecret = errors.New("mtproto handshake: invalid secret")
 
-// ErrInitGenFailed is returned when GenerateRelayInit exhausts retries.
+// could not generate a valid relay init after retries.
 var ErrInitGenFailed = errors.New("mtproto: failed to generate valid relay init")
 
-// ParseInitWithSecret validates a 64-byte MTProto obfuscated handshake against
-// secret, then extracts the DC, media flag, and transport protocol.
+// validate a 64-byte obfuscated handshake against secret and extract dc/media/proto.
 func ParseInitWithSecret(data []byte, secret []byte) (InitInfo, error) {
 	if len(data) < initPacketSize {
 		return InitInfo{}, ErrInitTooShort
@@ -310,12 +309,8 @@ func ParseInitWithSecret(data []byte, secret []byte) (InitInfo, error) {
 	return InitInfo{DC: dc, IsMedia: isMedia, Proto: proto}, nil
 }
 
-// BuildConnectionCiphers returns the two AES-256-CTR streams for the client
-// connection: clientDec for bytes read from the client, clientEnc for bytes
-// written to the client.
-//
-// clientDec skips 64 bytes (the client already consumed them in the init packet).
-// clientEnc starts at position 0 - the client's inbound stream has no skip.
+// build client-side ctr streams.
+// clientDec skips the 64-byte init packet, clientEnc starts from offset 0.
 func BuildConnectionCiphers(handshake [64]byte, secret []byte) (clientDec, clientEnc cipher.Stream, err error) {
 	clientDec, err = newSecretCTR(handshake[8:40], handshake[40:56], secret, false, initPacketSize)
 	if err != nil {
@@ -328,10 +323,7 @@ func BuildConnectionCiphers(handshake [64]byte, secret []byte) (clientDec, clien
 	return clientDec, clientEnc, nil
 }
 
-// GenerateRelayInit produces a fresh 64-byte MTProto obfuscated init packet to
-// send to Telegram, together with the two AES-256-CTR streams for the relay
-// side: relayEnc for bytes sent to Telegram, relayDec for bytes received from
-// Telegram.
+// generate a fresh 64-byte relay init plus relay-side ctr streams.
 func GenerateRelayInit(proto uint32, dc int) ([64]byte, cipher.Stream, cipher.Stream, error) {
 	for range 100 {
 		var buf [64]byte
@@ -353,8 +345,7 @@ func GenerateRelayInit(proto uint32, dc int) ([64]byte, cipher.Stream, cipher.St
 			buf[56+i] = plain[i] ^ ks[56+i]
 		}
 
-		// relayEnc skips 64 bytes - we already sent them as the relay init.
-		// relayDec starts at position 0 - Telegram's response stream has no skip.
+		// relayEnc skips the init we already sent. relayDec starts from 0.
 		relayEnc, err := newDirectCTR(buf[8:40], buf[40:56], false, initPacketSize)
 		if err != nil {
 			return [64]byte{}, nil, nil, err
@@ -368,12 +359,8 @@ func GenerateRelayInit(proto uint32, dc int) ([64]byte, cipher.Stream, cipher.St
 	return [64]byte{}, nil, nil, ErrInitGenFailed
 }
 
-// newSecretCTR creates an AES-256-CTR stream keyed with SHA-256(rawKey ∥ secret).
-// If reverse is true, the entire rawKey∥iv block is reversed as one unit before
-// hashing/use - matching the MTProto obfuscation spec where the server->client
-// cipher uses reverse(prekey ∥ IV)[0:32] as the key and reverse(prekey ∥ IV)[32:48]
-// as the IV.  Reversing each field independently produces different results.
-// skip is the number of keystream bytes to fast-forward past.
+// build ctr stream with SHA-256(rawKey || secret).
+// reverse=true means reverse the whole rawKey||iv block first, not each part separately.
 func newSecretCTR(rawKey, iv, secret []byte, reverse bool, skip int) (cipher.Stream, error) {
 	k := rawKey
 	v := iv
@@ -392,10 +379,8 @@ func newSecretCTR(rawKey, iv, secret []byte, reverse bool, skip int) (cipher.Str
 	return newCTRFastForward(key, v, skip)
 }
 
-// newDirectCTR creates an AES-256-CTR stream using rawKey directly (no secret).
-// If reverse is true, the entire rawKey∥iv block is reversed as one unit -
-// same convention as newSecretCTR.
-// skip is the number of keystream bytes to fast-forward past.
+// build ctr stream from rawKey directly, without secret hashing.
+// reverse=true follows the same whole-block reverse rule as newSecretCTR.
 func newDirectCTR(rawKey, iv []byte, reverse bool, skip int) (cipher.Stream, error) {
 	k := rawKey
 	v := iv
@@ -431,8 +416,65 @@ func reverseSlice(b []byte) []byte {
 	return r
 }
 
-// validRelayInitBytes returns false if data begins with any reserved sequence
-// that Telegram (or DPI) would misidentify as a different protocol.
+// generate a client handshake for an upstream mtproto proxy plus its ctr streams.
+// upEnc is fast-forwarded by 64 bytes, upDec starts at offset 0.
+// secret here is the raw 16-byte key, without dd/ee prefix.
+func GenerateClientHandshake(secret []byte, dc int, proto uint32) ([64]byte, cipher.Stream, cipher.Stream, error) {
+	protoBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(protoBytes, proto)
+	dcBytes := make([]byte, 2)
+	binary.LittleEndian.PutUint16(dcBytes, uint16(int16(dc)))
+
+	for range 100 {
+		var raw [64]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			return [64]byte{}, nil, nil, err
+		}
+		if !validRelayInitBytes(raw[:]) {
+			continue
+		}
+
+		// key = SHA-256(raw[8:40] || secret), iv = raw[40:56]
+		h := sha256.New()
+		h.Write(raw[8:40])
+		h.Write(secret)
+		key := h.Sum(nil)
+
+		block, err := aes.NewCipher(key)
+		if err != nil {
+			return [64]byte{}, nil, nil, err
+		}
+		ks := make([]byte, initPacketSize)
+		cipher.NewCTR(block, raw[40:56]).XORKeyStream(ks, ks)
+
+		// put proto and dc into bytes [56..62].
+		handshake := raw
+		for i := 0; i < 4; i++ {
+			handshake[56+i] = protoBytes[i] ^ ks[56+i]
+		}
+		for i := 0; i < 2; i++ {
+			handshake[60+i] = dcBytes[i] ^ ks[60+i]
+		}
+		// bytes [62..64] remain random
+
+		// upEnc: SHA-256(handshake[8:40] || secret), fast-forward 64 bytes.
+		upEnc, err := newSecretCTR(handshake[8:40], handshake[40:56], secret, false, initPacketSize)
+		if err != nil {
+			return [64]byte{}, nil, nil, err
+		}
+
+		// upDec: SHA-256(reversed(handshake[8:48]) || secret), no skip.
+		upDec, err := newSecretCTR(handshake[8:40], handshake[40:56], secret, true, 0)
+		if err != nil {
+			return [64]byte{}, nil, nil, err
+		}
+
+		return handshake, upEnc, upDec, nil
+	}
+	return [64]byte{}, nil, nil, ErrInitGenFailed
+}
+
+// reject reserved prefixes that tg or dpi would treat as another protocol.
 func validRelayInitBytes(data []byte) bool {
 	if len(data) < 8 {
 		return false

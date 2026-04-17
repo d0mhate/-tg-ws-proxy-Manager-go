@@ -231,3 +231,57 @@ func TestManagerCheckCFDomainViaCurlFallback(t *testing.T) {
 		t.Fatalf("unexpected cf domain check output (curl fallback):\n%s", out)
 	}
 }
+
+func TestManagerConfigurePortViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	// 4 = Advanced, 12 = Port, enter new port, back, exit
+	out, err := runManagerMenu(t, env, "4\n12\n2080\n\n\n")
+	if err != nil {
+		t.Fatalf("configure port failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Port saved: 2080") {
+		t.Fatalf("expected success message, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "PORT='2080'") {
+		t.Fatalf("expected port to be persisted, got:\n%s", config)
+	}
+}
+
+func TestManagerConfigurePortRejectsInvalidValues(t *testing.T) {
+	env := managerEnv(t)
+
+	for _, bad := range []string{"0", "65536", "abc", "-1"} {
+		out, _ := runManagerMenu(t, env, "4\n12\n"+bad+"\n\n\n")
+		if !strings.Contains(out, "Port must") {
+			t.Errorf("expected validation error for port %q, got:\n%s", bad, out)
+		}
+	}
+}
+
+func TestManagerStartBackgroundUsesConfiguredPort(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile, "LISTEN_PORT=9999")
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--port") || !strings.Contains(args, "9999") {
+		t.Errorf("expected --port 9999 in args, got:\n%s", args)
+	}
+
+	runManager(t, env, "stop") //nolint
+}

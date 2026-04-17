@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode"
@@ -28,6 +29,32 @@ func (f *dcIPFlags) Set(value string) error {
 	return nil
 }
 
+type mtproxyFlags []string
+
+func (f *mtproxyFlags) String() string { return fmt.Sprintf("%v", []string(*f)) }
+func (f *mtproxyFlags) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
+// parse HOST:PORT:SECRET into an UpstreamProxy.
+// splitn is enough here because host is expected to be ipv4 or hostname.
+func parseMtproxyFlag(s string) (config.UpstreamProxy, error) {
+	parts := strings.SplitN(s, ":", 3)
+	if len(parts) != 3 {
+		return config.UpstreamProxy{}, fmt.Errorf("expected HOST:PORT:SECRET, got %q", s)
+	}
+	host, portStr, secret := parts[0], parts[1], parts[2]
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port < 1 || port > 65535 {
+		return config.UpstreamProxy{}, fmt.Errorf("invalid port %q in --mtproto-proxy", portStr)
+	}
+	if _, err := hex.DecodeString(secret); err != nil {
+		return config.UpstreamProxy{}, fmt.Errorf("invalid hex secret in --mtproto-proxy: %w", err)
+	}
+	return config.UpstreamProxy{Host: host, Port: port, Secret: secret}, nil
+}
+
 type parsedArgs struct {
 	cfg    config.Config
 	mode   string
@@ -38,6 +65,7 @@ type parsedArgs struct {
 func parseArgs(args []string) (parsedArgs, error) {
 	cfg := config.Default()
 	var dcIPs dcIPFlags
+	var mtProxies mtproxyFlags
 
 	fs := flag.NewFlagSet("tg-ws-proxy", flag.ContinueOnError)
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "listen host")
@@ -61,9 +89,18 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs.StringVar(&mode, "mode", "socks5", "proxy mode: socks5 or mtproto")
 	fs.StringVar(&secretHex, "secret", "", "MTProto proxy secret (32 hex chars, required for --mode mtproto)")
 	fs.StringVar(&linkIP, "link-ip", "", "public IP to include in the tg:// proxy link (mtproto mode)")
+	fs.Var(&mtProxies, "mtproto-proxy", "upstream MTProto proxy HOST:PORT:SECRET (may be repeated)")
 
 	if err := fs.Parse(args); err != nil {
 		return parsedArgs{}, err
+	}
+
+	for _, raw := range mtProxies {
+		up, err := parseMtproxyFlag(raw)
+		if err != nil {
+			return parsedArgs{}, fmt.Errorf("invalid --mtproto-proxy: %w", err)
+		}
+		cfg.UpstreamProxies = append(cfg.UpstreamProxies, up)
 	}
 
 	if len(dcIPs) > 0 {
@@ -106,10 +143,23 @@ func parseArgs(args []string) (parsedArgs, error) {
 			return parsedArgs{}, fmt.Errorf("--secret is required for --mode mtproto")
 		}
 		decoded, err := hex.DecodeString(secretHex)
-		if err != nil || len(decoded) != 16 {
-			return parsedArgs{}, fmt.Errorf("--secret must be exactly 32 hex characters (16 bytes), got %q", secretHex)
+		if err != nil {
+			return parsedArgs{}, fmt.Errorf("--secret: invalid hex: %w", err)
 		}
-		secret = decoded
+		switch {
+		case len(decoded) == 16:
+			// Plain 16-byte secret.
+			secret = decoded
+		case len(decoded) >= 17 && (decoded[0] == 0xdd || decoded[0] == 0xee):
+			// dd-prefix (padded intermediate) or ee-prefix (FakeTLS).
+			// For ee, bytes[17:] are the UTF-8 hostname.
+			secret = decoded
+		default:
+			return parsedArgs{}, fmt.Errorf(
+				"--secret must be 32 hex chars (plain), or 34+ hex chars starting with dd or ee, got %d hex chars",
+				len(secretHex),
+			)
+		}
 	}
 
 	return parsedArgs{cfg: cfg, mode: mode, secret: secret, linkIP: linkIP}, nil
@@ -169,8 +219,16 @@ func main() {
 
 	if pa.mode == "mtproto" {
 		if pa.linkIP != "" {
-			logger.Printf("tg://proxy?server=%s&port=%d&secret=dd%s",
-				pa.linkIP, pa.cfg.Port, hex.EncodeToString(pa.secret))
+			var secretDisplay string
+			if len(pa.secret) == 16 {
+				// Plain secret - advertise with dd prefix (padded intermediate mode).
+				secretDisplay = "dd" + hex.EncodeToString(pa.secret)
+			} else {
+				// dd or ee prefix already present - use as-is.
+				secretDisplay = hex.EncodeToString(pa.secret)
+			}
+			logger.Printf("tg://proxy?server=%s&port=%d&secret=%s",
+				pa.linkIP, pa.cfg.Port, secretDisplay)
 		}
 		srv := mtpserver.NewMTServer(pa.cfg, pa.secret, logger)
 		if err := srv.Run(ctx); err != nil {

@@ -409,7 +409,7 @@ configure_mt_secret() {
 
     # --- Numbered fallback ---
     if [ -z "$action" ] && can_use_numbered_update_source_picker; then
-        printf "  1) generate - random 16-byte secret\n"
+        printf "  1) generate - random secret (plain, dd, or ee)\n"
         printf "  2) clear    - remove current secret\n"
         printf "  3) enter    - type hex value\n"
         printf "  4) back     - return without changes\n"
@@ -431,7 +431,8 @@ configure_mt_secret() {
 
     # --- Text fallback (no interactive terminal) ---
     if [ -z "$action" ]; then
-        printf "Enter 32 hex characters (16 bytes) or 'gen' to generate a random secret.\n"
+        printf "Enter secret or 'gen' to generate.\n"
+        printf "Formats: 32 hex (plain) | dd+32 hex (34 total) | ee+32 hex+hostname_hex (34+ total)\n"
         printf "Use 'clear' to remove the secret.\n"
         printf "Secret (empty to keep current): "
         IFS= read -r new_secret
@@ -453,7 +454,28 @@ configure_mt_secret() {
             return 0
             ;;
         generate)
-            generated="$(generate_mt_secret 2>/dev/null || true)"
+            printf "\nSecret format:\n"
+            printf "  1) plain - 32 hex, standard obfuscation\n"
+            printf "  2) dd    - 34 hex, padded intermediate (recommended)\n"
+            printf "  3) ee    - FakeTLS, needs a hostname\n"
+            printf "Select [1-3] (Enter for 2): "
+            IFS= read -r _fmt_sel
+            _gen_fmt="dd"
+            _gen_domain=""
+            case "$_fmt_sel" in
+                1|plain) _gen_fmt="plain" ;;
+                3|ee)
+                    _gen_fmt="ee"
+                    printf "Hostname for FakeTLS SNI (e.g. google.com): "
+                    IFS= read -r _gen_domain
+                    if [ -z "$_gen_domain" ]; then
+                        printf "\n%sHostname is required for ee format%s\n" "$C_RED" "$C_RESET"
+                        pause
+                        return 1
+                    fi
+                    ;;
+            esac
+            generated="$(generate_mt_secret "$_gen_fmt" "$_gen_domain" 2>/dev/null || true)"
             if [ -z "$generated" ]; then
                 printf "\n%sFailed to generate secret (no openssl or /dev/urandom)%s\n" "$C_RED" "$C_RESET"
                 pause
@@ -472,7 +494,8 @@ configure_mt_secret() {
             ;;
         enter)
             if [ -z "$new_secret" ]; then
-                printf "Enter 32 hex characters (16 bytes): "
+                printf "Formats: 32 hex (plain) | dd+32 hex | ee+32 hex+hostname_hex\n"
+                printf "Secret: "
                 IFS= read -r new_secret
             fi
             if [ -z "$new_secret" ]; then
@@ -483,7 +506,7 @@ configure_mt_secret() {
             ;;
     esac
 
-    # Validate: must be 32 hex chars
+    # Validate secret format
     case "$new_secret" in
         *[!0-9a-fA-F]*)
             printf "\n%sSecret must contain only hex characters (0-9, a-f)%s\n" "$C_RED" "$C_RESET"
@@ -491,18 +514,45 @@ configure_mt_secret() {
             return 1
             ;;
     esac
-    if [ ${#new_secret} -ne 32 ]; then
-        printf "\n%sSecret must be exactly 32 hex characters (16 bytes), got %d%s\n" \
-            "$C_RED" "${#new_secret}" "$C_RESET"
-        pause
-        return 1
-    fi
+    _new_secret_len=${#new_secret}
+    case "$new_secret" in
+        [dD][dD]*)
+            if [ "$_new_secret_len" -ne 34 ]; then
+                printf "\n%sdd-prefix secret must be exactly 34 hex chars, got %d%s\n" \
+                    "$C_RED" "$_new_secret_len" "$C_RESET"
+                pause
+                return 1
+            fi
+            ;;
+        [eE][eE]*)
+            if [ "$_new_secret_len" -lt 34 ]; then
+                printf "\n%see-prefix secret must be at least 34 hex chars, got %d%s\n" \
+                    "$C_RED" "$_new_secret_len" "$C_RESET"
+                pause
+                return 1
+            fi
+            if [ "$(( _new_secret_len % 2 ))" -ne 0 ]; then
+                printf "\n%sSecret must have an even number of hex chars%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+            fi
+            ;;
+        *)
+            if [ "$_new_secret_len" -ne 32 ]; then
+                printf "\n%sPlain secret must be exactly 32 hex chars (16 bytes), got %d%s\n" \
+                    "$C_RED" "$_new_secret_len" "$C_RESET"
+                pause
+                return 1
+            fi
+            ;;
+    esac
 
     MT_SECRET="$new_secret"
     write_settings_config || return 1
     printf "\n%sSecret saved%s\n" "$C_GREEN" "$C_RESET"
     if [ -n "$MT_LINK_IP" ]; then
-        printf "tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
+        _saved_link="$(mt_proxy_link 2>/dev/null || true)"
+        [ -n "$_saved_link" ] && printf "%s\n" "$_saved_link"
     fi
     prompt_restart_proxy_for_updated_settings
     pause
@@ -570,9 +620,8 @@ configure_mt_link_ip() {
     MT_LINK_IP="$new_ip"
     write_settings_config || return 1
     printf "\n%sPublic IP saved%s\n" "$C_GREEN" "$C_RESET"
-    if mt_secret_valid 2>/dev/null; then
-        printf "tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
-    fi
+    _saved_link="$(mt_proxy_link 2>/dev/null || true)"
+    [ -n "$_saved_link" ] && printf "%s\n" "$_saved_link"
     pause
 }
 
@@ -602,7 +651,12 @@ show_mt_qr() {
     show_header
     printf "%sMTProto QR code%s\n" "$C_BOLD" "$C_RESET"
 
-    link="tg://proxy?server=${MT_LINK_IP}&port=${LISTEN_PORT}&secret=${MT_SECRET}"
+    link="$(mt_proxy_link 2>/dev/null || true)"
+    if [ -z "$link" ]; then
+        printf "\n%sSecret or public IP not set%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
     printf "\n  %s\n\n" "$link"
 
     if qrencode --version >/dev/null 2>&1; then
@@ -713,6 +767,42 @@ configure_socks_auth() {
     write_settings_config || return 1
 
     printf "\n%sSOCKS5 auth saved%s\n" "$C_GREEN" "$C_RESET"
+    prompt_restart_proxy_for_updated_settings
+    pause
+}
+
+configure_listen_port() {
+    show_header
+    printf "%sListen port%s\n" "$C_BOLD" "$C_RESET"
+    printf "  current: %s\n" "$LISTEN_PORT"
+    printf "\nPort the proxy will listen on (1-65535).\n"
+    printf "Port (Enter to keep %s): " "$LISTEN_PORT"
+    IFS= read -r new_port
+
+    case "$new_port" in
+        "")
+            printf "\nNo changes made.\n"
+            pause
+            return 0
+            ;;
+    esac
+
+    case "$new_port" in
+        *[!0-9]*)
+            printf "\n%sPort must be a number%s\n" "$C_RED" "$C_RESET"
+            pause
+            return 1
+            ;;
+    esac
+    if [ "$new_port" -lt 1 ] || [ "$new_port" -gt 65535 ] 2>/dev/null; then
+        printf "\n%sPort must be between 1 and 65535%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    LISTEN_PORT="$new_port"
+    write_settings_config || return 1
+    printf "\n%sPort saved: %s%s\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
     prompt_restart_proxy_for_updated_settings
     pause
 }
@@ -860,6 +950,9 @@ configure_cf_domain() {
     fi
     printf "\nEnter your Cloudflare domain(s), comma-separated (e.g. domain1.com,domain2.com).\n"
     printf "DNS records kws1..kws5 and kws203 must point to Telegram DC IPs.\n"
+    if [ "$CF_PROXY" != "1" ]; then
+        printf "%sWarning:%s CF proxy is currently off. Saving a domain does not enable CF routing.\n" "$C_YELLOW" "$C_RESET"
+    fi
     printf "Use 'clear' to remove the domain.\n"
     printf "CF domain(s) (empty to keep current): "
     IFS= read -r new_cf_domain
@@ -884,6 +977,9 @@ configure_cf_domain() {
     CF_DOMAIN="$new_cf_domain"
     write_settings_config || return 1
     printf "\n%sCloudflare domain saved%s\n" "$C_GREEN" "$C_RESET"
+    if [ "$CF_PROXY" != "1" ]; then
+        printf "%sWarning:%s domain saved, but CF route is disabled until you turn on CF proxy.\n" "$C_YELLOW" "$C_RESET"
+    fi
     prompt_restart_proxy_for_updated_settings
     pause
 }
@@ -1012,6 +1108,112 @@ check_cf_domain() {
     pause
 }
 
+configure_mt_upstream_proxies() {
+    while true; do
+        show_header
+        printf "%sMTProto upstream proxies%s\n" "$C_BOLD" "$C_RESET"
+        printf "\nUsed as fallback when WebSocket to Telegram is unavailable.\n"
+        printf "Format: HOST:PORT:SECRET\n\n"
+
+        _up_count=0
+        if [ -n "$MT_UPSTREAM_PROXIES" ]; then
+            _up_old_ifs="$IFS"
+            IFS=','
+            for _up_e in $MT_UPSTREAM_PROXIES; do
+                _up_e="$(printf "%s" "$_up_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                [ -n "$_up_e" ] || continue
+                _up_count=$((_up_count + 1))
+                printf "  %d. %s\n" "$_up_count" "$_up_e"
+            done
+            IFS="$_up_old_ifs"
+        fi
+        if [ "$_up_count" -eq 0 ]; then
+            printf "  (none)\n"
+        fi
+
+        printf "\n  1) Add proxy\n"
+        if [ "$_up_count" -gt 0 ]; then
+            printf "  2) Remove proxy\n"
+            printf "  3) Clear all\n"
+        fi
+        printf "  Enter) Back\n\n"
+        printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
+        IFS= read -r _up_choice
+
+        case "$_up_choice" in
+            1|add)
+                printf "\nEnter HOST:PORT:SECRET\n"
+                printf "Example: proxy.example.com:443:ddf0e1d2c3b4a5968778695a4b3c2d1e0f\n"
+                printf "Entry: "
+                IFS= read -r _up_new
+                if [ -z "$_up_new" ]; then
+                    continue
+                fi
+                if ! validate_upstream_proxy_entry "$_up_new" 2>/dev/null; then
+                    printf "\n%sInvalid entry. Expected HOST:PORT:SECRET\n" "$C_RED"
+                    printf "SECRET: 32 hex (plain) | 34 hex dd-prefix | 34+ hex ee-prefix%s\n" "$C_RESET"
+                    pause
+                    continue
+                fi
+                if [ -z "$MT_UPSTREAM_PROXIES" ]; then
+                    MT_UPSTREAM_PROXIES="$_up_new"
+                else
+                    MT_UPSTREAM_PROXIES="$MT_UPSTREAM_PROXIES,$_up_new"
+                fi
+                write_settings_config || { pause; continue; }
+                printf "\n%sProxy added%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            2|remove)
+                [ "$_up_count" -gt 0 ] || continue
+                if [ "$_up_count" -eq 1 ]; then
+                    MT_UPSTREAM_PROXIES=""
+                    write_settings_config || { pause; continue; }
+                    printf "\n%sProxy removed%s\n" "$C_GREEN" "$C_RESET"
+                    prompt_restart_proxy_for_updated_settings
+                    pause
+                    continue
+                fi
+                printf "\nRemove which? [1-%d]: " "$_up_count"
+                IFS= read -r _up_rm
+                case "$_up_rm" in *[!0-9]*|"") continue ;; esac
+                [ "$_up_rm" -ge 1 ] && [ "$_up_rm" -le "$_up_count" ] || continue
+                _up_i=0
+                _up_new_list=""
+                _up_old_ifs="$IFS"
+                IFS=','
+                for _up_e in $MT_UPSTREAM_PROXIES; do
+                    _up_e="$(printf "%s" "$_up_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+                    [ -n "$_up_e" ] || continue
+                    _up_i=$((_up_i + 1))
+                    [ "$_up_i" -eq "$_up_rm" ] && continue
+                    if [ -z "$_up_new_list" ]; then
+                        _up_new_list="$_up_e"
+                    else
+                        _up_new_list="$_up_new_list,$_up_e"
+                    fi
+                done
+                IFS="$_up_old_ifs"
+                MT_UPSTREAM_PROXIES="$_up_new_list"
+                write_settings_config || { pause; continue; }
+                printf "\n%sProxy removed%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            3|clear)
+                [ "$_up_count" -gt 0 ] || continue
+                MT_UPSTREAM_PROXIES=""
+                write_settings_config || { pause; continue; }
+                printf "\n%sAll upstream proxies cleared%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                ;;
+            *) return 0 ;;
+        esac
+    done
+}
+
 advanced_menu() {
     while true; do
         show_header
@@ -1043,26 +1245,41 @@ advanced_menu() {
         printf "\n  Settings\n"
         printf " 10) SOCKS5 auth\n"
         printf " 11) DC mapping\n"
-        printf " 12) Update source\n"
-        printf " 13) Remove binary\n"
+        printf " 12) Port (%s%s%s)\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
+        printf " 13) Update source\n"
+        printf " 14) Remove binary\n"
         printf "\n  MTProto\n"
         if [ "$PROXY_MODE" = "mtproto" ]; then
-            printf " 14) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
+            printf " 15) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
         else
-            printf " 14) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
+            printf " 15) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
         fi
         if mt_secret_valid 2>/dev/null; then
-            printf " 15) Secret (%sset%s)\n" "$C_GREEN" "$C_RESET"
+            _sec_type="$(mt_secret_type 2>/dev/null || printf "set")"
+            printf " 16) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
         else
-            printf " 15) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
+            printf " 16) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
         fi
         if [ -n "$MT_LINK_IP" ]; then
-            printf " 16) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
+            printf " 17) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
         else
-            printf " 16) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
+            printf " 17) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
         fi
         if [ "$PROXY_MODE" = "mtproto" ] && mt_secret_valid 2>/dev/null && [ -n "$MT_LINK_IP" ]; then
-            printf " 17) Show QR code\n"
+            printf " 18) Show QR code\n"
+        fi
+        _adv_up_count=0
+        if [ -n "$MT_UPSTREAM_PROXIES" ]; then
+            _adv_old_ifs="$IFS"; IFS=','
+            for _adv_e in $MT_UPSTREAM_PROXIES; do
+                [ -n "$_adv_e" ] && _adv_up_count=$((_adv_up_count + 1))
+            done
+            IFS="$_adv_old_ifs"
+        fi
+        if [ "$_adv_up_count" -gt 0 ]; then
+            printf " 19) Upstream proxies (%s%d set%s)\n" "$C_GREEN" "$_adv_up_count" "$C_RESET"
+        else
+            printf " 19) Upstream proxies (%snone%s)\n" "$C_DIM" "$C_RESET"
         fi
         printf "\n  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
@@ -1105,22 +1322,28 @@ advanced_menu() {
                 configure_dc_ip_mapping
                 ;;
             12)
-                configure_update_source
+                configure_listen_port
                 ;;
             13)
-                remove_all
+                configure_update_source
                 ;;
             14)
-                configure_proxy_mode
+                remove_all
                 ;;
             15)
-                configure_mt_secret
+                configure_proxy_mode
                 ;;
             16)
-                configure_mt_link_ip
+                configure_mt_secret
                 ;;
             17)
+                configure_mt_link_ip
+                ;;
+            18)
                 show_mt_qr
+                ;;
+            19)
+                configure_mt_upstream_proxies
                 ;;
             *)
                 return 0

@@ -225,11 +225,16 @@ stop_running() {
     return 0
 }
 
-run_binary() {
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    [ -n "$bin_path" ] || return 1
+# _run_proxy_cmd fg|bg
+# Builds the full proxy command from current settings and executes it.
+# fg: runs directly (blocking). bg: runs in background, prints PID to stdout.
+_run_proxy_cmd() {
+    _rpc_mode="$1"
+    _rpc_bin="$(runtime_bin_path 2>/dev/null || true)"
+    [ -n "$_rpc_bin" ] || return 1
 
-    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+
     if [ "$PROXY_MODE" = "mtproto" ]; then
         set -- "$@" --mode mtproto --secret "$MT_SECRET"
         if [ -n "$MT_LINK_IP" ]; then
@@ -240,70 +245,61 @@ run_binary() {
             set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
         fi
     fi
+
     if [ "$VERBOSE" = "1" ]; then
         set -- "$@" --verbose
     fi
+
     if [ -n "$DC_IPS" ]; then
-        old_ifs="$IFS"
+        _rpc_old_ifs="$IFS"
         IFS=','
-        for entry in $DC_IPS; do
-            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -n "$entry" ] || continue
-            set -- "$@" --dc-ip "$entry"
+        for _rpc_dc in $DC_IPS; do
+            _rpc_dc="$(printf "%s" "$_rpc_dc" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$_rpc_dc" ] || continue
+            set -- "$@" --dc-ip "$_rpc_dc"
         done
-        IFS="$old_ifs"
+        IFS="$_rpc_old_ifs"
     fi
+
     if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
         set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
         if [ "$CF_PROXY_FIRST" = "1" ]; then
             set -- "$@" --cf-proxy-first
         fi
     fi
-    "$@"
+
+    if [ "$PROXY_MODE" = "mtproto" ] && [ -n "$MT_UPSTREAM_PROXIES" ]; then
+        _rpc_old_ifs="$IFS"
+        IFS=','
+        for _rpc_up in $MT_UPSTREAM_PROXIES; do
+            _rpc_up="$(printf "%s" "$_rpc_up" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            [ -n "$_rpc_up" ] || continue
+            set -- "$@" --mtproto-proxy "$_rpc_up"
+        done
+        IFS="$_rpc_old_ifs"
+    fi
+
+    case "$_rpc_mode" in
+        bg)
+            if command -v nohup >/dev/null 2>&1; then
+                nohup "$@" >/dev/null 2>&1 &
+            else
+                "$@" >/dev/null 2>&1 &
+            fi
+            printf "%s" "$!"
+            ;;
+        *)
+            "$@"
+            ;;
+    esac
+}
+
+run_binary() {
+    _run_proxy_cmd fg
 }
 
 run_binary_background() {
-    bin_path="$(runtime_bin_path 2>/dev/null || true)"
-    [ -n "$bin_path" ] || return 1
-
-    set -- "$bin_path" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
-    if [ "$PROXY_MODE" = "mtproto" ]; then
-        set -- "$@" --mode mtproto --secret "$MT_SECRET"
-        if [ -n "$MT_LINK_IP" ]; then
-            set -- "$@" --link-ip "$MT_LINK_IP"
-        fi
-    else
-        if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
-            set -- "$@" --username "$SOCKS_USERNAME" --password "$SOCKS_PASSWORD"
-        fi
-    fi
-    if [ "$VERBOSE" = "1" ]; then
-        set -- "$@" --verbose
-    fi
-    if [ -n "$DC_IPS" ]; then
-        old_ifs="$IFS"
-        IFS=','
-        for entry in $DC_IPS; do
-            entry="$(printf "%s" "$entry" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-            [ -n "$entry" ] || continue
-            set -- "$@" --dc-ip "$entry"
-        done
-        IFS="$old_ifs"
-    fi
-    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
-        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
-        if [ "$CF_PROXY_FIRST" = "1" ]; then
-            set -- "$@" --cf-proxy-first
-        fi
-    fi
-
-    if command -v nohup >/dev/null 2>&1; then
-        nohup "$@" >/dev/null 2>&1 &
-    else
-        "$@" >/dev/null 2>&1 &
-    fi
-
-    printf "%s" "$!"
+    _run_proxy_cmd bg
 }
 
 start_proxy() {

@@ -52,7 +52,7 @@ func TestManagerAdvancedRemoveResetsMenuState(t *testing.T) {
 		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
 	}
 
-	removeOut, err := runManagerMenu(t, env, "4\n13\n\n\n\n")
+	removeOut, err := runManagerMenu(t, env, "4\n14\n\n\n\n")
 	if err != nil {
 		t.Fatalf("advanced remove failed: %v\n%s", err, removeOut)
 	}

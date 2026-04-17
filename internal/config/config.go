@@ -9,6 +9,17 @@ import (
 	"time"
 )
 
+// upstream proxy for fallback when websocket to tg fails.
+// secret is hex from tg://proxy:
+// - 32 hex chars (16 bytes): plain
+// - 34 hex chars (17 bytes, 0xdd prefix): padded intermediate
+// - 34+ hex chars (17+ bytes, 0xee prefix): faketls, remaining bytes are hostname
+type UpstreamProxy struct {
+	Host   string
+	Port   int
+	Secret string
+}
+
 type Config struct {
 	Host            string
 	Port            int
@@ -23,8 +34,9 @@ type Config struct {
 	DCIPs           map[int]string
 	UseCFProxy      bool
 	UseCFProxyFirst bool
-	CFDomain  string
-	CFDomains []string
+	CFDomain        string
+	CFDomains       []string
+	UpstreamProxies []UpstreamProxy
 }
 
 func Default() Config {
