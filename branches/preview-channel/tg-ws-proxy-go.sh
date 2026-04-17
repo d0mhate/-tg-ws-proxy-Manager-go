@@ -3073,27 +3073,7 @@ configure_mt_link_ip() {
     pause
 }
 
-_qr_est_kb() {
-    case "$1" in
-        opkg)
-            _q="$(opkg info qrencode 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
-            _l="$(opkg info libqrencode4 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
-            [ -z "$_l" ] && _l="$(opkg info libqrencode 2>/dev/null | grep '^Installed-Size:' | awk '{print $2}')"
-            if [ -n "$_q" ] && [ -n "$_l" ]; then
-                printf "%d" "$(( (_q + _l + 1023) / 1024 ))"
-            elif [ -n "$_q" ]; then
-                printf "%d" "$(( (_q + 1023) / 1024 ))"
-            fi
-            ;;
-        apt)
-            _q="$(apt-cache show qrencode 2>/dev/null | grep '^Installed-Size:' | head -1 | awk '{print $2}')"
-            [ -n "$_q" ] && printf "%s" "$_q"
-            ;;
-        brew)
-            printf "300"
-            ;;
-    esac
-}
+
 
 show_mt_qr() {
     show_header
@@ -3107,81 +3087,22 @@ show_mt_qr() {
     fi
     printf "\n  %s\n\n" "$link"
 
+    # Use the built-in qr subcommand from the proxy binary (no external deps)
+    _bin="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -x "$_bin" ] && "$_bin" qr "$link" 2>/dev/null; then
+        pause
+        return 0
+    fi
+
+    # Fall back to system qrencode if available
     if qrencode --version >/dev/null 2>&1; then
         qrencode -t UTF8 "$link"
         pause
         return 0
     fi
 
-    # Detect package manager
-    if command -v opkg >/dev/null 2>&1; then
-        _pm="opkg"
-        _pm_cmd="opkg install qrencode"
-        _pm_path="/"
-    elif command -v apt-get >/dev/null 2>&1; then
-        _pm="apt"
-        if [ "$(id -u)" = "0" ]; then
-            _pm_cmd="apt-get install -y qrencode"
-        else
-            _pm_cmd="sudo apt-get install -y qrencode"
-        fi
-        _pm_path="/usr"
-    elif command -v brew >/dev/null 2>&1; then
-        _pm="brew"
-        _pm_cmd="brew install qrencode"
-        if [ -d "/opt/homebrew" ]; then
-            _pm_path="/opt/homebrew"
-        else
-            _pm_path="/usr/local"
-        fi
-    else
-        printf "  %sqrencode not found%s\n" "$C_YELLOW" "$C_RESET"
-        printf "  No supported package manager found.\n"
-        printf "  Install manually and re-run.\n"
-        pause
-        return 1
-    fi
-
-    printf "  %sqrencode not found%s\n\n" "$C_YELLOW" "$C_RESET"
-    printf "  Command: %s\n" "$_pm_cmd"
-
-    _est="$(_qr_est_kb "$_pm")"
-    [ -n "$_est" ] && printf "  Size:    ~%s KB\n" "$_est"
-
-    _free="$(df -k "$_pm_path" 2>/dev/null | awk 'NR==2 {print $4}')"
-    if [ -n "$_free" ]; then
-        printf "  Free:    %s KB on %s\n" "$_free" "$_pm_path"
-        if [ -n "$_est" ] && [ "$_free" -lt "$_est" ] 2>/dev/null; then
-            printf "\n  %sNot enough free space to install%s\n" "$C_RED" "$C_RESET"
-            pause
-            return 1
-        fi
-    fi
-
-    printf "\n"
-    if confirm_yn "  Install now?"; then
-        printf "\n"
-        case "$_pm" in
-            opkg) opkg install qrencode ;;
-            apt)
-                if [ "$(id -u)" = "0" ]; then
-                    apt-get install -y qrencode
-                else
-                    sudo apt-get install -y qrencode
-                fi
-                ;;
-            brew) brew install qrencode ;;
-        esac
-        printf "\n"
-        if qrencode --version >/dev/null 2>&1; then
-            printf "%sInstalled successfully%s\n\n" "$C_GREEN" "$C_RESET"
-            qrencode -t UTF8 "$link"
-        else
-            printf "%sInstallation failed%s\n" "$C_RED" "$C_RESET"
-            printf "  Try manually: %s\n" "$_pm_cmd"
-        fi
-    fi
-
+    printf "  %sQR unavailable%s\n" "$C_YELLOW" "$C_RESET"
+    printf "  Copy the link above and scan it on another device.\n"
     pause
 }
 
