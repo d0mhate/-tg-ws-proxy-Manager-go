@@ -376,12 +376,16 @@ update_binary() {
     if [ -n "$launcher_path" ]; then
         printf "\nLauncher:\n  %s\n" "$launcher_path"
     fi
-    printf "\n%sRestarting menu...%s\n" "$C_GREEN" "$C_RESET"
-    sleep 1
-    exec "$0" 2>/dev/null || {
-        printf "%sPlease restart the menu manually.%s\n" "$C_YELLOW" "$C_RESET"
+    if [ "$COMMAND_MODE" = "0" ]; then
+        printf "\n%sRestarting menu...%s\n" "$C_GREEN" "$C_RESET"
+        sleep 1
+        exec "$0" 2>/dev/null || {
+            printf "%sPlease restart the menu manually.%s\n" "$C_YELLOW" "$C_RESET"
+            pause
+        }
+    else
         pause
-    }
+    fi
 }
 
 remove_all() {
