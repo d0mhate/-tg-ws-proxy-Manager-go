@@ -14,7 +14,7 @@ resolved_binary_name() {
         fi
     fi
 
-    printf "%s" "$DEFAULT_BINARY_NAME"
+    generic_binary_name
 }
 
 resolved_release_url() {
