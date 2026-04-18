@@ -15,6 +15,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+# local dev
+.env
+
 # Project-specific (not for the repo)
 scan_ips.py
 scan.txt

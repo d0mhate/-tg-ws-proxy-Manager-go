@@ -347,6 +347,15 @@ mt_proxy_link() {
     printf "tg://proxy?server=%s&port=%s&secret=%s" "$MT_LINK_IP" "$LISTEN_PORT" "$_mpl_secret"
 }
 
+socks5_proxy_link() {
+    [ -n "$MT_LINK_IP" ] || return 1
+    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+        printf "tg://socks?server=%s&port=%s&user=%s&pass=%s" "$MT_LINK_IP" "$LISTEN_PORT" "$SOCKS_USERNAME" "$SOCKS_PASSWORD"
+    else
+        printf "tg://socks?server=%s&port=%s" "$MT_LINK_IP" "$LISTEN_PORT"
+    fi
+}
+
 persistent_install_dir() {
     value="$(read_first_line "$PERSIST_PATH_FILE" 2>/dev/null || true)"
     [ -n "$value" ] || return 1
