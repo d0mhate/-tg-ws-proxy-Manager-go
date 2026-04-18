@@ -1,6 +1,6 @@
 {
   "branch": "preview-channel",
-  "commit": "2dc3312c519e327d40c9df5a442cd0f0477933a7",
+  "commit": "ba47bffdf2f08465528be0c2e18d8ea16e404d42",
   "manager_script": "tg-ws-proxy-go.sh",
   "default_binary": "tg-ws-proxy-openwrt"
 }
