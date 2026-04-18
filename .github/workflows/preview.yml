@@ -35,7 +35,10 @@ jobs:
       - name: install lipo (llvm)
         run: |
           sudo apt-get install -y llvm
-          echo "LIPO=$(find /usr/lib/llvm-*/bin -name lipo 2>/dev/null | sort -V | tail -1)" >> "$GITHUB_ENV"
+          LIPO=$(find /usr/lib/llvm-*/bin -name lipo 2>/dev/null | sort -V | tail -1)
+          [ -z "$LIPO" ] && LIPO=$(find /usr/bin -name 'llvm-lipo*' 2>/dev/null | sort -V | tail -1)
+          [ -z "$LIPO" ] && { echo "ERROR: lipo not found after installing llvm"; exit 1; }
+          echo "LIPO=$LIPO" >> "$GITHUB_ENV"
 
       - name: build preview binaries
         run: |
