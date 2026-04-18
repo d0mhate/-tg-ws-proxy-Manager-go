@@ -44,13 +44,14 @@ generic_binary_name() {
             case "$arch" in
                 x86_64)          printf "tg-ws-proxy-openwrt-x86_64" ;;
                 aarch64|arm64)   printf "tg-ws-proxy-openwrt-aarch64" ;;
+                armv8l)          printf "tg-ws-proxy-openwrt-armv7" ;;
                 armv7*)          printf "tg-ws-proxy-openwrt-armv7" ;;
                 armv6*)          printf "tg-ws-proxy-linux-armv6" ;;
                 i386|i686)       printf "tg-ws-proxy-linux-386" ;;
                 riscv64)         printf "tg-ws-proxy-linux-riscv64" ;;
                 loongarch64)     printf "tg-ws-proxy-linux-loong64" ;;
-                mipsel)          printf "tg-ws-proxy-openwrt-mipsel_24kc" ;;
-                mips)            printf "tg-ws-proxy-openwrt-mips_24kc" ;;
+                mips64el|mipsel) printf "tg-ws-proxy-openwrt-mipsel_24kc" ;;
+                mips64|mips)     printf "tg-ws-proxy-openwrt-mips_24kc" ;;
                 *)               printf "%s" "$DEFAULT_BINARY_NAME" ;;
             esac
             ;;
@@ -62,7 +63,10 @@ generic_binary_name() {
             esac
             ;;
         freebsd)
-            printf "tg-ws-proxy-freebsd-amd64"
+            case "$arch" in
+                aarch64|arm64)   printf "tg-ws-proxy-freebsd-arm64" ;;
+                *)               printf "tg-ws-proxy-freebsd-amd64" ;;
+            esac
             ;;
         *)
             printf "%s" "$DEFAULT_BINARY_NAME"

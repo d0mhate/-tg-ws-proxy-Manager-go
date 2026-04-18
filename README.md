@@ -4,6 +4,10 @@
 ![Go Version](https://img.shields.io/badge/go-1.22-00ADD8)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![OpenWrt](https://img.shields.io/badge/OpenWrt-mipsel__24kc%20%7C%20mips__24kc%20%7C%20armv7%20%7C%20aarch64%20%7C%20x86__64-blue)
+![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20aarch64%20%7C%20armv7%20%7C%20armv6%20%7C%20386%20%7C%20riscv64%20%7C%20loong64-orange)
+![macOS](https://img.shields.io/badge/macOS-amd64%20%7C%20arm64-lightgrey)
+![Windows](https://img.shields.io/badge/Windows-amd64%20%7C%20arm64-0078D6)
+![FreeBSD](https://img.shields.io/badge/FreeBSD-amd64%20%7C%20arm64-red)
 
 > [!IMPORTANT]
 > - Данный способ **не гарантирует 100% работу** !!!
@@ -12,8 +16,7 @@
 
 > [!WARNING]
 > - Этот вариант сделан для OpenWrt и проверен на `mipsel_24kc`
-> - Manager script автоматически выбирает release asset для `mipsel_24kc`, `mips_24kc`, `armv7`, `aarch64` и `x86_64`
-> - На других архитектурах или сборках OpenWrt бинарник может не подойти
+> - Manager script автоматически выбирает release asset для `mipsel_24kc`, `mips_24kc`, `armv7`, `armv8l`, `aarch64`, `x86_64`, `armv6`, `386`, `riscv64`, `loong64`, `mips64`, `mips64el` и FreeBSD `amd64`/`arm64`
 > - Перед установкой script проверяет архитектуру, свободное место в `/tmp` и доступность release
 
 Лёгкая Go версия `tg-ws-proxy` для OpenWrt без Python runtime и desktop-обвязки.
