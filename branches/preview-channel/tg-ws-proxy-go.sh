@@ -70,6 +70,7 @@ PERSIST_CONFIG_FILE="${PERSIST_CONFIG_FILE:-$PERSIST_STATE_DIR/autostart.conf}"
 PERSIST_RELEASE_TAG_FILE="${PERSIST_RELEASE_TAG_FILE:-$PERSIST_STATE_DIR/release_tag}"
 PERSIST_UPDATE_CHANNEL_FILE="${PERSIST_UPDATE_CHANNEL_FILE:-$PERSIST_STATE_DIR/update_channel}"
 PERSIST_PREVIEW_BRANCH_FILE="${PERSIST_PREVIEW_BRANCH_FILE:-$PERSIST_STATE_DIR/preview_branch}"
+LATEST_VERSION_CACHE_FILE="${LATEST_VERSION_CACHE_FILE:-$PERSIST_STATE_DIR/latest_version_cache}"
 INIT_SCRIPT_PATH="${INIT_SCRIPT_PATH:-/etc/init.d/tg-ws-proxy-go}"
 PERSIST_MANAGER_NAME="${PERSIST_MANAGER_NAME:-tg-ws-proxy-go.sh}"
 PERSISTENT_DIR_CANDIDATES="${PERSISTENT_DIR_CANDIDATES:-/root/tg-ws-proxy-go /opt/tg-ws-proxy-go /etc/tg-ws-proxy-go}"
@@ -951,6 +952,28 @@ write_source_version_file() {
     version="$1"
     [ -n "$version" ] || return 0
     printf "%s\n" "$version" > "$SOURCE_VERSION_FILE" || return 1
+}
+
+read_latest_version_cache() {
+    value="$(read_first_line "$LATEST_VERSION_CACHE_FILE" 2>/dev/null || true)"
+    normalize_version "$value"
+}
+
+latest_version_cache_is_fresh() {
+    [ -f "$LATEST_VERSION_CACHE_FILE" ] || return 1
+    ts="$(sed -n '2p' "$LATEST_VERSION_CACHE_FILE" 2>/dev/null || true)"
+    [ -n "$ts" ] || return 1
+    now="$(date +%s 2>/dev/null || printf "0")"
+    age=$((now - ts))
+    [ "$age" -lt 3600 ]
+}
+
+refresh_latest_version_cache() {
+    tag="$(latest_release_tag 2>/dev/null || true)"
+    [ -n "$tag" ] || return 0
+    mkdir -p "$(dirname "$LATEST_VERSION_CACHE_FILE")" 2>/dev/null || return 0
+    ts="$(date +%s 2>/dev/null || printf "0")"
+    printf "%s\n%s\n" "$tag" "$ts" > "$LATEST_VERSION_CACHE_FILE" 2>/dev/null || true
 }
 
 
@@ -2060,6 +2083,37 @@ telegram_host() {
     esac
 }
 
+_header_new_version() {
+    installed="$1"
+    [ -n "$installed" ] || return 1
+    latest="$(read_latest_version_cache 2>/dev/null || true)"
+    [ -n "$latest" ] || return 1
+    version_ge "$installed" "$latest" && return 1
+    printf "%s" "$latest"
+}
+
+_header_track_line() {
+    preview="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview" ]; then
+        printf "preview: %s" "$preview"
+        return 0
+    fi
+    tag="$(selected_release_tag 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf "pinned: %s" "$tag"
+        return 0
+    fi
+}
+
+_header_box_line() {
+    inner="$1"
+    inner_len=${#inner}
+    rpad=$((34 - inner_len))
+    [ "$rpad" -lt 0 ] && rpad=0
+    printf "%s|%s%s%s%s%${rpad}s%s|%s\n" \
+        "$C_BLUE" "$C_RESET" "$2" "$inner" "$C_RESET" "" "$C_BLUE" "$C_RESET"
+}
+
 show_header() {
     if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
         clear
@@ -2078,7 +2132,18 @@ show_header() {
     else
         printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
     fi
+    track="$(_header_track_line 2>/dev/null || true)"
+    if [ -n "$track" ]; then
+        _header_box_line "  $track" "$C_DIM"
+    fi
+    new_version="$(_header_new_version "$version" 2>/dev/null || true)"
+    if [ -n "$new_version" ]; then
+        _header_box_line "  * new version: $new_version" "$C_YELLOW"
+    fi
     printf "%s+----------------------------------+%s\n\n" "$C_BLUE" "$C_RESET"
+    if [ "$COMMAND_MODE" = "0" ] && ! latest_version_cache_is_fresh 2>/dev/null; then
+        { refresh_latest_version_cache >/dev/null 2>&1; } &
+    fi
 }
 
 show_telegram_settings() {
