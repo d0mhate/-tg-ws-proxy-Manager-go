@@ -1,8 +1,13 @@
 # TG WS Proxy Go
 
 [![CI](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/actions/workflows/ci.yml/badge.svg)](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/d0mhate/-tg-ws-proxy-Manager-go)](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/d0mhate/-tg-ws-proxy-Manager-go/total)](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/releases)
+[![Go Report Card](https://goreportcard.com/badge/github.com/d0mhate/-tg-ws-proxy-Manager-go)](https://goreportcard.com/report/github.com/d0mhate/-tg-ws-proxy-Manager-go)
 ![Go Version](https://img.shields.io/badge/go-1.22-00ADD8)
 ![License](https://img.shields.io/badge/license-MIT-green)
+![CGO](https://img.shields.io/badge/CGO__enabled-0-brightgreen)
+![Protocol](https://img.shields.io/badge/protocol-SOCKS5%20%7C%20MTProto-blueviolet)
 ![OpenWrt](https://img.shields.io/badge/OpenWrt-mipsel__24kc%20%7C%20mips__24kc%20%7C%20armv7%20%7C%20aarch64%20%7C%20x86__64-blue)
 ![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20aarch64%20%7C%20armv7%20%7C%20armv6%20%7C%20386%20%7C%20riscv64%20%7C%20loong64-orange)
 ![macOS](https://img.shields.io/badge/macOS-amd64%20%7C%20arm64-lightgrey)
