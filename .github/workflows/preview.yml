@@ -32,6 +32,11 @@ jobs:
       - name: run tests
         run: go test ./...
 
+      - name: install lipo (llvm)
+        run: |
+          sudo apt-get install -y llvm
+          echo "LIPO=$(find /usr/lib/llvm-*/bin -name lipo 2>/dev/null | sort -V | tail -1)" >> "$GITHUB_ENV"
+
       - name: build preview binaries
         run: |
           mkdir -p build
@@ -40,6 +45,17 @@ jobs:
           GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-x86_64 ./cmd/tg-ws-proxy
           GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-armv7 ./cmd/tg-ws-proxy
           GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-openwrt-aarch64 ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=386 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-linux-386 ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=riscv64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-linux-riscv64 ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=arm GOARM=6 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-linux-armv6 ./cmd/tg-ws-proxy
+          GOOS=linux GOARCH=loong64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-linux-loong64 ./cmd/tg-ws-proxy
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-windows-amd64.exe ./cmd/tg-ws-proxy
+          GOOS=windows GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-windows-arm64.exe ./cmd/tg-ws-proxy
+          GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-darwin-amd64 ./cmd/tg-ws-proxy
+          GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-darwin-arm64 ./cmd/tg-ws-proxy
+          GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-freebsd-amd64 ./cmd/tg-ws-proxy
+          "$LIPO" -create -output build/tg-ws-proxy-darwin-universal \
+            build/tg-ws-proxy-darwin-amd64 build/tg-ws-proxy-darwin-arm64
           cp build/tg-ws-proxy-openwrt-mipsel_24kc build/tg-ws-proxy-openwrt
 
       - name: build standalone manager script
@@ -84,6 +100,16 @@ jobs:
           cp build/tg-ws-proxy-openwrt-x86_64 "$target_dir/"
           cp build/tg-ws-proxy-openwrt-armv7 "$target_dir/"
           cp build/tg-ws-proxy-openwrt-aarch64 "$target_dir/"
+          cp build/tg-ws-proxy-linux-386 "$target_dir/"
+          cp build/tg-ws-proxy-linux-riscv64 "$target_dir/"
+          cp build/tg-ws-proxy-linux-armv6 "$target_dir/"
+          cp build/tg-ws-proxy-linux-loong64 "$target_dir/"
+          cp build/tg-ws-proxy-windows-amd64.exe "$target_dir/"
+          cp build/tg-ws-proxy-windows-arm64.exe "$target_dir/"
+          cp build/tg-ws-proxy-darwin-amd64 "$target_dir/"
+          cp build/tg-ws-proxy-darwin-arm64 "$target_dir/"
+          cp build/tg-ws-proxy-darwin-universal "$target_dir/"
+          cp build/tg-ws-proxy-freebsd-amd64 "$target_dir/"
           cp build/tg-ws-proxy-openwrt "$target_dir/"
           cp build/tg-ws-proxy-go.sh "$target_dir/"
 
