@@ -105,6 +105,7 @@ func managerEnv(t *testing.T) []string {
 		"PERSIST_RELEASE_TAG_FILE="+filepath.Join(persistStateDir, "release_tag"),
 		"PERSIST_UPDATE_CHANNEL_FILE="+filepath.Join(persistStateDir, "update_channel"),
 		"PERSIST_PREVIEW_BRANCH_FILE="+filepath.Join(persistStateDir, "preview_branch"),
+		"LATEST_VERSION_CACHE_FILE="+filepath.Join(persistStateDir, "latest_version_cache"),
 		"INIT_SCRIPT_PATH="+initScriptPath,
 		"LAUNCHER_PATH="+launcherPath,
 		"OPENWRT_RELEASE_FILE="+openwrtRelease,

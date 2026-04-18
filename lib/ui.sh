@@ -28,6 +28,37 @@ telegram_host() {
     esac
 }
 
+_header_new_version() {
+    installed="$1"
+    [ -n "$installed" ] || return 1
+    latest="$(read_latest_version_cache 2>/dev/null || true)"
+    [ -n "$latest" ] || return 1
+    version_ge "$installed" "$latest" && return 1
+    printf "%s" "$latest"
+}
+
+_header_track_line() {
+    preview="$(selected_preview_branch 2>/dev/null || true)"
+    if [ -n "$preview" ]; then
+        printf "preview: %s" "$preview"
+        return 0
+    fi
+    tag="$(selected_release_tag 2>/dev/null || true)"
+    if [ -n "$tag" ]; then
+        printf "pinned: %s" "$tag"
+        return 0
+    fi
+}
+
+_header_box_line() {
+    inner="$1"
+    inner_len=${#inner}
+    rpad=$((34 - inner_len))
+    [ "$rpad" -lt 0 ] && rpad=0
+    printf "%s|%s%s%s%s%${rpad}s%s|%s\n" \
+        "$C_BLUE" "$C_RESET" "$2" "$inner" "$C_RESET" "" "$C_BLUE" "$C_RESET"
+}
+
 show_header() {
     if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
         clear
@@ -46,7 +77,18 @@ show_header() {
     else
         printf "%s|%s %s%s Go manager%s            %s|%s\n" "$C_BLUE" "$C_RESET" "$C_BOLD" "$APP_NAME" "$C_RESET" "$C_BLUE" "$C_RESET"
     fi
+    track="$(_header_track_line 2>/dev/null || true)"
+    if [ -n "$track" ]; then
+        _header_box_line "  $track" "$C_DIM"
+    fi
+    new_version="$(_header_new_version "$version" 2>/dev/null || true)"
+    if [ -n "$new_version" ]; then
+        _header_box_line "  * new version: $new_version" "$C_YELLOW"
+    fi
     printf "%s+----------------------------------+%s\n\n" "$C_BLUE" "$C_RESET"
+    if [ "$COMMAND_MODE" = "0" ] && ! latest_version_cache_is_fresh 2>/dev/null; then
+        { refresh_latest_version_cache >/dev/null 2>&1; } &
+    fi
 }
 
 show_telegram_settings() {

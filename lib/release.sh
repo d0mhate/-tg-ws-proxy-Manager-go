@@ -305,3 +305,25 @@ write_source_version_file() {
     [ -n "$version" ] || return 0
     printf "%s\n" "$version" > "$SOURCE_VERSION_FILE" || return 1
 }
+
+read_latest_version_cache() {
+    value="$(read_first_line "$LATEST_VERSION_CACHE_FILE" 2>/dev/null || true)"
+    normalize_version "$value"
+}
+
+latest_version_cache_is_fresh() {
+    [ -f "$LATEST_VERSION_CACHE_FILE" ] || return 1
+    ts="$(sed -n '2p' "$LATEST_VERSION_CACHE_FILE" 2>/dev/null || true)"
+    [ -n "$ts" ] || return 1
+    now="$(date +%s 2>/dev/null || printf "0")"
+    age=$((now - ts))
+    [ "$age" -lt 3600 ]
+}
+
+refresh_latest_version_cache() {
+    tag="$(latest_release_tag 2>/dev/null || true)"
+    [ -n "$tag" ] || return 0
+    mkdir -p "$(dirname "$LATEST_VERSION_CACHE_FILE")" 2>/dev/null || return 0
+    ts="$(date +%s 2>/dev/null || printf "0")"
+    printf "%s\n%s\n" "$tag" "$ts" > "$LATEST_VERSION_CACHE_FILE" 2>/dev/null || true
+}
