@@ -50,7 +50,7 @@ jobs:
       - name: build local binary
         run: go build ./cmd/tg-ws-proxy
 
-  build-openwrt:
+  build-binaries:
     needs: test
     runs-on: ubuntu-latest
     env:
@@ -60,23 +60,69 @@ jobs:
       matrix:
         include:
           - asset: tg-ws-proxy-openwrt-mipsel_24kc
+            goos: linux
             goarch: mipsle
             gomips: softfloat
             file_match: "MIPS"
           - asset: tg-ws-proxy-openwrt-mips_24kc
+            goos: linux
             goarch: mips
             gomips: softfloat
             file_match: "MIPS"
           - asset: tg-ws-proxy-openwrt-x86_64
+            goos: linux
             goarch: amd64
             file_match: "x86-64"
           - asset: tg-ws-proxy-openwrt-armv7
+            goos: linux
             goarch: arm
             goarm: "7"
             file_match: "ARM"
           - asset: tg-ws-proxy-openwrt-aarch64
+            goos: linux
             goarch: arm64
             file_match: "aarch64"
+          - asset: tg-ws-proxy-linux-386
+            goos: linux
+            goarch: "386"
+            file_match: "Intel 80386"
+          - asset: tg-ws-proxy-linux-riscv64
+            goos: linux
+            goarch: riscv64
+            file_match: "RISC-V"
+          - asset: tg-ws-proxy-linux-armv6
+            goos: linux
+            goarch: arm
+            goarm: "6"
+            file_match: "ARM"
+          - asset: tg-ws-proxy-linux-loong64
+            goos: linux
+            goarch: loong64
+            file_match: "LoongArch"
+          - asset: tg-ws-proxy-windows-amd64.exe
+            goos: windows
+            goarch: amd64
+            file_match: "PE32"
+            elf_check: false
+          - asset: tg-ws-proxy-windows-arm64.exe
+            goos: windows
+            goarch: arm64
+            file_match: "PE32"
+            elf_check: false
+          - asset: tg-ws-proxy-darwin-amd64
+            goos: darwin
+            goarch: amd64
+            file_match: "Mach-O"
+            elf_check: false
+          - asset: tg-ws-proxy-darwin-arm64
+            goos: darwin
+            goarch: arm64
+            file_match: "Mach-O"
+            elf_check: false
+          - asset: tg-ws-proxy-freebsd-amd64
+            goos: freebsd
+            goarch: amd64
+            file_match: "x86-64"
 
     steps:
       - name: checkout
@@ -90,7 +136,7 @@ jobs:
 
       - name: build target binary
         env:
-          GOOS: linux
+          GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm || '' }}
           GOMIPS: ${{ matrix.gomips || '' }}
@@ -103,14 +149,17 @@ jobs:
         env:
           OUTPUT: build/${{ matrix.asset }}
           FILE_MATCH: ${{ matrix.file_match }}
+          ELF_CHECK: ${{ matrix.elf_check || 'true' }}
         run: |
           test -s "$OUTPUT"
           file "$OUTPUT" | tee /tmp/file-output.txt
           grep -q "$FILE_MATCH" /tmp/file-output.txt
-          if readelf -l "$OUTPUT" | grep -q "Requesting program interpreter"; then
-            echo "dynamic loader detected in $OUTPUT"
-            readelf -l "$OUTPUT"
-            exit 1
+          if [ "$ELF_CHECK" != "false" ]; then
+            if readelf -l "$OUTPUT" | grep -q "Requesting program interpreter"; then
+              echo "dynamic loader detected in $OUTPUT"
+              readelf -l "$OUTPUT"
+              exit 1
+            fi
           fi
 
       - name: upload target artifact
@@ -119,12 +168,41 @@ jobs:
           name: ${{ matrix.asset }}
           path: build/${{ matrix.asset }}
 
-  verify-openwrt-artifacts:
-    needs: build-openwrt
+  build-darwin-universal:
+    needs: build-binaries
+    runs-on: macos-latest
+
+    steps:
+      - name: download darwin amd64 artifact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: tg-ws-proxy-darwin-amd64
+          path: build
+
+      - name: download darwin arm64 artifact
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: tg-ws-proxy-darwin-arm64
+          path: build
+
+      - name: create universal binary
+        run: |
+          lipo -create -output build/tg-ws-proxy-darwin-universal \
+            build/tg-ws-proxy-darwin-amd64 build/tg-ws-proxy-darwin-arm64
+          lipo -info build/tg-ws-proxy-darwin-universal
+
+      - name: upload universal artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: tg-ws-proxy-darwin-universal
+          path: build/tg-ws-proxy-darwin-universal
+
+  verify-artifacts:
+    needs: [build-binaries, build-darwin-universal]
     runs-on: ubuntu-latest
 
     steps:
-      - name: download all openwrt artifacts
+      - name: download all artifacts
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
         with:
           path: build
@@ -136,9 +214,19 @@ jobs:
           test -f build/tg-ws-proxy-openwrt-x86_64/tg-ws-proxy-openwrt-x86_64
           test -f build/tg-ws-proxy-openwrt-armv7/tg-ws-proxy-openwrt-armv7
           test -f build/tg-ws-proxy-openwrt-aarch64/tg-ws-proxy-openwrt-aarch64
+          test -f build/tg-ws-proxy-linux-386/tg-ws-proxy-linux-386
+          test -f build/tg-ws-proxy-linux-riscv64/tg-ws-proxy-linux-riscv64
+          test -f build/tg-ws-proxy-linux-armv6/tg-ws-proxy-linux-armv6
+          test -f build/tg-ws-proxy-linux-loong64/tg-ws-proxy-linux-loong64
+          test -f build/tg-ws-proxy-windows-amd64.exe/tg-ws-proxy-windows-amd64.exe
+          test -f build/tg-ws-proxy-windows-arm64.exe/tg-ws-proxy-windows-arm64.exe
+          test -f build/tg-ws-proxy-darwin-amd64/tg-ws-proxy-darwin-amd64
+          test -f build/tg-ws-proxy-darwin-arm64/tg-ws-proxy-darwin-arm64
+          test -f build/tg-ws-proxy-darwin-universal/tg-ws-proxy-darwin-universal
+          test -f build/tg-ws-proxy-freebsd-amd64/tg-ws-proxy-freebsd-amd64
 
   smoke-openwrt-x86_64:
-    needs: build-openwrt
+    needs: build-binaries
     runs-on: ubuntu-latest
 
     steps:
