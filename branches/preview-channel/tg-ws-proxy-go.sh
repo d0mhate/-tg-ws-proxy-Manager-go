@@ -201,6 +201,40 @@ binary_name_for_arch() {
     esac
 }
 
+generic_binary_name() {
+    os="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+    arch="$(uname -m 2>/dev/null)"
+    case "$os" in
+        linux)
+            case "$arch" in
+                x86_64)          printf "tg-ws-proxy-openwrt-x86_64" ;;
+                aarch64|arm64)   printf "tg-ws-proxy-openwrt-aarch64" ;;
+                armv7*)          printf "tg-ws-proxy-openwrt-armv7" ;;
+                armv6*)          printf "tg-ws-proxy-linux-armv6" ;;
+                i386|i686)       printf "tg-ws-proxy-linux-386" ;;
+                riscv64)         printf "tg-ws-proxy-linux-riscv64" ;;
+                loongarch64)     printf "tg-ws-proxy-linux-loong64" ;;
+                mipsel)          printf "tg-ws-proxy-openwrt-mipsel_24kc" ;;
+                mips)            printf "tg-ws-proxy-openwrt-mips_24kc" ;;
+                *)               printf "%s" "$DEFAULT_BINARY_NAME" ;;
+            esac
+            ;;
+        darwin)
+            case "$arch" in
+                x86_64)          printf "tg-ws-proxy-darwin-amd64" ;;
+                arm64)           printf "tg-ws-proxy-darwin-arm64" ;;
+                *)               printf "tg-ws-proxy-darwin-universal" ;;
+            esac
+            ;;
+        freebsd)
+            printf "tg-ws-proxy-freebsd-amd64"
+            ;;
+        *)
+            printf "%s" "$DEFAULT_BINARY_NAME"
+            ;;
+    esac
+}
+
 is_supported_openwrt_arch() {
     arch="$1"
     case "$arch" in
@@ -662,7 +696,7 @@ resolved_binary_name() {
         fi
     fi
 
-    printf "%s" "$DEFAULT_BINARY_NAME"
+    generic_binary_name
 }
 
 resolved_release_url() {
