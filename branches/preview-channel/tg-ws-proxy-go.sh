@@ -582,6 +582,15 @@ mt_proxy_link() {
     printf "tg://proxy?server=%s&port=%s&secret=%s" "$MT_LINK_IP" "$LISTEN_PORT" "$_mpl_secret"
 }
 
+socks5_proxy_link() {
+    [ -n "$MT_LINK_IP" ] || return 1
+    if [ -n "$SOCKS_USERNAME" ] && [ -n "$SOCKS_PASSWORD" ]; then
+        printf "tg://socks?server=%s&port=%s&user=%s&pass=%s" "$MT_LINK_IP" "$LISTEN_PORT" "$SOCKS_USERNAME" "$SOCKS_PASSWORD"
+    else
+        printf "tg://socks?server=%s&port=%s" "$MT_LINK_IP" "$LISTEN_PORT"
+    fi
+}
+
 persistent_install_dir() {
     value="$(read_first_line "$PERSIST_PATH_FILE" 2>/dev/null || true)"
     [ -n "$value" ] || return 1
@@ -3081,7 +3090,11 @@ show_mt_qr() {
 
     link="$(mt_proxy_link 2>/dev/null || true)"
     if [ -z "$link" ]; then
-        printf "\n%sSecret or public IP not set%s\n" "$C_RED" "$C_RESET"
+        if ! mt_secret_valid 2>/dev/null; then
+            printf "\n%sSecret not set%s - configure it via item 18.\n" "$C_RED" "$C_RESET"
+        else
+            printf "\n%sPublic IP not set%s - configure it via item 13.\n" "$C_RED" "$C_RESET"
+        fi
         pause
         return 1
     fi
@@ -3095,6 +3108,36 @@ show_mt_qr() {
     fi
 
     # Fall back to system qrencode if available
+    if qrencode --version >/dev/null 2>&1; then
+        qrencode -t UTF8 "$link"
+        pause
+        return 0
+    fi
+
+    printf "  %sQR unavailable%s\n" "$C_YELLOW" "$C_RESET"
+    printf "  Copy the link above and scan it on another device.\n"
+    pause
+}
+
+show_socks5_qr() {
+    show_header
+    printf "%sSOCKS5 QR code%s\n" "$C_BOLD" "$C_RESET"
+
+    link="$(socks5_proxy_link 2>/dev/null || true)"
+    if [ -z "$link" ]; then
+        printf "\n%sPublic IP not set%s\n" "$C_RED" "$C_RESET"
+        printf "Set it via Settings - item 13.\n"
+        pause
+        return 1
+    fi
+    printf "\n  %s\n\n" "$link"
+
+    _bin="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -x "$_bin" ] && "$_bin" qr "$link" 2>/dev/null; then
+        pause
+        return 0
+    fi
+
     if qrencode --version >/dev/null 2>&1; then
         qrencode -t UTF8 "$link"
         pause
@@ -3615,27 +3658,25 @@ advanced_menu() {
         printf " 10) SOCKS5 auth\n"
         printf " 11) DC mapping\n"
         printf " 12) Port (%s%s%s)\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
-        printf " 13) Update source\n"
-        printf " 14) Remove binary\n"
+        if [ -n "$MT_LINK_IP" ]; then
+            printf " 13) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
+        else
+            printf " 13) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        printf " 14) Show QR code\n"
+        printf " 15) Update source\n"
+        printf " 16) Remove binary\n"
         printf "\n  MTProto\n"
         if [ "$PROXY_MODE" = "mtproto" ]; then
-            printf " 15) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
+            printf " 17) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
         else
-            printf " 15) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
+            printf " 17) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
         fi
         if mt_secret_valid 2>/dev/null; then
             _sec_type="$(mt_secret_type 2>/dev/null || printf "set")"
-            printf " 16) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
+            printf " 18) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
         else
-            printf " 16) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
-        fi
-        if [ -n "$MT_LINK_IP" ]; then
-            printf " 17) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
-        else
-            printf " 17) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
-        fi
-        if [ "$PROXY_MODE" = "mtproto" ] && mt_secret_valid 2>/dev/null && [ -n "$MT_LINK_IP" ]; then
-            printf " 18) Show QR code\n"
+            printf " 18) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
         fi
         _adv_up_count=0
         if [ -n "$MT_UPSTREAM_PROXIES" ]; then
@@ -3694,22 +3735,26 @@ advanced_menu() {
                 configure_listen_port
                 ;;
             13)
-                configure_update_source
-                ;;
-            14)
-                remove_all
-                ;;
-            15)
-                configure_proxy_mode
-                ;;
-            16)
-                configure_mt_secret
-                ;;
-            17)
                 configure_mt_link_ip
                 ;;
+            14)
+                if [ "$PROXY_MODE" = "mtproto" ]; then
+                    show_mt_qr
+                else
+                    show_socks5_qr
+                fi
+                ;;
+            15)
+                configure_update_source
+                ;;
+            16)
+                remove_all
+                ;;
+            17)
+                configure_proxy_mode
+                ;;
             18)
-                show_mt_qr
+                configure_mt_secret
                 ;;
             19)
                 configure_mt_upstream_proxies
