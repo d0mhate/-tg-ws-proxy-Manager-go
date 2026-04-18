@@ -1,0 +1,11 @@
+name: tg-ws-proxy-go
+
+services:
+  backend:
+    container_name: tg-ws-proxy-go
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "1080:1080"
+    command: ["--host", "0.0.0.0"]
