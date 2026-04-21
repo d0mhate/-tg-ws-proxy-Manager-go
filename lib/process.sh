@@ -1,6 +1,11 @@
 # process.sh
 
 runtime_bin_path() {
+    if [ -n "$RUNTIME_BIN_OVERRIDE" ] && [ -x "$RUNTIME_BIN_OVERRIDE" ]; then
+        printf "%s" "$RUNTIME_BIN_OVERRIDE"
+        return 0
+    fi
+
     if [ -x "$BIN_PATH" ]; then
         printf "%s" "$BIN_PATH"
         return 0
