@@ -1102,7 +1102,7 @@ is_running() {
 
 current_pids() {
     all_pids=""
-    for path in "$BIN_PATH" "$(persistent_bin_path 2>/dev/null || true)"; do
+    for path in "$(runtime_bin_path 2>/dev/null || true)" "$BIN_PATH" "$(persistent_bin_path 2>/dev/null || true)"; do
         [ -n "$path" ] || continue
         pids="$(matching_pids_for_path "$path" 2>/dev/null || true)"
         [ -n "$pids" ] || continue
