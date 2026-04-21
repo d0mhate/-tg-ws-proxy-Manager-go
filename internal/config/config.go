@@ -45,7 +45,7 @@ func Default() Config {
 		Port:          1080,
 		Verbose:       false,
 		BufferKB:      256,
-		PoolSize:      1,
+		PoolSize:      4,
 		DialTimeout:   10 * time.Second,
 		InitTimeout:   15 * time.Second,
 		ConnectWSPath: "/apiws",
