@@ -160,8 +160,8 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	if dc == 0 {
 		dc = 2
 	}
-	effectiveDC := telegram.NormalizeDC(dc)
-	wsDomainDC := effectiveDC
+	effectiveDC := s.effectiveDC(dc)
+	wsDomainDC := s.wsDomainDC(dc)
 
 	targetIP := s.cfg.DCIPs[effectiveDC]
 	hasCF := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
@@ -376,6 +376,23 @@ func (s *MTServer) dialDirectWS(
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+func (s *MTServer) effectiveDC(dc int) int {
+	if dc == 0 {
+		return 0
+	}
+	if _, ok := s.cfg.DCIPs[dc]; ok {
+		return dc
+	}
+	return telegram.NormalizeDC(dc)
+}
+
+func (s *MTServer) wsDomainDC(dc int) int {
+	if dc == 0 {
+		return 0
+	}
+	return telegram.NormalizeDC(dc)
 }
 
 // connect to one upstream mtproto proxy and do its handshake.
