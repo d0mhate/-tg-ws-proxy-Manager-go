@@ -128,6 +128,7 @@ show_telegram_settings() {
     else
         printf "  dc map   : <default>\n"
     fi
+    printf "  pool size: %s\n" "$POOL_SIZE"
     if [ "$CF_PROXY" = "1" ]; then
         printf "  cf proxy : on\n"
     else
@@ -168,6 +169,7 @@ show_telegram_settings_compact() {
     else
         dc_part="dc:default"
     fi
+    pool_part="pool:$POOL_SIZE"
 
     if [ "$PROXY_MODE" = "mtproto" ]; then
         if mt_secret_valid 2>/dev/null; then
@@ -180,7 +182,7 @@ show_telegram_settings_compact() {
         else
             ip_part="${C_DIM}ip:none${C_RESET}"
         fi
-        printf "  MTProto %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part"
+        printf "  MTProto %s:%s  %s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part" "$pool_part"
         if [ -n "$MT_LINK_IP" ] && mt_secret_valid 2>/dev/null; then
             printf "  tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
         fi
@@ -194,7 +196,7 @@ show_telegram_settings_compact() {
         else
             auth_part="no auth"
         fi
-        printf "  SOCKS5  %s:%s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part"
+        printf "  SOCKS5  %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part" "$pool_part"
     fi
 
     if [ "$CF_PROXY" = "1" ]; then

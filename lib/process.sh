@@ -238,7 +238,7 @@ _run_proxy_cmd() {
     _rpc_bin="$(runtime_bin_path 2>/dev/null || true)"
     [ -n "$_rpc_bin" ] || return 1
 
-    set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --pool-size "$POOL_SIZE"
 
     if [ "$PROXY_MODE" = "mtproto" ]; then
         set -- "$@" --mode mtproto --secret "$MT_SECRET"

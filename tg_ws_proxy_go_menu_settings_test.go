@@ -265,6 +265,38 @@ func TestManagerConfigurePortRejectsInvalidValues(t *testing.T) {
 	}
 }
 
+func TestManagerConfigurePoolSizeViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "4\n13\n8\n\n\n")
+	if err != nil {
+		t.Fatalf("configure pool size failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Pool size saved: 8") {
+		t.Fatalf("expected success message, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "POOL_SIZE='8'") {
+		t.Fatalf("expected pool size to be persisted, got:\n%s", config)
+	}
+}
+
+func TestManagerConfigurePoolSizeRejectsInvalidValues(t *testing.T) {
+	env := managerEnv(t)
+
+	for _, bad := range []string{"-1", "65", "abc"} {
+		out, _ := runManagerMenu(t, env, "4\n13\n"+bad+"\n\n\n")
+		if !strings.Contains(out, "Pool size must") {
+			t.Errorf("expected validation error for pool size %q, got:\n%s", bad, out)
+		}
+	}
+}
+
 func TestManagerStartBackgroundUsesConfiguredPort(t *testing.T) {
 	env := managerEnv(t)
 	binPath := envValue(env, "BIN_PATH")
@@ -281,6 +313,27 @@ func TestManagerStartBackgroundUsesConfiguredPort(t *testing.T) {
 	args := readTrimmed(t, argsFile)
 	if !strings.Contains(args, "--port") || !strings.Contains(args, "9999") {
 		t.Errorf("expected --port 9999 in args, got:\n%s", args)
+	}
+
+	runManager(t, env, "stop") //nolint
+}
+
+func TestManagerStartBackgroundUsesConfiguredPoolSize(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile, "POOL_SIZE=7")
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--pool-size") || !strings.Contains(args, "7") {
+		t.Errorf("expected --pool-size 7 in args, got:\n%s", args)
 	}
 
 	runManager(t, env, "stop") //nolint
