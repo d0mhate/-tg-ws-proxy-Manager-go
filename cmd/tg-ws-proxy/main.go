@@ -246,6 +246,7 @@ func main() {
 	logger := log.New(os.Stdout, "tg-ws-proxy ", log.LstdFlags)
 	if pa.cfg.Verbose {
 		logger.Printf("starting with verbose logging enabled")
+		logger.Printf("websocket pool size=%d", pa.cfg.PoolSize)
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

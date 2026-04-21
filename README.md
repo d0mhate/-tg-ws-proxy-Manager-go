@@ -78,9 +78,9 @@ wget -O /tmp/tg-ws-proxy-go.sh https://github.com/d0mhate/-tg-ws-proxy-Manager-g
 Если нужен `MTProto` режим:
 
 1. `Advanced`
-2. `17) Mode` → выбрать `mtproto`
-3. `18) Secret` → сгенерировать случайный secret или вставить свой hex
-4. `13) Public IP` → ввести публичный IP сервера
+2. `18) Mode` → выбрать `mtproto`
+3. `19) Secret` → сгенерировать случайный secret или вставить свой hex
+4. `14) Public IP` → ввести публичный IP сервера
 
 Без меню:
 
@@ -143,16 +143,17 @@ Script создаёт короткий launcher `tgm`. Обычно это `/usr
 - `10) SOCKS5 auth` - задать или очистить логин/пароль для SOCKS5 режима
 - `11) DC mapping` - задать кастомную карту `DC:IP` или вернуть `default`
 - `12) Port` - сменить listen port прокси
-- `13) Public IP` - указать IP для `tg://proxy` или `tg://socks` ссылки
-- `14) Show QR code` - показать QR-код для ссылки подключения (mtproto или socks5)
-- `15) Update source` - выбрать `release/latest`, конкретный release tag или preview branch
-- `16) Remove binary` - удалить установленный бинарник, launcher и связанные файлы
+- `13) Pool size` - задать размер пула заранее открытых WebSocket соединений
+- `14) Public IP` - указать IP для `tg://proxy` или `tg://socks` ссылки
+- `15) Show QR code` - показать QR-код для ссылки подключения (mtproto или socks5)
+- `16) Update source` - выбрать `release/latest`, конкретный release tag или preview branch
+- `17) Remove binary` - удалить установленный бинарник, launcher и связанные файлы
 
 ### Advanced -> MTProto
 
-- `17) Mode` - переключить режим между `socks5` и `mtproto`
-- `18) Secret` - сгенерировать случайный secret или вставить свой вручную
-- `19) Upstream proxies` - добавить, удалить или очистить список `HOST:PORT:SECRET` для upstream MTProto fallback
+- `18) Mode` - переключить режим между `socks5` и `mtproto`
+- `19) Secret` - сгенерировать случайный secret или вставить свой вручную
+- `20) Upstream proxies` - добавить, удалить или очистить список `HOST:PORT:SECRET` для upstream MTProto fallback
 
 ## Выбор релизной версии
 
@@ -325,11 +326,11 @@ echo "ee${SECRET}${DOMAIN_HEX}"
 ### Настройка MTProto в меню
 
 1. `Advanced`
-2. `17) Mode` → выбрать `mtproto`
-3. `18) Secret` → можно сгенерировать случайный secret или вставить свой (32/34+ hex)
-4. `13) Public IP` → ввести публичный IP этого сервера
+2. `18) Mode` → выбрать `mtproto`
+3. `19) Secret` → можно сгенерировать случайный secret или вставить свой (32/34+ hex)
+4. `14) Public IP` → ввести публичный IP этого сервера
 
-После заполнения Secret и Public IP в строке настроек главного меню появится `tg://proxy?...` ссылка. QR-код доступен через `14) Show QR code` как только задан Public IP.
+После заполнения Secret и Public IP в строке настроек главного меню появится `tg://proxy?...` ссылка. QR-код доступен через `15) Show QR code` как только задан Public IP.
 
 ### Запуск MTProto без меню
 
@@ -558,7 +559,7 @@ tgm update
 tgm remove
 ```
 
-или через меню: **Advanced → 16) Remove binary**
+или через меню: **Advanced → 17) Remove binary**
 
 Команда останавливает прокси, отключает автозапуск и удаляет все установленные файлы:
 

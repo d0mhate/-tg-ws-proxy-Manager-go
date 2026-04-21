@@ -87,6 +87,28 @@ func TestManagerStartBackgroundPassesMTProtoLinkIP(t *testing.T) {
 	runManager(t, env, "stop") //nolint
 }
 
+func TestManagerStartBackgroundPassesPoolSize(t *testing.T) {
+	env := append(managerEnv(t), "POOL_SIZE=6")
+	binPath := envValue(env, "BIN_PATH")
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+
+	if !strings.Contains(args, "--pool-size") || !strings.Contains(args, "6") {
+		t.Errorf("expected --pool-size 6 in args, got:\n%s", args)
+	}
+
+	runManager(t, env, "stop") //nolint
+}
+
 func TestManagerStartBackgroundOmitsLinkIPWhenUnset(t *testing.T) {
 	env := append(managerEnv(t),
 		"PROXY_MODE=mtproto",
