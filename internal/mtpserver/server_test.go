@@ -3,6 +3,7 @@ package mtpserver
 import (
 	"io"
 	"log"
+	"strings"
 	"testing"
 
 	"tg-ws-proxy/internal/config"
@@ -35,5 +36,17 @@ func TestWSDomainDCNormalizesDC203(t *testing.T) {
 
 	if got := srv.wsDomainDC(203); got != 2 {
 		t.Fatalf("expected dc203 websocket domains to use dc2, got %d", got)
+	}
+}
+
+func TestDialDirectWSIncludesDCInMissingTargetIPErrors(t *testing.T) {
+	srv := NewMTServer(config.Default(), make([]byte, 16), log.New(io.Discard, "", 0))
+
+	_, err := srv.dialDirectWS(t.Context(), 203, 2, false, "")
+	if err == nil {
+		t.Fatal("expected missing target IP error")
+	}
+	if !strings.Contains(err.Error(), "dc=203") {
+		t.Fatalf("expected error to include dc number, got %q", err)
 	}
 }
