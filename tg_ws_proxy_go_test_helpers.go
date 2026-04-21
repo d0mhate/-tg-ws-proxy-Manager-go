@@ -342,6 +342,10 @@ func main() {
 		_ = os.WriteFile(argsFile, []byte(joinArgs(os.Args[1:])), 0o644)
 	}
 
+	if os.Getenv("PROXY_TEST_MODE") == "exit" {
+		return
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh
