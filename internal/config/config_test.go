@@ -77,7 +77,7 @@ func TestDefaultCFProxyDisabled(t *testing.T) {
 func TestDefaultIncludesCommonWSDCs(t *testing.T) {
 	cfg := Default()
 
-	if cfg.PoolSize != 1 {
+	if cfg.PoolSize != 4 {
 		t.Fatalf("unexpected default pool size: %d", cfg.PoolSize)
 	}
 
