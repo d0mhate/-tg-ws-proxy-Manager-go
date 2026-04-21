@@ -1,0 +1,6 @@
+{
+  "branch": "runtime-bin-override",
+  "commit": "eba3a0091128d63bc574d396df6f9c33468f6a24",
+  "manager_script": "tg-ws-proxy-go.sh",
+  "default_binary": "tg-ws-proxy-openwrt"
+}
