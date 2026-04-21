@@ -1,6 +1,6 @@
 {
   "branch": "pool-size-4-default",
-  "commit": "f5c720b906437b8ceac2797a174410d1ec7d4b8a",
+  "commit": "e2728cc0bebfe1cfb2fd2060fa74dc4582f259d9",
   "manager_script": "tg-ws-proxy-go.sh",
   "default_binary": "tg-ws-proxy-openwrt"
 }
