@@ -1,6 +1,7 @@
 package mtpserver
 
 import (
+	"context"
 	"io"
 	"log"
 	"strings"
@@ -42,7 +43,7 @@ func TestWSDomainDCNormalizesDC203(t *testing.T) {
 func TestDialDirectWSIncludesDCInMissingTargetIPErrors(t *testing.T) {
 	srv := NewMTServer(config.Default(), make([]byte, 16), log.New(io.Discard, "", 0))
 
-	_, err := srv.dialDirectWS(t.Context(), 203, 2, false, "")
+	_, err := srv.dialDirectWS(context.Background(), 203, 2, false, "")
 	if err == nil {
 		t.Fatal("expected missing target IP error")
 	}
