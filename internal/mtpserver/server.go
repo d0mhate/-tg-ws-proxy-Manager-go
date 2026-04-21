@@ -26,15 +26,18 @@ type MTServer struct {
 	secret []byte
 	logger *log.Logger
 	agg    *aggLogger // aggregates repeated verbose lines within 2s
+	pool   *wsbridge.Pool
 }
 
 func NewMTServer(cfg config.Config, secret []byte, logger *log.Logger) *MTServer {
-	return &MTServer{
+	srv := &MTServer{
 		cfg:    cfg,
 		secret: secret,
 		logger: logger,
 		agg:    newAggLogger(logger, 2*time.Second),
 	}
+	srv.pool = wsbridge.NewPool(cfg)
+	return srv
 }
 
 // get the 16-byte key from the configured secret.
@@ -58,8 +61,16 @@ func (s *MTServer) Run(ctx context.Context) error {
 		return err
 	}
 	defer ln.Close()
+	defer func() {
+		if s.pool != nil {
+			s.pool.Close()
+		}
+	}()
 
 	s.logger.Printf("mtproto proxy listening on %s", addr)
+	if s.pool != nil {
+		s.pool.Warmup(s.cfg.DCIPs)
+	}
 
 	go func() {
 		<-ctx.Done()
@@ -150,6 +161,7 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 		dc = 2
 	}
 	effectiveDC := telegram.NormalizeDC(dc)
+	wsDomainDC := effectiveDC
 
 	targetIP := s.cfg.DCIPs[effectiveDC]
 	hasCF := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
@@ -189,28 +201,7 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	dialDirect := func() (*wsbridge.Client, error) {
-		if targetIP == "" {
-			return nil, fmt.Errorf("no IP configured for dc=%d", effectiveDC)
-		}
-		var lastErr error
-		for _, domain := range telegram.WSDomains(effectiveDC, info.IsMedia) {
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: direct dial dc=%d → %s via %s", dc, domain, targetIP)
-			}
-			// connect to the dc ip directly. the domain is only for tls sni and host.
-			ws, err := wsbridge.Dial(dialCtx, s.cfg, targetIP, domain)
-			if err == nil {
-				if s.cfg.Verbose {
-					s.agg.Printf("mtproto: direct connected dc=%d → %s", dc, targetIP)
-				}
-				return ws, nil
-			}
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: direct dial failed dc=%d → %s: %v", dc, targetIP, err)
-			}
-			lastErr = err
-		}
-		return nil, lastErr
+		return s.dialDirectWS(dialCtx, dc, wsDomainDC, info.IsMedia, targetIP)
 	}
 
 	var ws *wsbridge.Client
@@ -341,6 +332,50 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	case <-ctx.Done():
 	case <-errCh:
 	}
+}
+
+func (s *MTServer) dialDirectWS(
+	ctx context.Context,
+	dc int,
+	wsDomainDC int,
+	isMedia bool,
+	targetIP string,
+) (*wsbridge.Client, error) {
+	if targetIP == "" {
+		return nil, fmt.Errorf("no target IP configured")
+	}
+
+	domains := telegram.WSDomains(wsDomainDC, isMedia)
+	if s.pool != nil {
+		if ws, ok := s.pool.Get(dc, isMedia, targetIP, domains); ok {
+			if s.cfg.Verbose {
+				s.agg.Printf("mtproto: pool hit dc=%d via %s", dc, targetIP)
+			}
+			return ws, nil
+		}
+		if s.cfg.Verbose {
+			s.agg.Printf("mtproto: pool miss dc=%d via %s", dc, targetIP)
+		}
+	}
+
+	var lastErr error
+	for _, domain := range domains {
+		if s.cfg.Verbose {
+			s.agg.Printf("mtproto: direct dial dc=%d → %s via %s", dc, domain, targetIP)
+		}
+		ws, err := wsbridge.Dial(ctx, s.cfg, targetIP, domain)
+		if err == nil {
+			if s.cfg.Verbose {
+				s.agg.Printf("mtproto: direct connected dc=%d → %s", dc, targetIP)
+			}
+			return ws, nil
+		}
+		if s.cfg.Verbose {
+			s.agg.Printf("mtproto: direct dial failed dc=%d → %s: %v", dc, targetIP, err)
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 // connect to one upstream mtproto proxy and do its handshake.
