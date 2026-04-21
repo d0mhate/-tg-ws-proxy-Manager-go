@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,7 +125,6 @@ func TestManagerStartBackgroundUsesRuntimeBinOverride(t *testing.T) {
 	env = append(env,
 		"RUNTIME_BIN_OVERRIDE="+overrideBin,
 		"ARGS_FILE="+overrideArgsFile,
-		"PROXY_TEST_MODE=exit",
 	)
 
 	out, err := runManager(t, env, "start-background")
@@ -141,9 +139,7 @@ func TestManagerStartBackgroundUsesRuntimeBinOverride(t *testing.T) {
 		t.Fatalf("expected override binary to receive normal proxy args, got:\n%s", args)
 	}
 
-	if _, err := os.Stat(envValue(env, "PID_FILE")); !os.IsNotExist(err) {
-		t.Fatalf("expected override process to exit and PID file to be removed, stat err=%v", err)
-	}
+	runManager(t, env, "stop") //nolint
 }
 
 func TestManagerStartBackgroundMTProtoOmitsSOCKS5Auth(t *testing.T) {
