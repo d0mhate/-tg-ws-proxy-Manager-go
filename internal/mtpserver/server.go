@@ -342,12 +342,12 @@ func (s *MTServer) dialDirectWS(
 	targetIP string,
 ) (*wsbridge.Client, error) {
 	if targetIP == "" {
-		return nil, fmt.Errorf("no target IP configured")
+		return nil, fmt.Errorf("no target IP configured for dc=%d", dc)
 	}
 
 	domains := telegram.WSDomains(wsDomainDC, isMedia)
 	if s.pool != nil {
-		if ws, ok := s.pool.Get(dc, isMedia, targetIP, domains); ok {
+		if ws, ok := s.pool.Get(wsDomainDC, isMedia, targetIP, domains); ok {
 			if s.cfg.Verbose {
 				s.agg.Printf("mtproto: pool hit dc=%d via %s", dc, targetIP)
 			}

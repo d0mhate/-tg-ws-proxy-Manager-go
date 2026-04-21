@@ -2,6 +2,7 @@ package wsbridge
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -245,25 +246,9 @@ func (p *Pool) connectOne(ctx context.Context, targetIP string, domains []string
 }
 
 func warmupDomains(dc int, isMedia bool) []string {
+	dcStr := strconv.Itoa(dc)
 	if isMedia {
-		return []string{"kws" + itoa(dc) + "-1.web.telegram.org", "kws" + itoa(dc) + ".web.telegram.org"}
+		return []string{"kws" + dcStr + "-1.web.telegram.org", "kws" + dcStr + ".web.telegram.org"}
 	}
-	return []string{"kws" + itoa(dc) + ".web.telegram.org", "kws" + itoa(dc) + "-1.web.telegram.org"}
-}
-
-func itoa(v int) string {
-	if v == 0 {
-		return "0"
-	}
-	if v < 0 {
-		return "-" + itoa(-v)
-	}
-	var buf [20]byte
-	i := len(buf)
-	for v > 0 {
-		i--
-		buf[i] = byte('0' + v%10)
-		v /= 10
-	}
-	return string(buf[i:])
+	return []string{"kws" + dcStr + ".web.telegram.org", "kws" + dcStr + "-1.web.telegram.org"}
 }
