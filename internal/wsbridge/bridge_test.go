@@ -210,9 +210,11 @@ func frameForServer(t *testing.T, opcode byte, payload []byte) []byte {
 }
 
 type mockConn struct {
-	readBuf  *bytes.Reader
-	writeBuf bytes.Buffer
-	closed   bool
+	readBuf        *bytes.Reader
+	writeBuf       bytes.Buffer
+	closed         bool
+	readDeadline   time.Time
+	timeoutOnEmpty bool
 }
 
 func newMockConn(readData []byte) *mockConn {
@@ -220,10 +222,20 @@ func newMockConn(readData []byte) *mockConn {
 }
 
 func (c *mockConn) Read(p []byte) (int, error) {
-	if c.readBuf == nil {
+	if c.closed {
 		return 0, io.EOF
 	}
-	return c.readBuf.Read(p)
+	if c.readBuf == nil {
+		if c.timeoutOnEmpty && !c.readDeadline.IsZero() && !time.Now().Before(c.readDeadline) {
+			return 0, timeoutError{}
+		}
+		return 0, io.EOF
+	}
+	n, err := c.readBuf.Read(p)
+	if err == io.EOF && c.timeoutOnEmpty && !c.readDeadline.IsZero() && !time.Now().Before(c.readDeadline) {
+		return 0, timeoutError{}
+	}
+	return n, err
 }
 
 func (c *mockConn) Write(p []byte) (int, error) {
@@ -235,11 +247,20 @@ func (c *mockConn) Close() error {
 	return nil
 }
 
-func (c *mockConn) LocalAddr() net.Addr              { return dummyAddr("local") }
-func (c *mockConn) RemoteAddr() net.Addr             { return dummyAddr("remote") }
-func (c *mockConn) SetDeadline(time.Time) error      { return nil }
-func (c *mockConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *mockConn) LocalAddr() net.Addr         { return dummyAddr("local") }
+func (c *mockConn) RemoteAddr() net.Addr        { return dummyAddr("remote") }
+func (c *mockConn) SetDeadline(time.Time) error { return nil }
+func (c *mockConn) SetReadDeadline(t time.Time) error {
+	c.readDeadline = t
+	return nil
+}
 func (c *mockConn) SetWriteDeadline(time.Time) error { return nil }
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 type dummyAddr string
 

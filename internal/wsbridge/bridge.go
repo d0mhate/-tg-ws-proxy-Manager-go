@@ -153,6 +153,32 @@ func (c *Client) Recv() ([]byte, error) {
 	}
 }
 
+func (c *Client) IsReusable() bool {
+	if c == nil || c.conn == nil || c.reader == nil {
+		return false
+	}
+	if c.reader.Buffered() > 0 {
+		return false
+	}
+
+	if err := c.conn.SetReadDeadline(time.Now()); err != nil {
+		return false
+	}
+	defer c.conn.SetReadDeadline(time.Time{})
+
+	_, err := c.reader.Peek(1)
+	if err == nil {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	return false
+}
+
 func (c *Client) Close() error {
 	_ = c.writeControl(opClose, nil)
 	return c.conn.Close()
