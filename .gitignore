@@ -24,3 +24,12 @@ scan.txt
 AyuGramDesktop-dev/
 tweb-master/
 /icon.icns
+Makefile
+README_ROUTER_GO.md
+build.log
+cover.out
+logs.txt
+refs/
+/refs/flowseal-tg-ws-proxy/
+rust_clone/
+tg-ws-proxy-src/

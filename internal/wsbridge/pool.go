@@ -9,13 +9,14 @@ import (
 	"tg-ws-proxy/internal/config"
 )
 
-const defaultPoolMaxAge = 120 * time.Second
+const defaultPoolMaxAge = 55 * time.Second
 
 type DialFunc func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*Client, error)
 
 type poolKey struct {
-	dc      int
-	isMedia bool
+	dc       int
+	isMedia  bool
+	targetIP string
 }
 
 type pooledClient struct {
@@ -65,7 +66,7 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 		return nil, false
 	}
 
-	key := poolKey{dc: dc, isMedia: isMedia}
+	key := poolKey{dc: dc, isMedia: isMedia, targetIP: targetIP}
 	now := p.now()
 
 	var stale []*Client
@@ -79,11 +80,16 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 
 	bucket := p.idle[key]
 	kept := bucket[:0]
-	for _, entry := range bucket {
+	for i := len(bucket) - 1; i >= 0; i-- {
+		entry := bucket[i]
 		if entry.client == nil || now.Sub(entry.created) > p.maxAge {
 			if entry.client != nil {
 				stale = append(stale, entry.client)
 			}
+			continue
+		}
+		if !entry.client.IsReusable() {
+			stale = append(stale, entry.client)
 			continue
 		}
 		if hit == nil {
@@ -120,7 +126,7 @@ func (p *Pool) Warmup(dcIPs map[int]string) {
 			continue
 		}
 		for _, isMedia := range []bool{false, true} {
-			p.scheduleRefill(poolKey{dc: dc, isMedia: isMedia}, targetIP, warmupDomains(dc, isMedia))
+			p.scheduleRefill(poolKey{dc: dc, isMedia: isMedia, targetIP: targetIP}, targetIP, warmupDomains(dc, isMedia))
 		}
 	}
 }
