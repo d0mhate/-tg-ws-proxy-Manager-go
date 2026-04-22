@@ -107,16 +107,30 @@ func (s *MTServer) dialDirectWSWithFallback(
 	for _, route := range orderedRoutes {
 		ws, allRedirects, err := s.dialDirectWS(ctx, dc, isMedia, route)
 		if err == nil {
-			s.routeCooldowns.clear(routeCooldownKey{requestDC: dc, targetDC: route.targetDC, isMedia: isMedia})
+			key := routeCooldownKey{requestDC: dc, targetDC: route.targetDC, isMedia: isMedia}
+			s.routeCooldowns.clear(key)
+			if s.cfg.Verbose {
+				s.agg.Printf("mtproto: route clear dc=%d target-dc=%d via %s reason=direct-success", dc, route.targetDC, route.targetIP)
+			}
 			return ws, route, nil
 		}
 
 		if s.hasAlternativeDirectRoute(dc) {
 			key := routeCooldownKey{requestDC: dc, targetDC: route.targetDC, isMedia: isMedia}
 			if allRedirects {
+				if s.cfg.Verbose {
+					s.agg.Printf("mtproto: route mark redirect dc=%d target-dc=%d via %s cooldown=%s err=%v", dc, route.targetDC, route.targetIP, s.routeCooldowns.redirectDuration, err)
+				}
 				s.routeCooldowns.markRedirect(key)
 			} else {
-				s.routeCooldowns.markFailure(key)
+				if s.shouldCooldownDirectRouteFailure(dc, route) {
+					if s.cfg.Verbose {
+						s.agg.Printf("mtproto: route mark failure dc=%d target-dc=%d via %s cooldown=%s err=%v", dc, route.targetDC, route.targetIP, s.routeCooldowns.failDuration, err)
+					}
+					s.routeCooldowns.markFailure(key)
+				} else if s.cfg.Verbose {
+					s.agg.Printf("mtproto: route skip failure cooldown dc=%d target-dc=%d via %s err=%v", dc, route.targetDC, route.targetIP, err)
+				}
 			}
 		}
 		lastErr = err

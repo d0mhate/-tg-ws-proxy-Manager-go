@@ -9,17 +9,39 @@ type directRouteCandidate struct {
 }
 
 func (s *MTServer) directRouteCandidates(dc int) []directRouteCandidate {
-	effectiveDC := s.effectiveDC(dc)
 	wsDomainDC := s.wsDomainDC(dc)
-	targetIP := s.cfg.DCIPs[effectiveDC]
-	if targetIP == "" {
-		return nil
+
+	var routes []directRouteCandidate
+	appendRoute := func(targetDC int) {
+		if targetDC == 0 {
+			return
+		}
+
+		targetIP := s.cfg.DCIPs[targetDC]
+		if targetIP == "" {
+			return
+		}
+
+		candidate := directRouteCandidate{
+			targetDC:   targetDC,
+			wsDomainDC: wsDomainDC,
+			targetIP:   targetIP,
+		}
+		for _, existing := range routes {
+			if existing.wsDomainDC == candidate.wsDomainDC && existing.targetIP == candidate.targetIP {
+				return
+			}
+		}
+		routes = append(routes, candidate)
 	}
-	return []directRouteCandidate{{
-		targetDC:   effectiveDC,
-		wsDomainDC: wsDomainDC,
-		targetIP:   targetIP,
-	}}
+
+	effectiveDC := s.effectiveDC(dc)
+	appendRoute(effectiveDC)
+	if normalizedDC := telegram.NormalizeDC(dc); normalizedDC != effectiveDC {
+		appendRoute(normalizedDC)
+	}
+
+	return routes
 }
 
 func (s *MTServer) orderedDirectRoutes(dc int, isMedia bool, routes []directRouteCandidate) []directRouteCandidate {
@@ -64,8 +86,23 @@ func (s *MTServer) hasAlternativeDirectRoute(dc int) bool {
 	return len(s.directRouteCandidates(dc)) > 1
 }
 
-func (s *MTServer) markDirectRouteFailure(dc int, isMedia bool, route directRouteCandidate) {
+func (s *MTServer) shouldCooldownDirectRouteFailure(dc int, route directRouteCandidate) bool {
 	if s.routeCooldowns == nil || route.targetIP == "" || !s.hasAlternativeDirectRoute(dc) {
+		return false
+	}
+
+	// Keep the dc203 -> dc2 fallback hot even after transient timeouts.
+	// This matches the practical behavior seen in upstream variants where the
+	// normalized dc2 route is often the only path that still carries media.
+	if dc == 203 && route.targetDC == telegram.NormalizeDC(dc) {
+		return false
+	}
+
+	return true
+}
+
+func (s *MTServer) markDirectRouteFailure(dc int, isMedia bool, route directRouteCandidate) {
+	if !s.shouldCooldownDirectRouteFailure(dc, route) {
 		return
 	}
 
