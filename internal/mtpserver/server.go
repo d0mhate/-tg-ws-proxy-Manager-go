@@ -171,16 +171,13 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	directRoutes := s.directRouteCandidates(dc)
 	hasCF := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
 
-	if len(directRoutes) == 0 && !hasCF {
-		s.logger.Printf("mtproto: no IP configured for dc=%d and no CF proxy", s.effectiveDC(dc))
-		return
-	}
-
 	relayInit, relayEnc, relayDec, err := mtproto.GenerateRelayInit(info.Proto, dc)
 	if err != nil {
 		s.logger.Printf("mtproto: generate relay init: %v", err)
 		return
 	}
+
+	tcpFallbackTarget := s.tcpFallbackTargetIP(dc, directRoutes)
 
 	dialCtx, cancel := context.WithTimeout(ctx, s.cfg.DialTimeout)
 	defer cancel()
@@ -219,10 +216,16 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	if hasCF && s.cfg.UseCFProxyFirst {
 		ws, wsErr = dialCF()
 		if wsErr != nil {
-			ws, wsErr = dialDirect()
+			if len(directRoutes) > 0 {
+				ws, wsErr = dialDirect()
+			}
 		}
 	} else {
-		ws, wsErr = dialDirect()
+		if len(directRoutes) > 0 {
+			ws, wsErr = dialDirect()
+		} else {
+			wsErr = fmt.Errorf("no direct route configured for dc=%d", dc)
+		}
 		if wsErr != nil && hasCF {
 			ws, wsErr = dialCF()
 		}
@@ -243,6 +246,16 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 			}
 			defer upConn.Close()
 			s.bridgeUpstream(ctx, dataConn, upConn, clientDec, clientEnc, upEnc, upDec)
+			return
+		}
+		if tcpFallbackTarget != "" {
+			if s.cfg.Verbose {
+				s.agg.Printf("mtproto: tcp fallback dc=%d → %s:%d", dc, tcpFallbackTarget, telegramTCPPort)
+			}
+			if err := s.bridgeTCPFallback(ctx, dataConn, tcpFallbackTarget, relayInit, clientDec, clientEnc, relayEnc, relayDec); err != nil {
+				s.agg.Printf("mtproto: tcp fallback dc=%d: %v", dc, err)
+				return
+			}
 			return
 		}
 		s.agg.Printf("mtproto: ws dial dc=%d: %v", dc, wsErr)
@@ -428,61 +441,5 @@ func (s *MTServer) bridgeUpstream(
 	clientDec, clientEnc cipher.Stream,
 	upEnc, upDec cipher.Stream,
 ) {
-	errCh := make(chan error, 2)
-	buf := s.cfg.BufferKB * 1024
-
-	// client -> upstream
-	go func() {
-		b := make([]byte, buf)
-		for {
-			n, readErr := client.Read(b)
-			if n > 0 {
-				chunk := make([]byte, n)
-				copy(chunk, b[:n])
-				clientDec.XORKeyStream(chunk, chunk)
-				upEnc.XORKeyStream(chunk, chunk)
-				if _, writeErr := upstream.Write(chunk); writeErr != nil {
-					errCh <- writeErr
-					return
-				}
-			}
-			if readErr != nil {
-				if errors.Is(readErr, io.EOF) {
-					readErr = nil
-				}
-				errCh <- readErr
-				return
-			}
-		}
-	}()
-
-	// upstream -> client
-	go func() {
-		b := make([]byte, buf)
-		for {
-			n, readErr := upstream.Read(b)
-			if n > 0 {
-				chunk := make([]byte, n)
-				copy(chunk, b[:n])
-				upDec.XORKeyStream(chunk, chunk)
-				clientEnc.XORKeyStream(chunk, chunk)
-				if _, writeErr := client.Write(chunk); writeErr != nil {
-					errCh <- writeErr
-					return
-				}
-			}
-			if readErr != nil {
-				if errors.Is(readErr, io.EOF) {
-					readErr = nil
-				}
-				errCh <- readErr
-				return
-			}
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-	case <-errCh:
-	}
+	s.bridgeRelay(ctx, client, upstream, clientDec, clientEnc, upEnc, upDec)
 }

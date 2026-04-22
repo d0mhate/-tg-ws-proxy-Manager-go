@@ -266,6 +266,27 @@ func TestDialDirectWSKeepsNormalTimeoutForDefaultSingleRouteDCs(t *testing.T) {
 	}
 }
 
+func TestTCPFallbackTargetIPUsesDefaultForMissingDC(t *testing.T) {
+	cfg := config.Default()
+	delete(cfg.DCIPs, 1)
+	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+
+	if got := srv.tcpFallbackTargetIP(1, nil); got != "149.154.175.205" {
+		t.Fatalf("expected default tcp fallback ip for dc1, got %q", got)
+	}
+}
+
+func TestTCPFallbackTargetIPPrefersExplicitDC203Override(t *testing.T) {
+	cfg := config.Default()
+	cfg.DCIPs[203] = "91.105.192.100"
+	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+
+	routes := srv.directRouteCandidates(203)
+	if got := srv.tcpFallbackTargetIP(203, routes); got != "91.105.192.100" {
+		t.Fatalf("expected explicit dc203 tcp fallback ip, got %q", got)
+	}
+}
+
 func TestDialDirectWSSuccessClearsRouteCooldown(t *testing.T) {
 	cfg := config.Default()
 	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
