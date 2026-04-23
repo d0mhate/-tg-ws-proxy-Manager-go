@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 )
 
 func TestDCIPFlagsSetAndString(t *testing.T) {
@@ -38,6 +39,12 @@ func TestParseArgsDefaults(t *testing.T) {
 	if pa.mode != "socks5" {
 		t.Fatalf("unexpected default mode: %q", pa.mode)
 	}
+	if pa.cfg.PoolMaxAge != 55*time.Second {
+		t.Fatalf("unexpected default pool max age: %s", pa.cfg.PoolMaxAge)
+	}
+	if pa.cfg.PoolRefillDelay != 250*time.Millisecond {
+		t.Fatalf("unexpected default pool refill delay: %s", pa.cfg.PoolRefillDelay)
+	}
 }
 
 func TestParseArgsOverridesHostAndPort(t *testing.T) {
@@ -51,6 +58,29 @@ func TestParseArgsOverridesHostAndPort(t *testing.T) {
 	}
 	if pa.cfg.Port != 19080 {
 		t.Fatalf("unexpected overridden port: %d", pa.cfg.Port)
+	}
+}
+
+func TestParseArgsPoolTuning(t *testing.T) {
+	pa, err := parseArgs([]string{"--pool-max-age", "90s", "--pool-refill-delay", "500ms"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	if pa.cfg.PoolMaxAge != 90*time.Second {
+		t.Fatalf("unexpected pool max age: %s", pa.cfg.PoolMaxAge)
+	}
+	if pa.cfg.PoolRefillDelay != 500*time.Millisecond {
+		t.Fatalf("unexpected pool refill delay: %s", pa.cfg.PoolRefillDelay)
+	}
+}
+
+func TestParseArgsRejectsNegativePoolTuning(t *testing.T) {
+	if _, err := parseArgs([]string{"--pool-max-age", "-1s"}); err == nil {
+		t.Fatal("expected negative pool max age to be rejected")
+	}
+	if _, err := parseArgs([]string{"--pool-refill-delay", "-1ms"}); err == nil {
+		t.Fatal("expected negative pool refill delay to be rejected")
 	}
 }
 
