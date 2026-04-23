@@ -2,8 +2,6 @@ package socks5
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -205,54 +203,17 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 		return nil, errWSBlacklisted
 	}
 
-	domains := telegram.WSDomains(s.wsDomainDC(dc), isMedia)
-	if s.pool != nil {
-		s.pool.SetDialFunc(s.wsDialFunc)
-		if ws, ok := s.pool.Get(dc, isMedia, targetIP, domains); ok {
-			s.stats.incPoolHit()
-			s.debugf("ws pool hit: dc=%d media=%v target=%s", dc, isMedia, targetIP)
-			return ws, nil
-		}
-		s.stats.incPoolMiss()
+	domains := websocketDomainsForDC(dc, isMedia)
+	if ws, ok := s.tryPooledWebsocket(dc, isMedia, targetIP, domains); ok {
+		return ws, nil
 	}
 
-	dialCfg := s.cfg
-	if dialCfg.DialTimeout <= 0 || dialCfg.DialTimeout > wsFailFastDial {
-		dialCfg.DialTimeout = wsFailFastDial
-		s.debugf("ws fail-fast timeout: dc=%d media=%v timeout=%s", dc, isMedia, dialCfg.DialTimeout)
+	dialCfg := s.websocketDialConfig(dc, isMedia, key)
+	result := s.dialWebsocketDomains(ctx, dialCfg, key, targetIP, dc, isMedia, domains)
+	if result.ws != nil {
+		return result.ws, nil
 	}
-	if s.isCooldownActive(key) {
-		s.debugf("ws cooldown active: dc=%d media=%v timeout=%s", dc, isMedia, dialCfg.DialTimeout)
-	}
-
-	var lastErr error
-	allRedirects := true
-	sawRedirect := false
-	for _, domain := range domains {
-		s.debugf("ws dial attempt: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, domain)
-		ws, err := s.wsDialFunc(ctx, dialCfg, targetIP, domain)
-		if err == nil {
-			s.clearFailureState(key)
-			s.debugf("ws dial success: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, domain)
-			return ws, nil
-		}
-		s.debugf("ws dial failed: dc=%d media=%v target=%s domain=%s err=%v", dc, isMedia, targetIP, domain, err)
-		s.stats.incWSErrors()
-		var hErr *wsbridge.HandshakeError
-		if errors.As(err, &hErr) && hErr.IsRedirect() {
-			sawRedirect = true
-		} else {
-			allRedirects = false
-		}
-		lastErr = err
-	}
-
-	if sawRedirect && allRedirects {
-		s.markBlacklisted(key)
-		return nil, fmt.Errorf("all websocket routes redirected: %w", errWSBlacklisted)
-	}
-	s.markFailureCooldown(key)
-	return nil, lastErr
+	return nil, s.finalizeWebsocketDialFailure(key, result)
 }
 
 func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string) (*wsbridge.Client, error) {
