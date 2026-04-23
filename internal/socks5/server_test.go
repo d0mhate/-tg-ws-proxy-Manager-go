@@ -919,6 +919,62 @@ func TestChoosePatchedDC(t *testing.T) {
 	}
 }
 
+func TestBuildUDPAssociatePacketRoundTripDomain(t *testing.T) {
+	packet, err := buildUDPAssociatePacket("example.com", 443, []byte{0x01, 0x02, 0x03})
+	if err != nil {
+		t.Fatalf("buildUDPAssociatePacket returned error: %v", err)
+	}
+
+	parsed, err := parseUDPAssociatePacket(packet)
+	if err != nil {
+		t.Fatalf("parseUDPAssociatePacket returned error: %v", err)
+	}
+	if parsed.Host != "example.com" {
+		t.Fatalf("unexpected host after round-trip: %q", parsed.Host)
+	}
+	if parsed.Port != 443 {
+		t.Fatalf("unexpected port after round-trip: %d", parsed.Port)
+	}
+	if !bytes.Equal(parsed.Payload, []byte{0x01, 0x02, 0x03}) {
+		t.Fatalf("unexpected payload after round-trip: %x", parsed.Payload)
+	}
+}
+
+func TestParseUDPAssociatePacketRejectsFragmentation(t *testing.T) {
+	_, err := parseUDPAssociatePacket([]byte{
+		0x00, 0x00, 0x01, 0x01,
+		127, 0, 0, 1,
+		0x00, 0x35,
+		0xaa,
+	})
+	if !errors.Is(err, errUDPFragmentUnsupported) {
+		t.Fatalf("expected errUDPFragmentUnsupported, got %v", err)
+	}
+}
+
+func TestClassifyRuntimeError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "nil", err: nil, want: "probe_other"},
+		{name: "canceled", err: context.Canceled, want: "probe_canceled"},
+		{name: "timeout text", err: errors.New("dial tcp: i/o timeout"), want: "probe_timeout"},
+		{name: "no route", err: errors.New("connect: no route to host"), want: "probe_no_route"},
+		{name: "reset", err: errors.New("read: connection reset by peer"), want: "probe_reset"},
+		{name: "eof", err: io.EOF, want: "probe_eof"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyRuntimeError("probe", tc.err); got != tc.want {
+				t.Fatalf("unexpected classification: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestWriteReplyUsesGeneralFailureForUnknownStatus(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
