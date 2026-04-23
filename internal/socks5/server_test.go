@@ -871,7 +871,7 @@ func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 		}
 	})
 
-	t.Run("dc1 host falls back to original destination without explicit override", func(t *testing.T) {
+	t.Run("dc1 host routes through destination fallback", func(t *testing.T) {
 		var got struct {
 			host string
 			port int
@@ -905,7 +905,7 @@ func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 			t.Fatalf("expected patched init to parse, got %v", err)
 		}
 		if info.DC != 0 || info.IsMedia {
-			t.Fatalf("expected init to stay unpatched without explicit dc1 override, got %+v", info)
+			t.Fatalf("expected original init to stay unchanged without direct dc mapping, got %+v", info)
 		}
 	})
 }
