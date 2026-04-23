@@ -164,10 +164,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	dstIP := net.ParseIP(req.DstHost)
-	isIPv6 := dstIP != nil && dstIP.To4() == nil
-	isTelegramCandidate := telegram.IsTelegramIP(req.DstHost) || isLikelyTelegramIPv6(req, isIPv6)
-	shouldProbeMTProto := !isTelegramCandidate && shouldProbeTelegramByPort(req)
+	isTelegramCandidate, shouldProbeMTProto, isIPv6 := classifyInitialRoute(req)
 	routeByInitOnly := false
 
 	if !isTelegramCandidate && !shouldProbeMTProto {
@@ -213,7 +210,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	if !isTelegramCandidate {
-		info, parseErr := mtproto.ParseInit(init)
+		_, inferred, info, parseErr := inferTelegramCandidateFromInit(req, init)
 		if parseErr != nil {
 			s.stats.incPassthrough()
 			s.debugf("[%s] route=passthrough reason=mtproto-probe-miss destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
@@ -223,8 +220,8 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 			}
 			return
 		}
-		isTelegramCandidate = true
-		routeByInitOnly = true
+		isTelegramCandidate = inferred
+		routeByInitOnly = inferred
 		s.debugf("[%s] telegram route inferred from mtproto init on destination %s:%d dc=%d media=%v", clientAddr, req.DstHost, req.DstPort, info.DC, info.IsMedia)
 	}
 
@@ -248,50 +245,13 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	info, err := mtproto.ParseInit(init)
-	if err != nil && !errors.Is(err, mtproto.ErrInvalidProto) {
-		s.recordVerboseConnFailure(clientAddr, "mtproto_parse", err)
-	}
+	plan := s.buildTelegramRoutePlan(req, init, isIPv6, routeByInitOnly, clientAddr)
+	init = plan.init
 
-	dc := info.DC
-	isMedia := info.IsMedia
-	proto := info.Proto
-	initPatched := false
-	inferredFromDestination := false
-	s.debugf("[%s] mtproto init parsed: dc=%d media=%v proto=0x%08x", clientAddr, dc, isMedia, proto)
-
-	if dc == 0 {
-		if endpoint, ok := telegram.LookupEndpoint(req.DstHost); ok {
-			dc = endpoint.DC
-			isMedia = endpoint.IsMedia
-			inferredFromDestination = true
-			s.debugf("[%s] dc inferred from destination ip: dc=%d media=%v", clientAddr, dc, isMedia)
-			if _, ok := s.cfg.DCIPs[dc]; ok {
-				patched, patchErr := mtproto.PatchInitDC(init, choosePatchedDC(dc, isMedia))
-				if patchErr == nil {
-					init = patched
-					initPatched = true
-					s.debugf("[%s] patched mtproto init with dc=%d", clientAddr, choosePatchedDC(dc, isMedia))
-				}
-			}
-		}
-	}
-
-	effectiveDC := s.effectiveDC(dc)
-	if effectiveDC != 0 && effectiveDC != dc {
-		patched, patchErr := mtproto.PatchInitDC(init, choosePatchedDC(effectiveDC, isMedia))
-		if patchErr == nil {
-			init = patched
-			initPatched = true
-			s.debugf("[%s] normalized dc=%d -> %d and patched mtproto init", clientAddr, dc, effectiveDC)
-		}
-	}
-
-	targetIP, ok := s.cfg.DCIPs[effectiveDC]
-	if !ok || targetIP == "" {
+	if plan.targetIP == "" {
 		s.stats.incTCPFallback()
-		s.stats.recordTCPFallbackRoute(effectiveDC, isMedia)
-		s.debugf("[%s] route=tcp-fallback reason=no-dc-override dc=%d effective_dc=%d destination=%s:%d", clientAddr, dc, effectiveDC, req.DstHost, req.DstPort)
+		s.stats.recordTCPFallbackRoute(plan.effectiveDC, plan.isMedia)
+		s.debugf("[%s] route=tcp-fallback reason=no-dc-override dc=%d effective_dc=%d destination=%s:%d", clientAddr, plan.dc, plan.effectiveDC, req.DstHost, req.DstPort)
 		if err := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
 			s.stats.recordError("tcp_fb", err)
 			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
@@ -299,30 +259,23 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	fallbackHost := req.DstHost
-	if isIPv6 || effectiveDC != dc || routeByInitOnly || inferredFromDestination {
-		fallbackHost = targetIP
-		s.debugf("[%s] telegram route will fallback via dc target %s", clientAddr, targetIP)
-	}
-
-	wsDomainDC := s.wsDomainDC(effectiveDC)
-	if !isWSEnabledDC(wsDomainDC) {
+	if !isWSEnabledDC(plan.wsDomainDC) {
 		s.stats.incTCPFallback()
-		s.stats.recordTCPFallbackRoute(effectiveDC, isMedia)
-		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d ws_dc=%d target=%s", clientAddr, dc, effectiveDC, wsDomainDC, targetIP)
-		if err := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
+		s.stats.recordTCPFallbackRoute(plan.effectiveDC, plan.isMedia)
+		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d ws_dc=%d target=%s", clientAddr, plan.dc, plan.effectiveDC, plan.wsDomainDC, plan.targetIP)
+		if err := s.proxyTCPWithInit(ctx, conn, plan.fallbackHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
 			s.stats.recordError("tcp_fb", err)
 			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
 		}
 		return
 	}
 
-	ws, err := s.connectTelegramThenCloudflareWS(ctx, clientAddr, dc, effectiveDC, isMedia, targetIP)
+	ws, err := s.connectTelegramThenCloudflareWS(ctx, clientAddr, plan.dc, plan.effectiveDC, plan.isMedia, plan.targetIP)
 	if err != nil {
 		s.stats.incTCPFallback()
-		s.stats.recordTCPFallbackRoute(effectiveDC, isMedia)
-		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d effective_dc=%d target=%s", clientAddr, fallbackReason(err), dc, effectiveDC, targetIP)
-		if fbErr := s.proxyTCPWithInit(ctx, conn, fallbackHost, req.DstPort, init); fbErr != nil && !errors.Is(fbErr, io.EOF) {
+		s.stats.recordTCPFallbackRoute(plan.effectiveDC, plan.isMedia)
+		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d effective_dc=%d target=%s", clientAddr, fallbackReason(err), plan.dc, plan.effectiveDC, plan.targetIP)
+		if fbErr := s.proxyTCPWithInit(ctx, conn, plan.fallbackHost, req.DstPort, init); fbErr != nil && !errors.Is(fbErr, io.EOF) {
 			s.stats.recordError("tcp_fb", fbErr)
 			s.recordVerboseConnFailure(clientAddr, "tcp_fb", fbErr)
 		}
@@ -330,14 +283,14 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	}
 	defer ws.Close()
 	s.stats.incWSConnections()
-	s.stats.recordWSRoute(effectiveDC, isMedia)
-	s.debugf("[%s] route=websocket dc=%d effective_dc=%d ws_dc=%d media=%v target=%s", clientAddr, dc, effectiveDC, wsDomainDC, isMedia, targetIP)
+	s.stats.recordWSRoute(plan.effectiveDC, plan.isMedia)
+	s.debugf("[%s] route=websocket dc=%d effective_dc=%d ws_dc=%d media=%v target=%s", clientAddr, plan.dc, plan.effectiveDC, plan.wsDomainDC, plan.isMedia, plan.targetIP)
 
 	var splitter *mtproto.Splitter
-	if proto != 0 && (initPatched || isMedia || proto != mtproto.ProtoIntermediate) {
-		splitter, _ = mtproto.NewSplitter(init, proto)
+	if plan.proto != 0 && (plan.initPatched || plan.isMedia || plan.proto != mtproto.ProtoIntermediate) {
+		splitter, _ = mtproto.NewSplitter(init, plan.proto)
 		if splitter != nil {
-			s.debugf("[%s] websocket splitter enabled for proto=0x%08x", clientAddr, proto)
+			s.debugf("[%s] websocket splitter enabled for proto=0x%08x", clientAddr, plan.proto)
 		}
 	}
 
