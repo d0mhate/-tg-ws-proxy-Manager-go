@@ -152,6 +152,25 @@ func TestPoolDiscardsExpiredClient(t *testing.T) {
 	}
 }
 
+func TestPoolZeroTuningIsRespected(t *testing.T) {
+	pool := NewPool(config.Config{
+		PoolSize:        1,
+		PoolMaxAge:      0,
+		PoolRefillDelay: 0,
+	})
+	if pool == nil {
+		t.Fatal("expected non-nil pool")
+	}
+	defer pool.Close()
+
+	if pool.maxAge != 0 {
+		t.Fatalf("expected pool max age 0 to be preserved, got %s", pool.maxAge)
+	}
+	if pool.refillDelay != 0 {
+		t.Fatalf("expected refill delay 0 to be preserved, got %s", pool.refillDelay)
+	}
+}
+
 func TestPoolSeparatesBucketsByTargetIP(t *testing.T) {
 	pool := NewPool(config.Config{PoolSize: 1})
 	if pool == nil {
@@ -221,6 +240,42 @@ func TestPoolRefillDelayAppliedBetweenConnections(t *testing.T) {
 	second := waitForTime(t, dialTimes)
 	if second.Sub(first) < 15*time.Millisecond {
 		t.Fatalf("expected refill delay between pooled dials, got %s", second.Sub(first))
+	}
+}
+
+func TestPoolGetReturnsFreshestClientFirst(t *testing.T) {
+	pool := NewPool(config.Config{PoolSize: 3, PoolMaxAge: time.Minute})
+	if pool == nil {
+		t.Fatal("expected non-nil pool")
+	}
+	defer pool.Close()
+
+	pool.dial = func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*Client, error) {
+		return nil, errors.New("test dial blocked")
+	}
+
+	c1 := newReusableClient()
+	c2 := newReusableClient()
+	c3 := newReusableClient()
+	base := time.Now()
+	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	pool.idle[key] = []pooledClient{
+		{client: c1, created: base.Add(-3 * time.Second)},
+		{client: c2, created: base.Add(-2 * time.Second)},
+		{client: c3, created: base.Add(-1 * time.Second)},
+	}
+
+	ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"})
+	if !hit || ws != c3 {
+		t.Fatalf("expected freshest client first, got hit=%v client=%p", hit, ws)
+	}
+	ws, hit = pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"})
+	if !hit || ws != c2 {
+		t.Fatalf("expected second freshest client next, got hit=%v client=%p", hit, ws)
+	}
+	ws, hit = pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"})
+	if !hit || ws != c1 {
+		t.Fatalf("expected oldest client last, got hit=%v client=%p", hit, ws)
 	}
 }
 

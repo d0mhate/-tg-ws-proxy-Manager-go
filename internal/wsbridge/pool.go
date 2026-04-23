@@ -60,7 +60,7 @@ func NewPool(cfg config.Config) *Pool {
 }
 
 func durationOrDefault(value time.Duration, fallback time.Duration) time.Duration {
-	if value > 0 {
+	if value >= 0 {
 		return value
 	}
 	return fallback
@@ -93,9 +93,8 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 	}
 
 	bucket := p.idle[key]
-	kept := bucket[:0]
-	for i := len(bucket) - 1; i >= 0; i-- {
-		entry := bucket[i]
+	kept := make([]pooledClient, 0, len(bucket))
+	for _, entry := range bucket {
 		if entry.client == nil || (p.maxAge > 0 && now.Sub(entry.created) > p.maxAge) {
 			if entry.client != nil {
 				stale = append(stale, entry.client)
@@ -106,11 +105,11 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 			stale = append(stale, entry.client)
 			continue
 		}
-		if hit == nil {
-			hit = entry.client
-			continue
-		}
 		kept = append(kept, entry)
+	}
+	if n := len(kept); n > 0 {
+		hit = kept[n-1].client
+		kept = kept[:n-1]
 	}
 	if len(kept) == 0 {
 		delete(p.idle, key)
