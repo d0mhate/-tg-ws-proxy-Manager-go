@@ -76,6 +76,8 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
 	fs.IntVar(&cfg.BufferKB, "buf-kb", cfg.BufferKB, "socket buffer size in KB")
 	fs.IntVar(&cfg.PoolSize, "pool-size", cfg.PoolSize, "number of pre-opened idle WebSocket connections per active DC bucket")
+	fs.DurationVar(&cfg.PoolMaxAge, "pool-max-age", cfg.PoolMaxAge, "maximum age of an idle pooled WebSocket connection before it is discarded")
+	fs.DurationVar(&cfg.PoolRefillDelay, "pool-refill-delay", cfg.PoolRefillDelay, "delay between opening pooled WebSocket connections while refilling a bucket")
 	fs.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP dial timeout")
 	fs.DurationVar(&cfg.InitTimeout, "init-timeout", cfg.InitTimeout, "client MTProto init timeout")
 	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:149.154.167.220")
@@ -113,6 +115,12 @@ func parseArgs(args []string) (parsedArgs, error) {
 	}
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return parsedArgs{}, fmt.Errorf("--username and --password must be used together")
+	}
+	if cfg.PoolMaxAge < 0 {
+		return parsedArgs{}, fmt.Errorf("--pool-max-age must be >= 0")
+	}
+	if cfg.PoolRefillDelay < 0 {
+		return parsedArgs{}, fmt.Errorf("--pool-refill-delay must be >= 0")
 	}
 	if cfDomainFlag != "" {
 		parts := strings.Split(cfDomainFlag, ",")

@@ -9,7 +9,10 @@ import (
 	"tg-ws-proxy/internal/config"
 )
 
-const defaultPoolMaxAge = 55 * time.Second
+const (
+	defaultPoolMaxAge      = 55 * time.Second
+	defaultPoolRefillDelay = 250 * time.Millisecond
+)
 
 type DialFunc func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*Client, error)
 
@@ -25,15 +28,17 @@ type pooledClient struct {
 }
 
 type Pool struct {
-	cfg       config.Config
-	maxIdle   int
-	maxAge    time.Duration
-	dial      DialFunc
-	now       func() time.Time
-	mu        sync.Mutex
-	idle      map[poolKey][]pooledClient
-	refilling map[poolKey]bool
-	closed    bool
+	cfg         config.Config
+	maxIdle     int
+	maxAge      time.Duration
+	refillDelay time.Duration
+	dial        DialFunc
+	now         func() time.Time
+	sleep       func(time.Duration)
+	mu          sync.Mutex
+	idle        map[poolKey][]pooledClient
+	refilling   map[poolKey]bool
+	closed      bool
 }
 
 func NewPool(cfg config.Config) *Pool {
@@ -42,14 +47,23 @@ func NewPool(cfg config.Config) *Pool {
 	}
 
 	return &Pool{
-		cfg:       cfg,
-		maxIdle:   cfg.PoolSize,
-		maxAge:    defaultPoolMaxAge,
-		dial:      Dial,
-		now:       time.Now,
-		idle:      make(map[poolKey][]pooledClient),
-		refilling: make(map[poolKey]bool),
+		cfg:         cfg,
+		maxIdle:     cfg.PoolSize,
+		maxAge:      durationOrDefault(cfg.PoolMaxAge, defaultPoolMaxAge),
+		refillDelay: durationOrDefault(cfg.PoolRefillDelay, defaultPoolRefillDelay),
+		dial:        Dial,
+		now:         time.Now,
+		sleep:       time.Sleep,
+		idle:        make(map[poolKey][]pooledClient),
+		refilling:   make(map[poolKey]bool),
 	}
+}
+
+func durationOrDefault(value time.Duration, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func (p *Pool) SetDialFunc(dial DialFunc) {
@@ -82,7 +96,7 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 	kept := bucket[:0]
 	for i := len(bucket) - 1; i >= 0; i-- {
 		entry := bucket[i]
-		if entry.client == nil || now.Sub(entry.created) > p.maxAge {
+		if entry.client == nil || (p.maxAge > 0 && now.Sub(entry.created) > p.maxAge) {
 			if entry.client != nil {
 				stale = append(stale, entry.client)
 			}
@@ -184,32 +198,10 @@ func (p *Pool) refill(key poolKey, targetIP string, domains []string) {
 	}()
 
 	for {
-		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
-			return
+		needed, stale := p.trimBucket(key)
+		for _, client := range stale {
+			go client.Close()
 		}
-
-		now := p.now()
-		bucket := p.idle[key]
-		kept := bucket[:0]
-		for _, entry := range bucket {
-			if entry.client == nil || now.Sub(entry.created) > p.maxAge {
-				if entry.client != nil {
-					go entry.client.Close()
-				}
-				continue
-			}
-			kept = append(kept, entry)
-		}
-		if len(kept) == 0 {
-			delete(p.idle, key)
-		} else {
-			p.idle[key] = kept
-		}
-
-		needed := p.maxIdle - len(kept)
-		p.mu.Unlock()
 
 		if needed <= 0 {
 			return
@@ -233,6 +225,10 @@ func (p *Pool) refill(key poolKey, targetIP string, domains []string) {
 			created: p.now(),
 		})
 		p.mu.Unlock()
+
+		if needed > 1 && p.refillDelay > 0 {
+			p.sleep(p.refillDelay)
+		}
 	}
 }
 
@@ -257,4 +253,44 @@ func warmupDomains(dc int, isMedia bool) []string {
 		return []string{"kws" + dcStr + "-1.web.telegram.org", "kws" + dcStr + ".web.telegram.org"}
 	}
 	return []string{"kws" + dcStr + ".web.telegram.org", "kws" + dcStr + "-1.web.telegram.org"}
+}
+
+func (p *Pool) trimBucket(key poolKey) (int, []*Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return 0, nil
+	}
+
+	now := p.now()
+	bucket := p.idle[key]
+	if len(bucket) == 0 {
+		delete(p.idle, key)
+		return p.maxIdle, nil
+	}
+
+	kept := bucket[:0]
+	stale := make([]*Client, 0)
+	for _, entry := range bucket {
+		if entry.client == nil || (p.maxAge > 0 && now.Sub(entry.created) > p.maxAge) {
+			if entry.client != nil {
+				stale = append(stale, entry.client)
+			}
+			continue
+		}
+		if !entry.client.IsReusable() {
+			stale = append(stale, entry.client)
+			continue
+		}
+		kept = append(kept, entry)
+	}
+
+	if len(kept) == 0 {
+		delete(p.idle, key)
+	} else {
+		p.idle[key] = kept
+	}
+
+	return p.maxIdle - len(kept), stale
 }

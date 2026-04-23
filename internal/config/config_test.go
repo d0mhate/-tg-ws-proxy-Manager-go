@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseDCIPList(t *testing.T) {
 	got, err := ParseDCIPList([]string{"2:149.154.167.220", "4:149.154.167.220"})
@@ -80,17 +83,27 @@ func TestDefaultIncludesCommonWSDCs(t *testing.T) {
 	if cfg.PoolSize != 4 {
 		t.Fatalf("unexpected default pool size: %d", cfg.PoolSize)
 	}
+	if cfg.PoolMaxAge != 55*time.Second {
+		t.Fatalf("unexpected default pool max age: %s", cfg.PoolMaxAge)
+	}
+	if cfg.PoolRefillDelay != 250*time.Millisecond {
+		t.Fatalf("unexpected default pool refill delay: %s", cfg.PoolRefillDelay)
+	}
 
 	want := map[int]string{
-		1: "149.154.175.205",
 		2: "149.154.167.220",
 		4: "149.154.167.220",
-		5: "91.108.56.100",
 	}
 
 	for dc, ip := range want {
 		if got := cfg.DCIPs[dc]; got != ip {
 			t.Fatalf("unexpected default dc %d ip: got %q want %q", dc, got, ip)
+		}
+	}
+
+	for _, dc := range []int{1, 3, 5} {
+		if _, ok := cfg.DCIPs[dc]; ok {
+			t.Fatalf("did not expect default direct dc %d override", dc)
 		}
 	}
 }
