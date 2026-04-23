@@ -33,6 +33,7 @@ BINARY_NAME="${BINARY_NAME:-}"
 LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
 LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
+POOL_SIZE_FROM_ENV="${POOL_SIZE+x}"
 SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
 SOCKS_PASSWORD_FROM_ENV="${SOCKS_PASSWORD+x}"
 DC_IPS_FROM_ENV="${DC_IPS+x}"
@@ -43,6 +44,7 @@ PROXY_MODE_FROM_ENV="${PROXY_MODE+x}"
 MT_SECRET_FROM_ENV="${MT_SECRET+x}"
 MT_LINK_IP_FROM_ENV="${MT_LINK_IP+x}"
 MT_UPSTREAM_PROXIES_FROM_ENV="${MT_UPSTREAM_PROXIES+x}"
+RUNTIME_BIN_OVERRIDE_FROM_ENV="${RUNTIME_BIN_OVERRIDE+x}"
 UPDATE_CHANNEL_FROM_ENV="${UPDATE_CHANNEL+x}"
 PREVIEW_BRANCH_FROM_ENV="${PREVIEW_BRANCH+x}"
 OPENWRT_RELEASE_FILE="${OPENWRT_RELEASE_FILE:-/etc/openwrt_release}"
@@ -81,6 +83,7 @@ LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-1080}"
 VERBOSE="${VERBOSE:-0}"
+POOL_SIZE="${POOL_SIZE:-4}"
 SOCKS_USERNAME="${SOCKS_USERNAME:-}"
 SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
 DC_IPS="${DC_IPS:-}"
@@ -91,6 +94,7 @@ PROXY_MODE="${PROXY_MODE:-socks5}"
 MT_SECRET="${MT_SECRET:-}"
 MT_LINK_IP="${MT_LINK_IP:-}"
 MT_UPSTREAM_PROXIES="${MT_UPSTREAM_PROXIES:-}"
+RUNTIME_BIN_OVERRIDE="${RUNTIME_BIN_OVERRIDE:-}"
 UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
@@ -333,6 +337,7 @@ write_settings_config() {
         printf "HOST='%s'\n" "$LISTEN_HOST"
         printf "PORT='%s'\n" "$LISTEN_PORT"
         printf "VERBOSE='%s'\n" "$VERBOSE"
+        printf "POOL_SIZE='%s'\n" "$POOL_SIZE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
         printf "PASSWORD='%s'\n" "$SOCKS_PASSWORD"
         printf "DC_IPS='%s'\n" "$DC_IPS"
@@ -362,6 +367,11 @@ load_saved_settings() {
     if [ -z "$VERBOSE_FROM_ENV" ]; then
         verbose_value="$(read_config_value VERBOSE 2>/dev/null || true)"
         [ -n "$verbose_value" ] && VERBOSE="$verbose_value"
+    fi
+
+    if [ -z "$POOL_SIZE_FROM_ENV" ]; then
+        pool_size_value="$(read_config_value POOL_SIZE 2>/dev/null || true)"
+        [ -n "$pool_size_value" ] && POOL_SIZE="$pool_size_value"
     fi
 
     if [ -z "$SOCKS_USERNAME_FROM_ENV" ]; then
@@ -1016,6 +1026,11 @@ refresh_latest_version_cache() {
 
 
 runtime_bin_path() {
+    if [ -n "$RUNTIME_BIN_OVERRIDE" ] && [ -x "$RUNTIME_BIN_OVERRIDE" ]; then
+        printf "%s" "$RUNTIME_BIN_OVERRIDE"
+        return 0
+    fi
+
     if [ -x "$BIN_PATH" ]; then
         printf "%s" "$BIN_PATH"
         return 0
@@ -1095,7 +1110,7 @@ is_running() {
 
 current_pids() {
     all_pids=""
-    for path in "$BIN_PATH" "$(persistent_bin_path 2>/dev/null || true)"; do
+    for path in "$(runtime_bin_path 2>/dev/null || true)" "$BIN_PATH" "$(persistent_bin_path 2>/dev/null || true)"; do
         [ -n "$path" ] || continue
         pids="$(matching_pids_for_path "$path" 2>/dev/null || true)"
         [ -n "$pids" ] || continue
@@ -1248,7 +1263,7 @@ _run_proxy_cmd() {
     _rpc_bin="$(runtime_bin_path 2>/dev/null || true)"
     [ -n "$_rpc_bin" ] || return 1
 
-    set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT"
+    set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --pool-size "$POOL_SIZE"
 
     if [ "$PROXY_MODE" = "mtproto" ]; then
         set -- "$@" --mode mtproto --secret "$MT_SECRET"
@@ -1504,6 +1519,7 @@ write_init_script() {
         printf '%s\n' '    [ -x "$BIN" ] || return 1'
         printf '%s\n' '    [ -n "$HOST" ] || HOST="0.0.0.0"'
         printf '%s\n' '    [ -n "$PORT" ] || PORT="1080"'
+        printf '%s\n' '    [ -n "$POOL_SIZE" ] || POOL_SIZE="4"'
         printf '%s\n' '    USERNAME="${USERNAME:-}"'
         printf '%s\n' '    PASSWORD="${PASSWORD:-}"'
         printf '%s\n' '    DC_IPS="${DC_IPS:-}"'
@@ -1521,7 +1537,7 @@ write_init_script() {
         printf '%s\n' '            return 1'
         printf '%s\n' '        fi'
         printf '%s\n' '    fi'
-        printf '%s\n' '    set -- "$BIN" --host "$HOST" --port "$PORT"'
+        printf '%s\n' '    set -- "$BIN" --host "$HOST" --port "$PORT" --pool-size "$POOL_SIZE"'
         printf '%s\n' '    if [ "$PROXY_MODE" = "mtproto" ]; then'
         printf '%s\n' '        set -- "$@" --mode mtproto --secret "$MT_SECRET"'
         printf '%s\n' '        if [ -n "$MT_LINK_IP" ]; then'
@@ -2230,6 +2246,7 @@ show_telegram_settings() {
     else
         printf "  dc map   : <default>\n"
     fi
+    printf "  pool size: %s\n" "$POOL_SIZE"
     if [ "$CF_PROXY" = "1" ]; then
         printf "  cf proxy : on\n"
     else
@@ -2270,6 +2287,7 @@ show_telegram_settings_compact() {
     else
         dc_part="dc:default"
     fi
+    pool_part="pool:$POOL_SIZE"
 
     if [ "$PROXY_MODE" = "mtproto" ]; then
         if mt_secret_valid 2>/dev/null; then
@@ -2282,7 +2300,7 @@ show_telegram_settings_compact() {
         else
             ip_part="${C_DIM}ip:none${C_RESET}"
         fi
-        printf "  MTProto %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part"
+        printf "  MTProto %s:%s  %s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part" "$pool_part"
         if [ -n "$MT_LINK_IP" ] && mt_secret_valid 2>/dev/null; then
             printf "  tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
         fi
@@ -2296,7 +2314,7 @@ show_telegram_settings_compact() {
         else
             auth_part="no auth"
         fi
-        printf "  SOCKS5  %s:%s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part"
+        printf "  SOCKS5  %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part" "$pool_part"
     fi
 
     if [ "$CF_PROXY" = "1" ]; then
@@ -3203,9 +3221,9 @@ show_mt_qr() {
     link="$(mt_proxy_link 2>/dev/null || true)"
     if [ -z "$link" ]; then
         if ! mt_secret_valid 2>/dev/null; then
-            printf "\n%sSecret not set%s - configure it via item 18.\n" "$C_RED" "$C_RESET"
+            printf "\n%sSecret not set%s - configure it via item 19.\n" "$C_RED" "$C_RESET"
         else
-            printf "\n%sPublic IP not set%s - configure it via item 13.\n" "$C_RED" "$C_RESET"
+            printf "\n%sPublic IP not set%s - configure it via item 14.\n" "$C_RED" "$C_RESET"
         fi
         pause
         return 1
@@ -3238,7 +3256,7 @@ show_socks5_qr() {
     link="$(socks5_proxy_link 2>/dev/null || true)"
     if [ -z "$link" ]; then
         printf "\n%sPublic IP not set%s\n" "$C_RED" "$C_RESET"
-        printf "Set it via Settings - item 13.\n"
+        printf "Set it via Settings - item 14.\n"
         pause
         return 1
     fi
@@ -3329,6 +3347,46 @@ configure_listen_port() {
     printf "\n%sPort saved: %s%s\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
     prompt_restart_proxy_for_updated_settings
     pause
+}
+
+configure_pool_size() {
+    while true; do
+        show_header
+        printf "%sWebSocket pool size%s\n\n" "$C_BOLD" "$C_RESET"
+        printf "Current value: %s\n\n" "$POOL_SIZE"
+        printf "Enter a number between 0 and 64.\n"
+        printf "Use 0 to disable pre-opened pooled connections.\n\n"
+        printf "New pool size: "
+        IFS= read -r new_pool_size
+
+        if [ -z "$new_pool_size" ]; then
+            return 0
+        fi
+
+        case "$new_pool_size" in
+            *[!0-9]*)
+                printf "\n%sPool size must be a whole number between 0 and 64%s\n" "$C_RED" "$C_RESET"
+                pause
+                continue
+                ;;
+        esac
+
+        if [ "$new_pool_size" -gt 64 ]; then
+            printf "\n%sPool size must be between 0 and 64%s\n" "$C_RED" "$C_RESET"
+            pause
+            continue
+        fi
+
+        POOL_SIZE="$new_pool_size"
+        write_settings_config || {
+            pause
+            continue
+        }
+        printf "\n%sPool size saved: %s%s\n" "$C_GREEN" "$POOL_SIZE" "$C_RESET"
+        prompt_restart_proxy_for_updated_settings
+        pause
+        return 0
+    done
 }
 
 configure_dc_ip_mapping() {
@@ -3770,25 +3828,26 @@ advanced_menu() {
         printf " 10) SOCKS5 auth\n"
         printf " 11) DC mapping\n"
         printf " 12) Port (%s%s%s)\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
+        printf " 13) Pool size (%s%s%s)\n" "$C_GREEN" "$POOL_SIZE" "$C_RESET"
         if [ -n "$MT_LINK_IP" ]; then
-            printf " 13) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
+            printf " 14) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
         else
-            printf " 13) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
+            printf " 14) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
         fi
-        printf " 14) Show QR code\n"
-        printf " 15) Update source\n"
-        printf " 16) Remove binary\n"
+        printf " 15) Show QR code\n"
+        printf " 16) Update source\n"
+        printf " 17) Remove binary\n"
         printf "\n  MTProto\n"
         if [ "$PROXY_MODE" = "mtproto" ]; then
-            printf " 17) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
+            printf " 18) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
         else
-            printf " 17) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
+            printf " 18) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
         fi
         if mt_secret_valid 2>/dev/null; then
             _sec_type="$(mt_secret_type 2>/dev/null || printf "set")"
-            printf " 18) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
+            printf " 19) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
         else
-            printf " 18) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
+            printf " 19) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
         fi
         _adv_up_count=0
         if [ -n "$MT_UPSTREAM_PROXIES" ]; then
@@ -3799,9 +3858,9 @@ advanced_menu() {
             IFS="$_adv_old_ifs"
         fi
         if [ "$_adv_up_count" -gt 0 ]; then
-            printf " 19) Upstream proxies (%s%d set%s)\n" "$C_GREEN" "$_adv_up_count" "$C_RESET"
+            printf " 20) Upstream proxies (%s%d set%s)\n" "$C_GREEN" "$_adv_up_count" "$C_RESET"
         else
-            printf " 19) Upstream proxies (%snone%s)\n" "$C_DIM" "$C_RESET"
+            printf " 20) Upstream proxies (%snone%s)\n" "$C_DIM" "$C_RESET"
         fi
         printf "\n  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
@@ -3847,28 +3906,31 @@ advanced_menu() {
                 configure_listen_port
                 ;;
             13)
-                configure_mt_link_ip
+                configure_pool_size
                 ;;
             14)
+                configure_mt_link_ip
+                ;;
+            15)
                 if [ "$PROXY_MODE" = "mtproto" ]; then
                     show_mt_qr
                 else
                     show_socks5_qr
                 fi
                 ;;
-            15)
+            16)
                 configure_update_source
                 ;;
-            16)
+            17)
                 remove_all
                 ;;
-            17)
+            18)
                 configure_proxy_mode
                 ;;
-            18)
+            19)
                 configure_mt_secret
                 ;;
-            19)
+            20)
                 configure_mt_upstream_proxies
                 ;;
             *)
