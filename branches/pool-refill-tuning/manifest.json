@@ -1,0 +1,6 @@
+{
+  "branch": "pool-refill-tuning",
+  "commit": "4dc28e55fd76f35b73f196f1cda2e639cb2e7b1f",
+  "manager_script": "tg-ws-proxy-go.sh",
+  "default_binary": "tg-ws-proxy-openwrt"
+}
