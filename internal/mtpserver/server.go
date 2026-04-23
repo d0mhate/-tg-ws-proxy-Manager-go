@@ -39,9 +39,12 @@ func NewMTServer(cfg config.Config, secret []byte, logger *log.Logger) *MTServer
 		agg:            newAggLogger(logger, 2*time.Second),
 		stats:          newStatsCollector(),
 		routeCooldowns: newRouteCooldowns(30*time.Second, 60*time.Second, 5*time.Minute),
+		pool:           wsbridge.NewPool(cfg),
 		wsDialFunc:     wsbridge.Dial,
 	}
-	srv.pool = wsbridge.NewPool(cfg)
+	if srv.pool != nil {
+		srv.pool.SetDialFunc(srv.wsDialFunc)
+	}
 	return srv
 }
 
