@@ -149,16 +149,17 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	switch req.Cmd {
 	case socksCmdConnect:
 		s.debugf("[%s] socks connect request to %s:%d", clientAddr, req.DstHost, req.DstPort)
+		s.handleConnectRequest(ctx, conn, req, clientAddr)
 	case socksCmdUDPAssociate:
 		s.debugf("[%s] socks udp associate request for %s:%d", clientAddr, req.DstHost, req.DstPort)
 		s.handleUDPAssociate(ctx, conn, req)
-		return
 	default:
 		s.logger.Printf("[%s] unsupported socks command: %d", clientAddr, req.Cmd)
 		_ = writeReply(conn, 0x07)
-		return
 	}
+}
 
+func (s *Server) handleConnectRequest(ctx context.Context, conn net.Conn, req request, clientAddr string) {
 	if req.DstHost == "" || req.DstPort <= 0 {
 		_ = writeReply(conn, 0x05)
 		return
@@ -168,15 +169,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	routeByInitOnly := false
 
 	if !isTelegramCandidate && !shouldProbeMTProto {
-		s.stats.incPassthrough()
-		s.debugf("[%s] route=passthrough destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
-		if err := writeReply(conn, 0x00); err != nil {
-			return
-		}
-		if err := s.proxyTCP(ctx, conn, req.DstHost, req.DstPort); err != nil && !errors.Is(err, io.EOF) {
-			s.stats.recordError("passthrough", err)
-			s.recordVerboseConnFailure(clientAddr, "passthrough", err)
-		}
+		s.runPassthrough(ctx, conn, req.DstHost, req.DstPort, clientAddr)
 		return
 	}
 	s.debugf("[%s] telegram destination detected: %s:%d", clientAddr, req.DstHost, req.DstPort)
@@ -189,19 +182,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	n, err := readWithContext(ctx, conn, init, s.cfg.InitTimeout)
 	if err != nil {
 		if !isTelegramCandidate {
-			s.stats.incPassthrough()
-			s.debugf("[%s] route=passthrough reason=probe-read-failed destination=%s:%d err=%v", clientAddr, req.DstHost, req.DstPort, err)
-			if n == 0 {
-				if ptErr := s.proxyTCP(ctx, conn, req.DstHost, req.DstPort); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-					s.stats.recordError("passthrough", ptErr)
-					s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
-				}
-				return
-			}
-			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init[:n]); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-				s.stats.recordError("passthrough", ptErr)
-				s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
-			}
+			s.runProbeReadPassthrough(ctx, conn, req.DstHost, req.DstPort, init, n, err, clientAddr)
 			return
 		}
 		s.stats.recordError("mtproto_init", err)
@@ -212,12 +193,7 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	if !isTelegramCandidate {
 		_, inferred, info, parseErr := inferTelegramCandidateFromInit(req, init)
 		if parseErr != nil {
-			s.stats.incPassthrough()
-			s.debugf("[%s] route=passthrough reason=mtproto-probe-miss destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
-			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-				s.stats.recordError("passthrough", ptErr)
-				s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
-			}
+			s.runPassthroughWithInit(ctx, conn, req.DstHost, req.DstPort, init, clientAddr, "mtproto-probe-miss")
 			return
 		}
 		isTelegramCandidate = inferred
@@ -227,21 +203,12 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 
 	if mtproto.IsHTTPTransport(init) {
 		if routeByInitOnly {
-			s.stats.incPassthrough()
-			s.debugf("[%s] route=passthrough reason=http-probe destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
-			if ptErr := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); ptErr != nil && !errors.Is(ptErr, io.EOF) {
-				s.stats.recordError("passthrough", ptErr)
-				s.recordVerboseConnFailure(clientAddr, "passthrough", ptErr)
-			}
+			s.runPassthroughWithInit(ctx, conn, req.DstHost, req.DstPort, init, clientAddr, "http-probe")
 			return
 		}
-		s.stats.incTCPFallback()
-		s.stats.recordTCPFallbackRoute(0, false)
-		s.debugf("[%s] route=tcp-fallback reason=http-transport destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
-		if err := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
-			s.stats.recordError("tcp_fb", err)
-			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
-		}
+		s.runTCPFallbackWithInit(ctx, conn, req.DstHost, req.DstPort, init, 0, false, clientAddr, func() {
+			s.debugf("[%s] route=tcp-fallback reason=http-transport destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
+		})
 		return
 	}
 
@@ -249,36 +216,24 @@ func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
 	init = plan.init
 
 	if plan.targetIP == "" {
-		s.stats.incTCPFallback()
-		s.stats.recordTCPFallbackRoute(plan.effectiveDC, plan.isMedia)
-		s.debugf("[%s] route=tcp-fallback reason=no-dc-override dc=%d effective_dc=%d destination=%s:%d", clientAddr, plan.dc, plan.effectiveDC, req.DstHost, req.DstPort)
-		if err := s.proxyTCPWithInit(ctx, conn, req.DstHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
-			s.stats.recordError("tcp_fb", err)
-			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
-		}
+		s.runTCPFallbackWithInit(ctx, conn, req.DstHost, req.DstPort, init, plan.effectiveDC, plan.isMedia, clientAddr, func() {
+			s.debugf("[%s] route=tcp-fallback reason=no-dc-override dc=%d effective_dc=%d destination=%s:%d", clientAddr, plan.dc, plan.effectiveDC, req.DstHost, req.DstPort)
+		})
 		return
 	}
 
 	if !isWSEnabledDC(plan.wsDomainDC) {
-		s.stats.incTCPFallback()
-		s.stats.recordTCPFallbackRoute(plan.effectiveDC, plan.isMedia)
-		s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d ws_dc=%d target=%s", clientAddr, plan.dc, plan.effectiveDC, plan.wsDomainDC, plan.targetIP)
-		if err := s.proxyTCPWithInit(ctx, conn, plan.fallbackHost, req.DstPort, init); err != nil && !errors.Is(err, io.EOF) {
-			s.stats.recordError("tcp_fb", err)
-			s.recordVerboseConnFailure(clientAddr, "tcp_fb", err)
-		}
+		s.runTCPFallbackWithInit(ctx, conn, plan.fallbackHost, req.DstPort, init, plan.effectiveDC, plan.isMedia, clientAddr, func() {
+			s.debugf("[%s] route=tcp-fallback reason=ws-disabled-dc dc=%d effective_dc=%d ws_dc=%d target=%s", clientAddr, plan.dc, plan.effectiveDC, plan.wsDomainDC, plan.targetIP)
+		})
 		return
 	}
 
 	ws, err := s.connectTelegramThenCloudflareWS(ctx, clientAddr, plan.dc, plan.effectiveDC, plan.isMedia, plan.targetIP)
 	if err != nil {
-		s.stats.incTCPFallback()
-		s.stats.recordTCPFallbackRoute(plan.effectiveDC, plan.isMedia)
-		s.debugf("[%s] route=tcp-fallback reason=%s dc=%d effective_dc=%d target=%s", clientAddr, fallbackReason(err), plan.dc, plan.effectiveDC, plan.targetIP)
-		if fbErr := s.proxyTCPWithInit(ctx, conn, plan.fallbackHost, req.DstPort, init); fbErr != nil && !errors.Is(fbErr, io.EOF) {
-			s.stats.recordError("tcp_fb", fbErr)
-			s.recordVerboseConnFailure(clientAddr, "tcp_fb", fbErr)
-		}
+		s.runTCPFallbackWithInit(ctx, conn, plan.fallbackHost, req.DstPort, init, plan.effectiveDC, plan.isMedia, clientAddr, func() {
+			s.debugf("[%s] route=tcp-fallback reason=%s dc=%d effective_dc=%d target=%s", clientAddr, fallbackReason(err), plan.dc, plan.effectiveDC, plan.targetIP)
+		})
 		return
 	}
 	defer ws.Close()
