@@ -490,15 +490,15 @@ func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 			}
 		})
 
-		if got.host != "149.154.175.205" || got.port != 443 {
+		if got.host != "149.154.175.211" || got.port != 443 {
 			t.Fatalf("unexpected tcp fallback target: %s:%d", got.host, got.port)
 		}
 		info, err := mtproto.ParseInit(got.init)
 		if err != nil {
 			t.Fatalf("expected patched init to parse, got %v", err)
 		}
-		if info.DC != 1 || info.IsMedia {
-			t.Fatalf("expected patched init to use dc1 non-media, got %+v", info)
+		if info.DC != 0 || info.IsMedia {
+			t.Fatalf("expected original init to stay unchanged without direct dc mapping, got %+v", info)
 		}
 	})
 }

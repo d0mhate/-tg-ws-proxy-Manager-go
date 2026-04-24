@@ -31,7 +31,7 @@ func (s *Server) readAndClassifyInit(ctx context.Context, conn net.Conn, req req
 
 	result := initReadResult{init: init}
 	if !isTelegramCandidate {
-		_, inferred, info, parseErr := inferTelegramCandidateFromInit(req, init)
+		inferred, info, parseErr := inferTelegramCandidateFromInit(init)
 		if parseErr != nil {
 			s.runPassthroughWithInit(ctx, conn, req.DstHost, req.DstPort, init, clientAddr, "mtproto-probe-miss")
 			return initReadResult{}, true

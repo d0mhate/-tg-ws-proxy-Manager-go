@@ -224,7 +224,6 @@ func buildReply(status byte, host string, port int) ([]byte, error) {
 func readWithContext(ctx context.Context, conn net.Conn, buf []byte, timeout time.Duration) (int, error) {
 	if timeout > 0 {
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
-		defer conn.SetReadDeadline(time.Time{})
 	}
 
 	type readResult struct {
@@ -241,6 +240,9 @@ func readWithContext(ctx context.Context, conn net.Conn, buf []byte, timeout tim
 	case <-ctx.Done():
 		return 0, ctx.Err()
 	case result := <-done:
+		if timeout > 0 {
+			_ = conn.SetReadDeadline(time.Time{})
+		}
 		return result.n, result.err
 	}
 }
