@@ -32,3 +32,5 @@ refs/
 /refs/flowseal-tg-ws-proxy/
 rust_clone/
 tg-ws-proxy-src/
+coverage/
+.kcov*
