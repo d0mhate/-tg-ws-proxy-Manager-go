@@ -1,6 +1,6 @@
 {
   "branch": "solid-refactor-audit",
-  "commit": "4a12823c1eb2c0fe3a23fec2f2b34752828d0c33",
+  "commit": "453f93726300b630b85ef63ab48801b1a01ffec0",
   "manager_script": "tg-ws-proxy-go.sh",
   "default_binary": "tg-ws-proxy-openwrt"
 }
