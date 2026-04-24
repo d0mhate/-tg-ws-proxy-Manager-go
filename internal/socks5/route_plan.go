@@ -30,12 +30,12 @@ func classifyInitialRoute(req request) (isTelegramCandidate bool, shouldProbeMTP
 	return isTelegramCandidate, shouldProbeMTProto, isIPv6
 }
 
-func inferTelegramCandidateFromInit(req request, init []byte) (bool, bool, mtproto.InitInfo, error) {
+func inferTelegramCandidateFromInit(init []byte) (bool, mtproto.InitInfo, error) {
 	info, err := mtproto.ParseInit(init)
 	if err != nil {
-		return false, false, mtproto.InitInfo{}, err
+		return false, mtproto.InitInfo{}, err
 	}
-	return true, true, info, nil
+	return true, info, nil
 }
 
 func (s *Server) buildTelegramRoutePlan(req request, init []byte, isIPv6 bool, routeByInitOnly bool, clientAddr string) telegramRoutePlan {
