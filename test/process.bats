@@ -56,6 +56,7 @@ teardown() {
     SOCKS_USERNAME="user"
     SOCKS_PASSWORD="pass"
     VERBOSE="1"
+    POOL_SIZE="4"
     DC_IPS="1:1.1.1.1, 2:2.2.2.2"
     CF_PROXY="1"
     CF_PROXY_FIRST="1"
@@ -87,6 +88,8 @@ EOF
 127.0.0.1
 --port
 1081
+--pool-size
+4
 --username
 user
 --password
@@ -116,6 +119,7 @@ EOF
     SOCKS_USERNAME=""
     SOCKS_PASSWORD=""
     VERBOSE="0"
+    POOL_SIZE="4"
     DC_IPS="1:149.154.175.50"
     CF_PROXY="0"
     CF_PROXY_FIRST="0"
@@ -147,6 +151,8 @@ EOF
 0.0.0.0
 --port
 1443
+--pool-size
+4
 --mode
 mtproto
 --secret

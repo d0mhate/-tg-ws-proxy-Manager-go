@@ -4,6 +4,7 @@ BIN := tg-ws-proxy
 SCRIPT := tg-ws-proxy-go.sh
 BUNDLE := build/tg-ws-proxy-go.sh
 comma := ,
+BATS ?= bats
 
 -include .env
 
@@ -56,7 +57,7 @@ BIN_FLAGS = \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
-.PHONY: help build bundle menu start start-bg stop restart status run test clean \
+.PHONY: help build bundle menu start start-bg stop restart status run test test-go test-shell clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
 	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
@@ -104,7 +105,10 @@ help:
 		'make menu-mtproto-ee-cf - open menu with MTProto ee preset, CF first and balance on' \
 		'make mtproto-ee-nocf - start MTProto ee, CF off' \
 		'make mtproto-ee-nocf-menu - open menu with MTProto ee preset, CF off' \
-		'make test         - go test ./...' \
+		'make test-go      - go test ./...' \
+		'make test-shell   - run bats tests from ./test' \
+		'make test         - run Go and bats tests' \
+		'make install-git-hooks - enable local pre-commit hook that runs make test' \
 		'' \
 		'You can override vars inline, for example:' \
 		'make start MODE=socks5 PORT=1081 USERNAME=alice PASSWORD=secret VERBOSE=1'
@@ -305,8 +309,19 @@ mtproto-ee-nocf-menu: CF_BALANCE := 0
 mtproto-ee-nocf-menu: CF_DOMAIN :=
 mtproto-ee-nocf-menu: menu
 
-test:
+test: test-go test-shell
+
+test-go:
 	go test ./...
+
+test-shell:
+	$(BATS) test
+
+# if need to uninstall (git config --local --unset core.hooksPath))
+install-git-hooks:
+	git config --local core.hooksPath .githooks
+	chmod +x .githooks/pre-commit
+	@printf '%s\n' 'Installed local git hooks: pre-commit will run make test'
 
 clean:
 	rm -f $(BIN) $(BUNDLE)
