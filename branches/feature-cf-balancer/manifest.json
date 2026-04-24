@@ -1,0 +1,6 @@
+{
+  "branch": "feature-cf-balancer",
+  "commit": "aec60400bd3b69ec1116f6752c8b5744b45e647c",
+  "manager_script": "tg-ws-proxy-go.sh",
+  "default_binary": "tg-ws-proxy-openwrt"
+}
