@@ -981,6 +981,16 @@ toggle_cf_proxy_first() {
     sync_autostart_config_if_enabled >/dev/null 2>&1 || true
 }
 
+toggle_cf_balance() {
+    if [ "$CF_BALANCE" = "1" ]; then
+        CF_BALANCE="0"
+    else
+        CF_BALANCE="1"
+    fi
+    write_settings_config >/dev/null 2>&1 || true
+    sync_autostart_config_if_enabled >/dev/null 2>&1 || true
+}
+
 configure_cf_domain() {
     show_header
     printf "%sCloudflare proxy domain%s\n" "$C_BOLD" "$C_RESET"
@@ -1286,32 +1296,37 @@ advanced_menu() {
         else
             printf "  7) Toggle order (%sfallback%s)\n" "$C_DIM" "$C_RESET"
         fi
-        printf "  8) Set domain\n"
-        printf "  9) Check domain\n"
-        printf "\n  Settings\n"
-        printf " 10) SOCKS5 auth\n"
-        printf " 11) DC mapping\n"
-        printf " 12) Port (%s%s%s)\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
-        printf " 13) Pool size (%s%s%s)\n" "$C_GREEN" "$POOL_SIZE" "$C_RESET"
-        if [ -n "$MT_LINK_IP" ]; then
-            printf " 14) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
+        if [ "$CF_BALANCE" = "1" ]; then
+            printf "  8) Toggle balance (%son%s)\n" "$C_GREEN" "$C_RESET"
         else
-            printf " 14) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
+            printf "  8) Toggle balance (%soff%s)\n" "$C_DIM" "$C_RESET"
         fi
-        printf " 15) Show QR code\n"
-        printf " 16) Update source\n"
-        printf " 17) Remove binary\n"
+        printf "  9) Set domain\n"
+        printf " 10) Check domain\n"
+        printf "\n  Settings\n"
+        printf " 11) SOCKS5 auth\n"
+        printf " 12) DC mapping\n"
+        printf " 13) Port (%s%s%s)\n" "$C_GREEN" "$LISTEN_PORT" "$C_RESET"
+        printf " 14) Pool size (%s%s%s)\n" "$C_GREEN" "$POOL_SIZE" "$C_RESET"
+        if [ -n "$MT_LINK_IP" ]; then
+            printf " 15) Public IP (%s%s%s)\n" "$C_GREEN" "$MT_LINK_IP" "$C_RESET"
+        else
+            printf " 15) Public IP (%snot set%s)\n" "$C_DIM" "$C_RESET"
+        fi
+        printf " 16) Show QR code\n"
+        printf " 17) Update source\n"
+        printf " 18) Remove binary\n"
         printf "\n  MTProto\n"
         if [ "$PROXY_MODE" = "mtproto" ]; then
-            printf " 18) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
+            printf " 19) Mode (%smtproto%s)\n" "$C_GREEN" "$C_RESET"
         else
-            printf " 18) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
+            printf " 19) Mode (%ssocks5%s)\n" "$C_DIM" "$C_RESET"
         fi
         if mt_secret_valid 2>/dev/null; then
             _sec_type="$(mt_secret_type 2>/dev/null || printf "set")"
-            printf " 19) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
+            printf " 20) Secret (%s%s%s)\n" "$C_GREEN" "$_sec_type" "$C_RESET"
         else
-            printf " 19) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
+            printf " 20) Secret (%snot set%s)\n" "$C_RED" "$C_RESET"
         fi
         _adv_up_count=0
         if [ -n "$MT_UPSTREAM_PROXIES" ]; then
@@ -1322,9 +1337,9 @@ advanced_menu() {
             IFS="$_adv_old_ifs"
         fi
         if [ "$_adv_up_count" -gt 0 ]; then
-            printf " 20) Upstream proxies (%s%d set%s)\n" "$C_GREEN" "$_adv_up_count" "$C_RESET"
+            printf " 21) Upstream proxies (%s%d set%s)\n" "$C_GREEN" "$_adv_up_count" "$C_RESET"
         else
-            printf " 20) Upstream proxies (%snone%s)\n" "$C_DIM" "$C_RESET"
+            printf " 21) Upstream proxies (%snone%s)\n" "$C_DIM" "$C_RESET"
         fi
         printf "\n  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
@@ -1355,46 +1370,49 @@ advanced_menu() {
                 toggle_cf_proxy_first
                 ;;
             8)
-                configure_cf_domain
+                toggle_cf_balance
                 ;;
             9)
-                check_cf_domain
+                configure_cf_domain
                 ;;
             10)
-                configure_socks_auth
+                check_cf_domain
                 ;;
             11)
-                configure_dc_ip_mapping
+                configure_socks_auth
                 ;;
             12)
-                configure_listen_port
+                configure_dc_ip_mapping
                 ;;
             13)
-                configure_pool_size
+                configure_listen_port
                 ;;
             14)
-                configure_mt_link_ip
+                configure_pool_size
                 ;;
             15)
+                configure_mt_link_ip
+                ;;
+            16)
                 if [ "$PROXY_MODE" = "mtproto" ]; then
                     show_mt_qr
                 else
                     show_socks5_qr
                 fi
                 ;;
-            16)
+            17)
                 configure_update_source
                 ;;
-            17)
+            18)
                 remove_all
                 ;;
-            18)
+            19)
                 configure_proxy_mode
                 ;;
-            19)
+            20)
                 configure_mt_secret
                 ;;
-            20)
+            21)
                 configure_mt_upstream_proxies
                 ;;
             *)

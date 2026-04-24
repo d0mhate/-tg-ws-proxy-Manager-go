@@ -17,10 +17,12 @@ PASSWORD ?= $(SOCKS_PASSWORD)
 SECRET ?= $(MT_SECRET)
 IP ?= $(MT_LINK_IP)
 CF_FIRST ?= $(CF_PROXY_FIRST)
+CF_BALANCE ?= $(if $(CF_BALANCE),$(CF_BALANCE),0)
 MT_PLAIN_SECRET ?= $(MT_SECRET)
 MT_DD_SECRET ?= dd$(MT_PLAIN_SECRET)
 MT_EE_DOMAIN_HEX ?= 676f6f676c652e636f6d
 MT_EE_SECRET ?= ee$(MT_PLAIN_SECRET)$(MT_EE_DOMAIN_HEX)
+EE_GOOGLE_SECRET ?= ee$(MT_SECRET)$(shell printf '%s' "$(EE_GOOGLE_DOMAIN)" | xxd -p -c 256 | tr -d '\n')
 
 MANAGER_ENV = \
 	BIN_PATH=$(BIN_PATH) \
@@ -35,6 +37,7 @@ MANAGER_ENV = \
 	$(if $(PASSWORD),SOCKS_PASSWORD=$(PASSWORD),) \
 	$(if $(CF_PROXY),CF_PROXY=$(CF_PROXY),) \
 	$(if $(CF_FIRST),CF_PROXY_FIRST=$(CF_FIRST),) \
+	$(if $(CF_BALANCE),CF_BALANCE=$(CF_BALANCE),) \
 	$(if $(CF_DOMAIN),CF_DOMAIN=$(CF_DOMAIN),) \
 	$(if $(VERBOSE),VERBOSE=$(VERBOSE),)
 
@@ -49,16 +52,18 @@ BIN_FLAGS = \
 	$(if $(USERNAME),--username $(USERNAME) --password $(PASSWORD),) \
 	$(if $(CF_PROXY),--cf-proxy,) \
 	$(if $(CF_FIRST),--cf-proxy-first,) \
+	$(if $(CF_BALANCE),--cf-balance,) \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
 .PHONY: help build bundle menu start start-bg stop restart status run test clean \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
-	link-socks5-auth link-socks5-noauth \
+	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
 	mtproto-plain mtproto-plain-nocf mtproto-dd mtproto-dd-nocf mtproto-ee mtproto-ee-nocf \
 	mtproto-plain-menu mtproto-plain-nocf-menu mtproto-dd-menu mtproto-dd-nocf-menu mtproto-ee-menu mtproto-ee-nocf-menu \
-	mtproto-plain-auth-cf-menu mtproto-hex-auth-cf-menu mtproto-dd-auth-cf-menu mtproto-ee-auth-cf-menu
+	mtproto-plain-auth-cf-menu mtproto-hex-auth-cf-menu mtproto-dd-auth-cf-menu mtproto-ee-auth-cf-menu \
+	menu-mtproto-ee-cf
 
 help:
 	@printf '%s\n' \
@@ -73,6 +78,7 @@ help:
 		'make socks5-auth  - start SOCKS5 with auth from .env' \
 		'make socks5-auth-menu - open menu with SOCKS5 auth preset' \
 		'make socks5-auth-cf-menu - open menu with SOCKS5 auth preset, CF on' \
+		'make socks5-menu-auth-cf - open menu with SOCKS5 auth preset, CF first and balance on' \
 		'make socks5-noauth - start SOCKS5 without auth' \
 		'make socks5-noauth-menu - open menu with SOCKS5 no-auth preset' \
 		'make socks5-auth-nocf - start SOCKS5 with auth, CF off' \
@@ -95,6 +101,7 @@ help:
 		'make mtproto-ee - start MTProto with ee FakeTLS secret for google.com' \
 		'make mtproto-ee-menu - open menu with MTProto ee preset' \
 		'make mtproto-ee-auth-cf-menu - open menu with MTProto ee preset, CF on' \
+		'make menu-mtproto-ee-cf - open menu with MTProto ee preset, CF first and balance on' \
 		'make mtproto-ee-nocf - start MTProto ee, CF off' \
 		'make mtproto-ee-nocf-menu - open menu with MTProto ee preset, CF off' \
 		'make test         - go test ./...' \
@@ -139,6 +146,14 @@ socks5-auth-cf-menu: MODE := socks5
 socks5-auth-cf-menu: CF_PROXY := 1
 socks5-auth-cf-menu: socks5-auth-menu
 
+socks5-menu-auth-cf: MODE := socks5
+socks5-menu-auth-cf: CF_PROXY := 1
+socks5-menu-auth-cf: CF_FIRST := 1
+socks5-menu-auth-cf: CF_BALANCE := 1
+socks5-menu-auth-cf: socks5-auth-menu
+
+menu-socks5-auth-cf: socks5-menu-auth-cf
+
 socks5-noauth: MODE := socks5
 socks5-noauth: USERNAME :=
 socks5-noauth: PASSWORD :=
@@ -152,12 +167,14 @@ socks5-noauth-menu: menu
 socks5-auth-nocf: MODE := socks5
 socks5-auth-nocf: CF_PROXY := 0
 socks5-auth-nocf: CF_FIRST := 0
+socks5-auth-nocf: CF_BALANCE := 0
 socks5-auth-nocf: CF_DOMAIN :=
 socks5-auth-nocf: start
 
 socks5-auth-nocf-menu: MODE := socks5
 socks5-auth-nocf-menu: CF_PROXY := 0
 socks5-auth-nocf-menu: CF_FIRST := 0
+socks5-auth-nocf-menu: CF_BALANCE := 0
 socks5-auth-nocf-menu: CF_DOMAIN :=
 socks5-auth-nocf-menu: menu
 
@@ -166,6 +183,7 @@ socks5-noauth-nocf: USERNAME :=
 socks5-noauth-nocf: PASSWORD :=
 socks5-noauth-nocf: CF_PROXY := 0
 socks5-noauth-nocf: CF_FIRST := 0
+socks5-noauth-nocf: CF_BALANCE := 0
 socks5-noauth-nocf: CF_DOMAIN :=
 socks5-noauth-nocf: start
 
@@ -174,6 +192,7 @@ socks5-noauth-nocf-menu: USERNAME :=
 socks5-noauth-nocf-menu: PASSWORD :=
 socks5-noauth-nocf-menu: CF_PROXY := 0
 socks5-noauth-nocf-menu: CF_FIRST := 0
+socks5-noauth-nocf-menu: CF_BALANCE := 0
 socks5-noauth-nocf-menu: CF_DOMAIN :=
 socks5-noauth-nocf-menu: menu
 
@@ -209,6 +228,7 @@ mtproto-plain-nocf: MODE := mtproto
 mtproto-plain-nocf: SECRET := $(MT_PLAIN_SECRET)
 mtproto-plain-nocf: CF_PROXY := 0
 mtproto-plain-nocf: CF_FIRST := 0
+mtproto-plain-nocf: CF_BALANCE := 0
 mtproto-plain-nocf: CF_DOMAIN :=
 mtproto-plain-nocf: start
 
@@ -216,6 +236,7 @@ mtproto-plain-nocf-menu: MODE := mtproto
 mtproto-plain-nocf-menu: SECRET := $(MT_PLAIN_SECRET)
 mtproto-plain-nocf-menu: CF_PROXY := 0
 mtproto-plain-nocf-menu: CF_FIRST := 0
+mtproto-plain-nocf-menu: CF_BALANCE := 0
 mtproto-plain-nocf-menu: CF_DOMAIN :=
 mtproto-plain-nocf-menu: menu
 
@@ -236,6 +257,7 @@ mtproto-dd-nocf: MODE := mtproto
 mtproto-dd-nocf: SECRET := $(MT_DD_SECRET)
 mtproto-dd-nocf: CF_PROXY := 0
 mtproto-dd-nocf: CF_FIRST := 0
+mtproto-dd-nocf: CF_BALANCE := 0
 mtproto-dd-nocf: CF_DOMAIN :=
 mtproto-dd-nocf: start
 
@@ -243,6 +265,7 @@ mtproto-dd-nocf-menu: MODE := mtproto
 mtproto-dd-nocf-menu: SECRET := $(MT_DD_SECRET)
 mtproto-dd-nocf-menu: CF_PROXY := 0
 mtproto-dd-nocf-menu: CF_FIRST := 0
+mtproto-dd-nocf-menu: CF_BALANCE := 0
 mtproto-dd-nocf-menu: CF_DOMAIN :=
 mtproto-dd-nocf-menu: menu
 
@@ -259,10 +282,18 @@ mtproto-ee-auth-cf-menu: SECRET := $(MT_EE_SECRET)
 mtproto-ee-auth-cf-menu: CF_PROXY := 1
 mtproto-ee-auth-cf-menu: mtproto-ee-menu
 
+menu-mtproto-ee-cf: MODE := mtproto
+menu-mtproto-ee-cf: SECRET := $(EE_GOOGLE_SECRET)
+menu-mtproto-ee-cf: CF_PROXY := 1
+menu-mtproto-ee-cf: CF_FIRST := 1
+menu-mtproto-ee-cf: CF_BALANCE := 1
+menu-mtproto-ee-cf: mtproto-ee-menu
+
 mtproto-ee-nocf: MODE := mtproto
 mtproto-ee-nocf: SECRET := $(MT_EE_SECRET)
 mtproto-ee-nocf: CF_PROXY := 0
 mtproto-ee-nocf: CF_FIRST := 0
+mtproto-ee-nocf: CF_BALANCE := 0
 mtproto-ee-nocf: CF_DOMAIN :=
 mtproto-ee-nocf: start
 
@@ -270,6 +301,7 @@ mtproto-ee-nocf-menu: MODE := mtproto
 mtproto-ee-nocf-menu: SECRET := $(MT_EE_SECRET)
 mtproto-ee-nocf-menu: CF_PROXY := 0
 mtproto-ee-nocf-menu: CF_FIRST := 0
+mtproto-ee-nocf-menu: CF_BALANCE := 0
 mtproto-ee-nocf-menu: CF_DOMAIN :=
 mtproto-ee-nocf-menu: menu
 

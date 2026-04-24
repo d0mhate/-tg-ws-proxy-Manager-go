@@ -36,6 +36,7 @@ type Config struct {
 	DCIPs           map[int]string
 	UseCFProxy      bool
 	UseCFProxyFirst bool
+	UseCFBalance    bool
 	CFDomain        string
 	CFDomains       []string
 	UpstreamProxies []UpstreamProxy

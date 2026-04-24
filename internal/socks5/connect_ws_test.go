@@ -124,11 +124,64 @@ func TestConnectWSCFDialsHostname(t *testing.T) {
 		return nil, io.EOF
 	}
 
-	_, _ = srv.connectWSCF(context.Background(), 2, false)
+	_, _ = srv.connectWSCF(context.Background(), 2, false, srv.cfDomainsForConn())
 	if seenTarget != "kws2.cf.example.com" {
 		t.Fatalf("unexpected CF dial target: %q", seenTarget)
 	}
 	if seenDomain != "kws2.cf.example.com" {
 		t.Fatalf("unexpected CF dial domain: %q", seenDomain)
+	}
+}
+
+func TestCFDomainsForConnBalancesRoundRobin(t *testing.T) {
+	cfBalanceCounter.Store(0)
+	srv := NewServer(config.Config{
+		UseCFProxy:   true,
+		UseCFBalance: true,
+		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
+	}, log.New(io.Discard, "", 0))
+
+	got1 := srv.cfDomainsForConn()
+	got2 := srv.cfDomainsForConn()
+	got3 := srv.cfDomainsForConn()
+
+	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !reflect.DeepEqual(got1, want) {
+		t.Fatalf("unexpected first domain order: got %v want %v", got1, want)
+	}
+	if want := []string{"d2.example.com", "d3.example.com", "d1.example.com"}; !reflect.DeepEqual(got2, want) {
+		t.Fatalf("unexpected second domain order: got %v want %v", got2, want)
+	}
+	if want := []string{"d3.example.com", "d1.example.com", "d2.example.com"}; !reflect.DeepEqual(got3, want) {
+		t.Fatalf("unexpected third domain order: got %v want %v", got3, want)
+	}
+}
+
+func TestConnectWSCFUsesBalancedDomainOrder(t *testing.T) {
+	cfBalanceCounter.Store(0)
+	srv := NewServer(config.Config{
+		PoolSize:     0,
+		UseCFProxy:   true,
+		UseCFBalance: true,
+		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
+	}, log.New(io.Discard, "", 0))
+	var seen []string
+
+	srv.wsDialFunc = func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+		seen = append(seen, domain)
+		return nil, io.EOF
+	}
+
+	_, err := srv.connectWSCF(context.Background(), 2, false, srv.cfDomainsForConn())
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected dial error, got %v", err)
+	}
+
+	want := []string{
+		"kws2.d1.example.com",
+		"kws2.d2.example.com",
+		"kws2.d3.example.com",
+	}
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("unexpected CF dial order: got %v want %v", seen, want)
 	}
 }

@@ -65,6 +65,7 @@ write_settings_config() {
         printf "DC_IPS='%s'\n" "$DC_IPS"
         printf "CF_PROXY='%s'\n" "$CF_PROXY"
         printf "CF_PROXY_FIRST='%s'\n" "$CF_PROXY_FIRST"
+        printf "CF_BALANCE='%s'\n" "$CF_BALANCE"
         printf "CF_DOMAIN='%s'\n" "$CF_DOMAIN"
         printf "PROXY_MODE='%s'\n" "$PROXY_MODE"
         printf "MT_SECRET='%s'\n" "$MT_SECRET"
@@ -116,6 +117,11 @@ load_saved_settings() {
     if [ -z "$CF_PROXY_FIRST_FROM_ENV" ]; then
         cf_proxy_first_value="$(read_config_value CF_PROXY_FIRST 2>/dev/null || true)"
         [ -n "$cf_proxy_first_value" ] && CF_PROXY_FIRST="$cf_proxy_first_value"
+    fi
+
+    if [ -z "$CF_BALANCE_FROM_ENV" ]; then
+        cf_balance_value="$(read_config_value CF_BALANCE 2>/dev/null || true)"
+        [ -n "$cf_balance_value" ] && CF_BALANCE="$cf_balance_value"
     fi
 
     if [ -z "$CF_DOMAIN_FROM_ENV" ]; then

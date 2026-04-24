@@ -7,6 +7,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"tg-ws-proxy/internal/config"
@@ -30,6 +31,8 @@ var wsEnabledDCs = map[int]struct{}{
 	2: {},
 	4: {},
 }
+
+var cfBalanceCounter atomic.Uint64
 
 type Server struct {
 	cfg    config.Config
@@ -220,8 +223,9 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 	tryCloudflare := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
 
 	tryBridgeCF := func() (*wsbridge.Client, error) {
-		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, s.cfg.CFDomains)
-		cfWS, cfErr := s.connectWSCF(ctx, dc, isMedia)
+		domains := s.cfDomainsForConn()
+		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, domains)
+		cfWS, cfErr := s.connectWSCF(ctx, dc, isMedia, domains)
 		if cfErr != nil {
 			s.stats.recordError("ws_cf_connect", cfErr)
 			s.recordVerboseConnFailure(clientAddr, "ws_cf_connect", cfErr)
@@ -268,9 +272,22 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 	return nil, err
 }
 
-func (s *Server) connectWSCF(ctx context.Context, dc int, isMedia bool) (*wsbridge.Client, error) {
+func (s *Server) cfDomainsForConn() []string {
+	if len(s.cfg.CFDomains) <= 1 || !s.cfg.UseCFBalance {
+		return append([]string(nil), s.cfg.CFDomains...)
+	}
+
+	start := int(cfBalanceCounter.Add(1)-1) % len(s.cfg.CFDomains)
+	domains := make([]string, 0, len(s.cfg.CFDomains))
+	for i := range s.cfg.CFDomains {
+		domains = append(domains, s.cfg.CFDomains[(start+i)%len(s.cfg.CFDomains)])
+	}
+	return domains
+}
+
+func (s *Server) connectWSCF(ctx context.Context, dc int, isMedia bool, domains []string) (*wsbridge.Client, error) {
 	var lastErr error
-	for _, domain := range s.cfg.CFDomains {
+	for _, domain := range domains {
 		cfHost := telegram.CFWSDomain(domain, dc)
 		s.debugf("ws cf attempt: dc=%d media=%v cf_host=%s", dc, isMedia, cfHost)
 		dialCfg := s.cfg
