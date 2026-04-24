@@ -7,9 +7,9 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"tg-ws-proxy/internal/cfbalance"
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/telegram"
 	"tg-ws-proxy/internal/wsbridge"
@@ -32,8 +32,6 @@ var wsEnabledDCs = map[int]struct{}{
 	4: {},
 }
 
-var cfBalanceCounter atomic.Uint64
-
 type Server struct {
 	cfg    config.Config
 	logger *log.Logger
@@ -53,6 +51,7 @@ type Server struct {
 	proxyTCPFunc         func(ctx context.Context, conn net.Conn, host string, port int) error
 	proxyTCPWithInitFunc func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error
 	connectWSFunc        func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error)
+	cfBalancer           *cfbalance.Balancer
 }
 
 func NewServer(cfg config.Config, logger *log.Logger) *Server {
@@ -85,6 +84,7 @@ func NewServer(cfg config.Config, logger *log.Logger) *Server {
 			connected: make(map[string]int),
 		},
 		wsDialFunc: wsbridge.Dial,
+		cfBalancer: &cfbalance.Balancer{},
 	}
 	if srv.pool != nil {
 		srv.pool.SetDialFunc(srv.wsDialFunc)
@@ -221,11 +221,11 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 
 func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string) (*wsbridge.Client, error) {
 	tryCloudflare := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
+	cfDomains := s.cfDomainsForConn()
 
 	tryBridgeCF := func() (*wsbridge.Client, error) {
-		domains := s.cfDomainsForConn()
-		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, domains)
-		cfWS, cfErr := s.connectWSCF(ctx, dc, isMedia, domains)
+		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, cfDomains)
+		cfWS, cfErr := s.connectWSCF(ctx, dc, isMedia, cfDomains)
 		if cfErr != nil {
 			s.stats.recordError("ws_cf_connect", cfErr)
 			s.recordVerboseConnFailure(clientAddr, "ws_cf_connect", cfErr)
@@ -273,16 +273,7 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 }
 
 func (s *Server) cfDomainsForConn() []string {
-	if len(s.cfg.CFDomains) <= 1 || !s.cfg.UseCFBalance {
-		return append([]string(nil), s.cfg.CFDomains...)
-	}
-
-	start := int(cfBalanceCounter.Add(1)-1) % len(s.cfg.CFDomains)
-	domains := make([]string, 0, len(s.cfg.CFDomains))
-	for i := range s.cfg.CFDomains {
-		domains = append(domains, s.cfg.CFDomains[(start+i)%len(s.cfg.CFDomains)])
-	}
-	return domains
+	return s.cfBalancer.Domains(s.cfg.CFDomains, s.cfg.UseCFBalance)
 }
 
 func (s *Server) connectWSCF(ctx context.Context, dc int, isMedia bool, domains []string) (*wsbridge.Client, error) {

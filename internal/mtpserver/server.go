@@ -10,9 +10,9 @@ import (
 	"log"
 	"net"
 	"strconv"
-	"sync/atomic"
 	"time"
 
+	"tg-ws-proxy/internal/cfbalance"
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/faketls"
 	"tg-ws-proxy/internal/mtproto"
@@ -30,9 +30,8 @@ type MTServer struct {
 	stats          *statsCollector
 	routeCooldowns *routeCooldowns
 	wsDialFunc     wsbridge.DialFunc
+	cfBalancer     *cfbalance.Balancer
 }
-
-var cfBalanceCounter atomic.Uint64
 
 func NewMTServer(cfg config.Config, secret []byte, logger *log.Logger) *MTServer {
 	srv := &MTServer{
@@ -44,6 +43,7 @@ func NewMTServer(cfg config.Config, secret []byte, logger *log.Logger) *MTServer
 		routeCooldowns: newRouteCooldowns(30*time.Second, 60*time.Second, 5*time.Minute),
 		pool:           wsbridge.NewPool(cfg),
 		wsDialFunc:     wsbridge.Dial,
+		cfBalancer:     &cfbalance.Balancer{},
 	}
 	if srv.pool != nil {
 		srv.pool.SetDialFunc(srv.wsDialFunc)
@@ -66,16 +66,7 @@ func (s *MTServer) isFakeTLS() bool {
 }
 
 func (s *MTServer) cfDomainsForConn() []string {
-	if len(s.cfg.CFDomains) <= 1 || !s.cfg.UseCFBalance {
-		return append([]string(nil), s.cfg.CFDomains...)
-	}
-
-	start := int(cfBalanceCounter.Add(1)-1) % len(s.cfg.CFDomains)
-	domains := make([]string, 0, len(s.cfg.CFDomains))
-	for i := range s.cfg.CFDomains {
-		domains = append(domains, s.cfg.CFDomains[(start+i)%len(s.cfg.CFDomains)])
-	}
-	return domains
+	return s.cfBalancer.Domains(s.cfg.CFDomains, s.cfg.UseCFBalance)
 }
 
 func (s *MTServer) Run(ctx context.Context) error {

@@ -201,7 +201,7 @@ func TestManagerConfigureSocksAuthViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n10\nalice\nsecret\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n11\nalice\nsecret\n\n\n")
 	if err != nil {
 		t.Fatalf("configure socks auth via menu failed: %v\n%s", err, out)
 	}
@@ -230,11 +230,11 @@ func TestManagerConfigureSocksAuthCanBeClearedViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	if out, err := runManagerMenu(t, env, "4\n10\nalice\nsecret\n\n\n"); err != nil {
+	if out, err := runManagerMenu(t, env, "4\n11\nalice\nsecret\n\n\n"); err != nil {
 		t.Fatalf("initial configure socks auth via menu failed: %v\n%s", err, out)
 	}
 
-	out, err := runManagerMenu(t, env, "4\n10\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n11\n\n\n")
 	if err != nil {
 		t.Fatalf("clear socks auth via menu failed: %v\n%s", err, out)
 	}
@@ -263,7 +263,7 @@ func TestManagerConfigureSocksAuthRejectsEmptyPasswordViaAdvancedMenu(t *testing
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n10\nalice\n\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n11\nalice\n\n\n\n")
 	if err != nil {
 		t.Fatalf("configure socks auth with empty password failed unexpectedly: %v\n%s", err, out)
 	}
@@ -297,7 +297,7 @@ func TestManagerConfigureSocksAuthOffersRestartAndAppliesIt(t *testing.T) {
 		t.Fatalf("expected initial background start without auth flags, got args:\n%s", initialArgs)
 	}
 
-	out, err := runManagerMenu(t, env, "4\n10\nalice\nsecret\ny\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n11\nalice\nsecret\ny\n\n\n")
 	if err != nil {
 		t.Fatalf("configure socks auth with restart failed: %v\n%s", err, out)
 	}
@@ -345,7 +345,7 @@ func TestManagerConfigureSocksAuthCanSkipRestartPrompt(t *testing.T) {
 	}
 
 	waitForFile(t, argsFile)
-	out, err := runManagerMenu(t, env, "4\n10\nalice\nsecret\n\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n11\nalice\nsecret\n\n\n\n")
 	if err != nil {
 		t.Fatalf("configure socks auth without restart failed: %v\n%s", err, out)
 	}
@@ -377,7 +377,7 @@ func TestManagerMenuBackgroundStartThenConfigureSocksAuthOffersRestart(t *testin
 	writeCapturingProxyScript(t, binPath)
 	env = append(env, "ARGS_FILE="+argsFile)
 
-	out, err := runManagerMenu(t, env, "2\nb\n\n4\n10\nalice\nsecret\ny\n\n\n")
+	out, err := runManagerMenu(t, env, "2\nb\n\n4\n11\nalice\nsecret\ny\n\n\n")
 	if err != nil {
 		t.Fatalf("menu background start then configure socks auth failed: %v\n%s", err, out)
 	}

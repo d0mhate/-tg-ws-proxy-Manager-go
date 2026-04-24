@@ -134,7 +134,6 @@ func TestConnectWSCFDialsHostname(t *testing.T) {
 }
 
 func TestCFDomainsForConnBalancesRoundRobin(t *testing.T) {
-	cfBalanceCounter.Store(0)
 	srv := NewServer(config.Config{
 		UseCFProxy:   true,
 		UseCFBalance: true,
@@ -157,7 +156,6 @@ func TestCFDomainsForConnBalancesRoundRobin(t *testing.T) {
 }
 
 func TestConnectWSCFUsesBalancedDomainOrder(t *testing.T) {
-	cfBalanceCounter.Store(0)
 	srv := NewServer(config.Config{
 		PoolSize:     0,
 		UseCFProxy:   true,
@@ -183,5 +181,22 @@ func TestConnectWSCFUsesBalancedDomainOrder(t *testing.T) {
 	}
 	if !reflect.DeepEqual(seen, want) {
 		t.Fatalf("unexpected CF dial order: got %v want %v", seen, want)
+	}
+}
+
+func TestCFDomainsForConnUsesPerServerState(t *testing.T) {
+	cfg := config.Config{
+		UseCFProxy:   true,
+		UseCFBalance: true,
+		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
+	}
+	first := NewServer(cfg, log.New(io.Discard, "", 0))
+	second := NewServer(cfg, log.New(io.Discard, "", 0))
+
+	_ = first.cfDomainsForConn()
+	got := second.cfDomainsForConn()
+
+	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected independent domain order: got %v want %v", got, want)
 	}
 }
