@@ -266,6 +266,41 @@ func TestDialDirectWSKeepsNormalTimeoutForDefaultSingleRouteDCs(t *testing.T) {
 	}
 }
 
+func TestCFDomainsForConnBalancesRoundRobin(t *testing.T) {
+	cfBalanceCounter.Store(0)
+	srv := NewMTServer(config.Config{
+		UseCFProxy:   true,
+		UseCFBalance: true,
+		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
+	}, make([]byte, 16), log.New(io.Discard, "", 0))
+
+	got1 := srv.cfDomainsForConn()
+	got2 := srv.cfDomainsForConn()
+	got3 := srv.cfDomainsForConn()
+
+	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !equalStrings(got1, want) {
+		t.Fatalf("unexpected first CF domain order: got %v want %v", got1, want)
+	}
+	if want := []string{"d2.example.com", "d3.example.com", "d1.example.com"}; !equalStrings(got2, want) {
+		t.Fatalf("unexpected second CF domain order: got %v want %v", got2, want)
+	}
+	if want := []string{"d3.example.com", "d1.example.com", "d2.example.com"}; !equalStrings(got3, want) {
+		t.Fatalf("unexpected third CF domain order: got %v want %v", got3, want)
+	}
+}
+
+func equalStrings(got []string, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestTCPFallbackTargetIPReturnsEmptyWithoutConfiguredRoute(t *testing.T) {
 	cfg := config.Default()
 	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))

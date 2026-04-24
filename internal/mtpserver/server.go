@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"tg-ws-proxy/internal/config"
@@ -30,6 +31,8 @@ type MTServer struct {
 	routeCooldowns *routeCooldowns
 	wsDialFunc     wsbridge.DialFunc
 }
+
+var cfBalanceCounter atomic.Uint64
 
 func NewMTServer(cfg config.Config, secret []byte, logger *log.Logger) *MTServer {
 	srv := &MTServer{
@@ -60,6 +63,19 @@ func (s *MTServer) secretKey() []byte {
 // true for 0xee faketls secrets.
 func (s *MTServer) isFakeTLS() bool {
 	return len(s.secret) >= 17 && s.secret[0] == 0xee
+}
+
+func (s *MTServer) cfDomainsForConn() []string {
+	if len(s.cfg.CFDomains) <= 1 || !s.cfg.UseCFBalance {
+		return append([]string(nil), s.cfg.CFDomains...)
+	}
+
+	start := int(cfBalanceCounter.Add(1)-1) % len(s.cfg.CFDomains)
+	domains := make([]string, 0, len(s.cfg.CFDomains))
+	for i := range s.cfg.CFDomains {
+		domains = append(domains, s.cfg.CFDomains[(start+i)%len(s.cfg.CFDomains)])
+	}
+	return domains
 }
 
 func (s *MTServer) Run(ctx context.Context) error {
@@ -188,7 +204,7 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	var selectedDirectRoute directRouteCandidate
 
 	dialCF := func() (*wsbridge.Client, error) {
-		for _, cfDomain := range s.cfg.CFDomains {
+		for _, cfDomain := range s.cfDomainsForConn() {
 			cfHost := cfWSHost(cfDomain, dc)
 			if s.cfg.Verbose {
 				s.agg.Printf("mtproto: CF dial dc=%d → %s", dc, cfHost)

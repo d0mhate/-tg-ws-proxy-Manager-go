@@ -148,6 +148,11 @@ show_telegram_settings() {
     else
         printf "  cf order : fallback\n"
     fi
+    if [ "$CF_BALANCE" = "1" ]; then
+        printf "  cf mode  : balance\n"
+    else
+        printf "  cf mode  : ordered\n"
+    fi
     if [ -z "$CF_DOMAIN" ]; then
         printf "  cf domain: not set\n"
     else
@@ -224,6 +229,11 @@ show_telegram_settings_compact() {
     else
         cf_order="fallback"
     fi
+    if [ "$CF_BALANCE" = "1" ]; then
+        cf_mode="balance"
+    else
+        cf_mode="ordered"
+    fi
     if [ -z "$CF_DOMAIN" ]; then
         cf_domain_part="domain:none"
     else
@@ -235,7 +245,7 @@ show_telegram_settings_compact() {
             cf_domain_part="domain:${_cf_count} set"
         fi
     fi
-    printf "  CF      %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_domain_part"
+    printf "  CF      %s / %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_mode" "$cf_domain_part"
 }
 
 show_update_source_settings() {

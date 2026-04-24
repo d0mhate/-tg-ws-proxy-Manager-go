@@ -271,6 +271,9 @@ _run_proxy_cmd() {
         if [ "$CF_PROXY_FIRST" = "1" ]; then
             set -- "$@" --cf-proxy-first
         fi
+        if [ "$CF_BALANCE" = "1" ]; then
+            set -- "$@" --cf-balance
+        fi
     fi
 
     if [ "$PROXY_MODE" = "mtproto" ] && [ -n "$MT_UPSTREAM_PROXIES" ]; then

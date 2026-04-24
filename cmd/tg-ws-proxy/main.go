@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"flag"
@@ -84,6 +85,7 @@ func parseArgs(args []string) (parsedArgs, error) {
 	var cfDomainFlag string
 	fs.BoolVar(&cfg.UseCFProxy, "cf-proxy", cfg.UseCFProxy, "enable Cloudflare proxy mode for websocket routing")
 	fs.BoolVar(&cfg.UseCFProxyFirst, "cf-proxy-first", cfg.UseCFProxyFirst, "try Cloudflare websocket routing before direct Telegram websocket routing")
+	fs.BoolVar(&cfg.UseCFBalance, "cf-balance", cfg.UseCFBalance, "round-robin across multiple Cloudflare websocket domains while preserving fallback order")
 	fs.StringVar(&cfDomainFlag, "cf-domain", "", "Cloudflare domain(s) for websocket routing, e.g. example.com or domain1.com,domain2.com (required for CF proxy mode)")
 
 	var mode string
@@ -212,6 +214,63 @@ func isValidDomain(domain string) bool {
 	return true
 }
 
+func mtSecretKind(secret []byte) string {
+	switch {
+	case len(secret) >= 17 && secret[0] == 0xee:
+		return "ee-faketls"
+	case len(secret) >= 17 && secret[0] == 0xdd:
+		return "dd-intermediate"
+	case len(secret) == 16:
+		return "hex"
+	default:
+		return "unknown"
+	}
+}
+
+func startupSummary(pa parsedArgs) string {
+	var b bytes.Buffer
+
+	fmt.Fprintf(&b,
+		"startup mode=%s listen=%s:%d verbose=%t buf_kb=%d pool_size=%d pool_max_age=%s pool_refill_delay=%s dial_timeout=%s init_timeout=%s",
+		pa.mode, pa.cfg.Host, pa.cfg.Port, pa.cfg.Verbose, pa.cfg.BufferKB, pa.cfg.PoolSize,
+		pa.cfg.PoolMaxAge, pa.cfg.PoolRefillDelay, pa.cfg.DialTimeout, pa.cfg.InitTimeout,
+	)
+
+	if pa.mode == "socks5" {
+		authMode := "off"
+		if pa.cfg.Username != "" {
+			authMode = "userpass"
+		}
+		fmt.Fprintf(&b, " socks5_auth=%s", authMode)
+	}
+
+	if pa.mode == "mtproto" {
+		fmt.Fprintf(&b, " mtproto_secret=%s", mtSecretKind(pa.secret))
+		if pa.linkIP != "" {
+			fmt.Fprintf(&b, " link_ip=%s", pa.linkIP)
+		}
+	}
+
+	cfOrder := "fallback"
+	if pa.cfg.UseCFProxyFirst {
+		cfOrder = "first"
+	}
+	cfMode := "ordered"
+	if pa.cfg.UseCFBalance {
+		cfMode = "balance"
+	}
+	fmt.Fprintf(&b,
+		" cf_proxy=%t cf_order=%s cf_mode=%s cf_domains=%d",
+		pa.cfg.UseCFProxy, cfOrder, cfMode, len(pa.cfg.CFDomains),
+	)
+	if len(pa.cfg.CFDomains) > 0 {
+		fmt.Fprintf(&b, " cf_domain_list=%s", strings.Join(pa.cfg.CFDomains, ","))
+	}
+
+	fmt.Fprintf(&b, " dc_overrides=%d upstream_mtproto=%d", len(pa.cfg.DCIPs), len(pa.cfg.UpstreamProxies))
+	return b.String()
+}
+
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "qr" {
 		if len(os.Args) < 3 {
@@ -252,10 +311,7 @@ func main() {
 	}
 
 	logger := log.New(os.Stdout, "tg-ws-proxy ", log.LstdFlags)
-	if pa.cfg.Verbose {
-		logger.Printf("starting with verbose logging enabled")
-		logger.Printf("websocket pool size=%d", pa.cfg.PoolSize)
-	}
+	logger.Printf("%s", startupSummary(pa))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
