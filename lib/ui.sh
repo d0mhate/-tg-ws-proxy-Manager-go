@@ -122,6 +122,15 @@ show_telegram_settings() {
             printf "  username : <empty>\n"
         fi
         printf "  password : %s\n" "$(password_display)"
+        if [ -n "$MT_LINK_IP" ]; then
+            printf "  link ip  : %s\n" "$MT_LINK_IP"
+            link="$(socks5_proxy_link 2>/dev/null || true)"
+            if [ -n "$link" ]; then
+                printf "  tg link  : %s\n" "$link"
+            fi
+        else
+            printf "  link ip  : <not set>\n"
+        fi
     fi
     if [ -n "$DC_IPS" ]; then
         printf "  dc map   : %s\n" "$DC_IPS"
@@ -197,6 +206,12 @@ show_telegram_settings_compact() {
             auth_part="no auth"
         fi
         printf "  SOCKS5  %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part" "$pool_part"
+        if [ -n "$MT_LINK_IP" ]; then
+            link="$(socks5_proxy_link 2>/dev/null || true)"
+            if [ -n "$link" ]; then
+                printf "  %s\n" "$link"
+            fi
+        fi
     fi
 
     if [ "$CF_PROXY" = "1" ]; then
