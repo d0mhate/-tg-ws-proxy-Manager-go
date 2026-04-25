@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  go-tests:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 0
@@ -24,8 +24,39 @@ jobs:
           go-version: "1.22"
           cache: false
 
-      - name: run tests
-        run: go test ./...
+      - name: run go tests
+        run: make test-go
+
+  shell-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: run shell tests
+        run: make test-shell
+
+  build-and-release:
+    needs: [go-tests, shell-tests]
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: setup go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.22"
+          cache: false
 
       - name: build binaries
         run: |

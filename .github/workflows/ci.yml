@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  go-tests:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 0
@@ -28,11 +28,26 @@ jobs:
           go-version: "1.22"
           cache: false
 
-      - name: test
-        run: go test ./...
+      - name: run go tests
+        run: make test-go
+
+  shell-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: install bats
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats
+
+      - name: run shell tests
+        run: make test-shell
 
   build-local:
-    needs: test
+    needs: [go-tests, shell-tests]
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 0
@@ -51,7 +66,7 @@ jobs:
         run: go build ./cmd/tg-ws-proxy
 
   build-binaries:
-    needs: test
+    needs: [go-tests, shell-tests]
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 0
