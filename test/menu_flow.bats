@@ -38,7 +38,7 @@ setup() {
 @test "advanced_menu routes remove binary action" {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
-        advanced_menu >/dev/null <<< "17"
+        advanced_menu >/dev/null <<< "18"
     '
 
     [ "$status" -eq 0 ]
