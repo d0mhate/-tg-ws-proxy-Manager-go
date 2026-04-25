@@ -1,6 +1,13 @@
 #!/bin/sh
 
 export COMMAND_MODE="1"
+if [ -n "${BATS_TEST_DIRNAME:-}" ]; then
+    MENU_LIB_DIR=$(CDPATH= cd -- "$BATS_TEST_DIRNAME/../lib" && pwd)
+else
+    MENU_FIXTURE_SELF="${BASH_SOURCE:-$0}"
+    MENU_FIXTURE_DIR=$(CDPATH= cd -- "$(dirname -- "$MENU_FIXTURE_SELF")" && pwd)
+    MENU_LIB_DIR=$(CDPATH= cd -- "$MENU_FIXTURE_DIR/../../lib" && pwd)
+fi
 export TERM="dumb"
 export FORCE_ARROW_UPDATE_SOURCE_PICKER=""
 export FORCE_NUMBERED_UPDATE_SOURCE_PICKER=""
@@ -236,4 +243,4 @@ show_quick_only() { TEST_SHOW_QUICK_ONLY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:
 restart_proxy() { TEST_RESTART_PROXY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/restart_proxy_called"; }
 remove_all() { TEST_REMOVE_ALL_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/remove_all_called"; }
 
-. ./lib/menu.sh
+. "$MENU_LIB_DIR/menu.sh"
