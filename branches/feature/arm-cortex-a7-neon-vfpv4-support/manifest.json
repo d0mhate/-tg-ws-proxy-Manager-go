@@ -1,0 +1,6 @@
+{
+  "branch": "feature/arm-cortex-a7-neon-vfpv4-support",
+  "commit": "23e55a3db673905cf658c2289358aef45fbaae29",
+  "manager_script": "tg-ws-proxy-go.sh",
+  "default_binary": "tg-ws-proxy-openwrt"
+}
