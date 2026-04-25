@@ -99,6 +99,26 @@ teardown() {
   [ "$status" -ne 0 ]
 }
 
+@test "validate_upstream_proxy_entry rejects malformed HOST:PORT:SECRET entry" {
+  run bash -c '
+    source ./lib/config.sh
+    validate_upstream_proxy_entry "bad-entry"
+  '
+  [ "$status" -ne 0 ]
+
+  run bash -c '
+    source ./lib/config.sh
+    validate_upstream_proxy_entry "host.example.com:70000:00112233445566778899aabbccddeeff"
+  '
+  [ "$status" -ne 0 ]
+
+  run bash -c '
+    source ./lib/config.sh
+    validate_upstream_proxy_entry "host.example.com:443:nothex"
+  '
+  [ "$status" -ne 0 ]
+}
+
 @test "mt_proxy_link builds proxy link for plain and dd secret" {
   run bash -c '
     source ./lib/config.sh
