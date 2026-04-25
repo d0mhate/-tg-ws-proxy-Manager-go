@@ -57,7 +57,7 @@ BIN_FLAGS = \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
-.PHONY: help build bundle menu start start-bg stop restart status run test test-go test-shell clean install-git-hooks \
+.PHONY: help build bundle menu start start-bg stop restart status run test test-go test-shell test-shell-file clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
 	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
@@ -107,6 +107,7 @@ help:
 		'make mtproto-ee-nocf-menu - open menu with MTProto ee preset, CF off' \
 		'make test-go      - go test ./...' \
 		'make test-shell   - run bats tests from ./test' \
+		'make test-shell-file TEST=test/menu.bats - run one bats file' \
 		'make test         - run Go and bats tests' \
 		'make install-git-hooks - enable local pre-commit hook that runs make test' \
 		'' \
@@ -316,6 +317,10 @@ test-go:
 
 test-shell:
 	$(BATS) test
+
+test-shell-file:
+	@test -n "$(TEST)" || { printf '%s\n' 'TEST is required, for example: make test-shell-file TEST=test/menu.bats'; exit 1; }
+	$(BATS) "$(TEST)"
 
 # if need to uninstall (git config --local --unset core.hooksPath))
 install-git-hooks:
