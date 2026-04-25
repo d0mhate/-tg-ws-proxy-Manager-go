@@ -38,10 +38,14 @@ jobs:
       - name: checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - name: install bats
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bats
+      - name: setup bats
+        uses: bats-core/bats-action@5b1e60c2ee94cb1b44a616ea4b1f466f9d6e38ef
+        with:
+          bats-version: "1.13.0"
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
 
       - name: run shell tests
         run: make test-shell
