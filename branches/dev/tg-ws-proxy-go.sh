@@ -198,7 +198,7 @@ binary_name_for_arch() {
         x86_64)
             printf "tg-ws-proxy-openwrt-x86_64"
             ;;
-        arm_cortex-a7|arm_cortex-a9|arm_cortex-a15_neon-vfpv4)
+        arm_cortex-a7*|arm_cortex-a9*|arm_cortex-a15*)
             printf "tg-ws-proxy-openwrt-armv7"
             ;;
         *)
@@ -248,7 +248,7 @@ generic_binary_name() {
 is_supported_openwrt_arch() {
     arch="$1"
     case "$arch" in
-        mipsel_24kc|mips_24kc|aarch64*|x86_64|arm_cortex-a7|arm_cortex-a9|arm_cortex-a15_neon-vfpv4)
+        mipsel_24kc|mips_24kc|aarch64*|x86_64|arm_cortex-a7*|arm_cortex-a9*|arm_cortex-a15*)
             return 0
             ;;
     esac
