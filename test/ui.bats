@@ -520,7 +520,7 @@ pause() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"SOCKS5  127.0.0.1:1080  no auth  dc:default  pool:8"* ]]
-    [[ "$output" == *"CF      off / fallback / domain:none"* ]]
+    [[ "$output" == *"CF      off / fallback / ordered / domain:none"* ]]
 }
 
 @test "show_telegram_settings_compact socks5 with username and password" {
@@ -540,7 +540,7 @@ pause() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"SOCKS5  127.0.0.1:1080  user:user/<set>  dc:custom  pool:16"* ]]
     [[ "$output" == *"tg://socks?server=8.8.8.8"* ]]
-    [[ "$output" == *"CF      on / first / domain:2 set"* ]]
+    [[ "$output" == *"CF      on / first / ordered / domain:2 set"* ]]
 }
 
 @test "show_telegram_settings_compact socks5 with username only" {
