@@ -422,8 +422,49 @@ stop_proxy() {
 }
 
 restart_proxy() {
-    stop_running >/dev/null 2>&1 || true
-    start_proxy
+    if ! auth_settings_valid; then
+        show_header
+        show_invalid_auth_settings
+        pause
+        return 1
+    fi
+
+    bin_path="$(runtime_bin_path 2>/dev/null || true)"
+    if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
+        show_header
+        printf "%s%s binary is not installed%s\n" "$C_RED" "$APP_NAME" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    had_running="0"
+    if is_running; then
+        had_running="1"
+    fi
+
+    if port_in_use && [ "$had_running" != "1" ]; then
+        prompt_stop_detected_proxy_for_busy_port || return 1
+    fi
+
+    show_header
+    show_environment_checks
+    printf "\n"
+
+    if restart_running_proxy_for_updated_settings; then
+        if [ "$had_running" = "1" ]; then
+            printf "%sProxy restarted in background%s\n" "$C_GREEN" "$C_RESET"
+        else
+            printf "%sProxy started in background%s\n" "$C_GREEN" "$C_RESET"
+        fi
+        printf "Logs will not be printed in this session.\n"
+        printf "Bind: %s:%s\n" "$LISTEN_HOST" "$LISTEN_PORT"
+        pause
+        return 0
+    fi
+
+    printf "%sProxy restart failed%s\n" "$C_RED" "$C_RESET"
+    pause
+    return 1
 }
 
 restart_running_proxy_for_updated_settings() {
@@ -438,13 +479,28 @@ restart_running_proxy_for_updated_settings() {
     child_pid="$(run_binary_background)" || return 1
     mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
     printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
-    sleep 1
 
-    if kill -0 "$child_pid" 2>/dev/null; then
-        return 0
+    _restart_check_i=0
+    _restart_check_max=20
+    _restart_sleep_mode="sleep"
+    if command -v usleep >/dev/null 2>&1; then
+        _restart_sleep_mode="usleep"
+    else
+        _restart_check_max=2
     fi
 
-    wait "$child_pid" 2>/dev/null
+    while [ "$_restart_check_i" -lt "$_restart_check_max" ]; do
+        if kill -0 "$child_pid" 2>/dev/null; then
+            return 0
+        fi
+        _restart_check_i=$((_restart_check_i + 1))
+        if [ "$_restart_sleep_mode" = "usleep" ]; then
+            usleep 100000
+        else
+            sleep 1
+        fi
+    done
+
     rm -f "$PID_FILE"
     return 1
 }

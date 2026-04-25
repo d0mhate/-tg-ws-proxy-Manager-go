@@ -40,6 +40,41 @@ func TestManagerAdvancedShowQuickCommandsViaMenu(t *testing.T) {
 	}
 }
 
+func TestManagerAdvancedRestartProxyRestartsInBackground(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "PROXY_TEST_MODE", "hold")
+	binPath := envValue(env, "BIN_PATH")
+	if binPath == "" {
+		t.Fatal("BIN_PATH not found in env")
+	}
+	writeModeAwareProxyScript(t, binPath)
+
+	if out, err := runManager(t, env, "start-background"); err != nil {
+		t.Fatalf("initial start-background failed: %v\n%s", err, out)
+	}
+	firstPID := readTrimmed(t, filepath.Join(envValue(env, "INSTALL_DIR"), "pid"))
+
+	out, err := runManagerMenu(t, env, "4\n5\n\n\n")
+	if err != nil {
+		t.Fatalf("advanced restart failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Proxy restarted in background") {
+		t.Fatalf("expected background restart confirmation, got:\n%s", out)
+	}
+	if strings.Contains(out, "Starting tg-ws-proxy in terminal") {
+		t.Fatalf("expected advanced restart to avoid terminal-attached start, got:\n%s", out)
+	}
+
+	secondPID := readTrimmed(t, filepath.Join(envValue(env, "INSTALL_DIR"), "pid"))
+	if secondPID == "" || secondPID == firstPID {
+		t.Fatalf("expected a new pid after advanced restart, first=%q second=%q\n%s", firstPID, secondPID, out)
+	}
+
+	stopOut, stopErr := runManager(t, env, "stop")
+	if stopErr != nil {
+		t.Fatalf("stop after advanced restart failed: %v\n%s", stopErr, stopOut)
+	}
+}
+
 func TestManagerAdvancedRemoveResetsMenuState(t *testing.T) {
 	env := managerEnv(t)
 	binPath := envValue(env, "BIN_PATH")
