@@ -118,12 +118,17 @@ setup() {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
         validate_upstream_proxy_entry() { return 1; }
-        configure_mt_upstream_proxies 2>&1 <<< $'"'"'"'"'"'"'"'1\nbad-entry\n'"'"'"'"'"'"'"'
+        configure_mt_upstream_proxies >"$MENU_FIXTURE_TMPDIR/upstream_invalid.out" 2>&1 <<< $'"'"'"'"'"'"'"'1\nbad-entry\n'"'"'"'"'"'"'"'
+        if grep -Fq "Invalid entry. Expected HOST:PORT:SECRET" "$MENU_FIXTURE_TMPDIR/upstream_invalid.out"; then
+            printf "HAS_INVALID=1\n"
+        else
+            printf "HAS_INVALID=0\n"
+        fi
         printf "\nLIST=%s\n" "$MT_UPSTREAM_PROXIES"
     '
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Invalid entry. Expected HOST:PORT:SECRET"* ]]
+    [[ "$output" == *"HAS_INVALID=1"* ]]
     [[ "$output" == *"LIST="* ]]
 }
 
