@@ -1,0 +1,6 @@
+{
+  "branch": "feature/git-hooks-etc",
+  "commit": "8bc629a83b61447c00762069152405c81bd4f5bd",
+  "manager_script": "tg-ws-proxy-go.sh",
+  "default_binary": "tg-ws-proxy-openwrt"
+}
