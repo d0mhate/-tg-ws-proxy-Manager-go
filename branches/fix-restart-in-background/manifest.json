@@ -1,6 +1,6 @@
 {
   "branch": "fix-restart-in-background",
-  "commit": "a2af25aa2030ee44a4742a866e8caa5fc103f9d1",
+  "commit": "81576f5afd40b1d158371d0e47e32e9e949a5006",
   "manager_script": "tg-ws-proxy-go.sh",
   "default_binary": "tg-ws-proxy-openwrt"
 }
