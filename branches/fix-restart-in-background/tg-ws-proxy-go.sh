@@ -1514,12 +1514,24 @@ restart_running_proxy_for_updated_settings() {
     printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
 
     _restart_check_i=0
-    while [ "$_restart_check_i" -lt 20 ]; do
+    _restart_check_max=20
+    _restart_sleep_mode="sleep"
+    if command -v usleep >/dev/null 2>&1; then
+        _restart_sleep_mode="usleep"
+    else
+        _restart_check_max=2
+    fi
+
+    while [ "$_restart_check_i" -lt "$_restart_check_max" ]; do
         if kill -0 "$child_pid" 2>/dev/null; then
             return 0
         fi
         _restart_check_i=$((_restart_check_i + 1))
-        sleep 0.1
+        if [ "$_restart_sleep_mode" = "usleep" ]; then
+            usleep 100000
+        else
+            sleep 1
+        fi
     done
 
     rm -f "$PID_FILE"
