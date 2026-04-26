@@ -118,6 +118,9 @@ func (s *MTServer) bridgeRelay(
 	case <-ctx.Done():
 	case <-errCh:
 	}
+
+	_ = client.Close()
+	_ = remote.Close()
 }
 
 func (s *MTServer) bridgeTCPFallback(

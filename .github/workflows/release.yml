@@ -21,7 +21,7 @@ jobs:
       - name: setup go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache: false
 
       - name: run go tests
@@ -59,7 +59,7 @@ jobs:
       - name: setup go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache: false
 
       - name: build binaries
@@ -120,7 +120,7 @@ jobs:
       - name: setup go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache: false
 
       - name: build universal darwin binary

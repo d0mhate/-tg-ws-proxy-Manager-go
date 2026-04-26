@@ -3,6 +3,7 @@ SHELL := /bin/sh
 BIN := tg-ws-proxy
 SCRIPT := tg-ws-proxy-go.sh
 BUNDLE := build/tg-ws-proxy-go.sh
+GO_LOCAL_CACHE := $(CURDIR)/.gocache
 comma := ,
 BATS ?= bats
 BATS_FLAGS ?= --print-output-on-failure
@@ -20,7 +21,9 @@ PASSWORD ?= $(SOCKS_PASSWORD)
 SECRET ?= $(MT_SECRET)
 IP ?= $(MT_LINK_IP)
 CF_FIRST ?= $(CF_PROXY_FIRST)
-CF_BALANCE ?= $(if $(CF_BALANCE),$(CF_BALANCE),0)
+ifeq ($(strip $(value CF_BALANCE)),)
+CF_BALANCE := 0
+endif
 MT_PLAIN_SECRET ?= $(MT_SECRET)
 MT_DD_SECRET ?= dd$(MT_PLAIN_SECRET)
 MT_EE_DOMAIN_HEX ?= 676f6f676c652e636f6d
@@ -59,13 +62,13 @@ BIN_FLAGS = \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
-.PHONY: help build bundle menu start start-bg stop restart status run test test-go test-shell test-shell-verbose test-shell-ci-local test-shell-file clean install-git-hooks \
+.PHONY: help build bundle menu start start-bg stop restart status run test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
 	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
 	mtproto-plain mtproto-plain-nocf mtproto-dd mtproto-dd-nocf mtproto-ee mtproto-ee-nocf \
 	mtproto-plain-menu mtproto-plain-nocf-menu mtproto-dd-menu mtproto-dd-nocf-menu mtproto-ee-menu mtproto-ee-nocf-menu \
-	mtproto-plain-auth-cf-menu mtproto-hex-auth-cf-menu mtproto-dd-auth-cf-menu mtproto-ee-auth-cf-menu \
+	mtproto-plain-auth-cf-menu mtproto-plain-auth-nocf-menu mtproto-hex-auth-cf-menu mtproto-dd-auth-cf-menu mtproto-dd-auth-nocf-menu mtproto-ee-auth-cf-menu mtproto-ee-auth-nocf-menu \
 	menu-mtproto-ee-cf
 
 help:
@@ -93,21 +96,26 @@ help:
 		'make mtproto-plain - start MTProto with current plain hex secret from .env' \
 		'make mtproto-plain-menu - open menu with MTProto plain preset' \
 		'make mtproto-plain-auth-cf-menu - open menu with MTProto plain hex preset, CF on' \
+		'make mtproto-plain-auth-nocf-menu - open menu with MTProto plain hex preset, CF off' \
 		'make mtproto-hex-auth-cf-menu - alias for mtproto-plain-auth-cf-menu' \
 		'make mtproto-plain-nocf - start MTProto plain hex, CF off' \
 		'make mtproto-plain-nocf-menu - open menu with MTProto plain preset, CF off' \
 		'make mtproto-dd - start MTProto with dd secret' \
 		'make mtproto-dd-menu - open menu with MTProto dd preset' \
 		'make mtproto-dd-auth-cf-menu - open menu with MTProto dd preset, CF on' \
+		'make mtproto-dd-auth-nocf-menu - open menu with MTProto dd preset, CF off' \
 		'make mtproto-dd-nocf - start MTProto dd, CF off' \
 		'make mtproto-dd-nocf-menu - open menu with MTProto dd preset, CF off' \
 		'make mtproto-ee - start MTProto with ee FakeTLS secret for google.com' \
 		'make mtproto-ee-menu - open menu with MTProto ee preset' \
 		'make mtproto-ee-auth-cf-menu - open menu with MTProto ee preset, CF on' \
+		'make mtproto-ee-auth-nocf-menu - open menu with MTProto ee preset, CF off' \
 		'make menu-mtproto-ee-cf - open menu with MTProto ee preset, CF first and balance on' \
 		'make mtproto-ee-nocf - start MTProto ee, CF off' \
 		'make mtproto-ee-nocf-menu - open menu with MTProto ee preset, CF off' \
 		'make test-go      - go test ./...' \
+		'make test-go-leak - run Go tests with goleak checks enabled' \
+		'make test-go-compile - compile Go packages and tests without running test cases' \
 		'make test-shell   - run bats tests from ./test' \
 		'make test-shell-verbose - run bats tests with verbose output' \
 		'make test-shell-ci-local - run shell tests in local ubuntu docker like CI' \
@@ -146,16 +154,20 @@ run: build
 	./$(BIN) $(BIN_FLAGS)
 
 socks5-auth: MODE := socks5
+socks5-auth: SECRET :=
 socks5-auth: start
 
 socks5-auth-menu: MODE := socks5
+socks5-auth-menu: SECRET :=
 socks5-auth-menu: menu
 
 socks5-auth-cf-menu: MODE := socks5
+socks5-auth-cf-menu: SECRET :=
 socks5-auth-cf-menu: CF_PROXY := 1
 socks5-auth-cf-menu: socks5-auth-menu
 
 socks5-menu-auth-cf: MODE := socks5
+socks5-menu-auth-cf: SECRET :=
 socks5-menu-auth-cf: CF_PROXY := 1
 socks5-menu-auth-cf: CF_FIRST := 1
 socks5-menu-auth-cf: CF_BALANCE := 1
@@ -164,16 +176,19 @@ socks5-menu-auth-cf: socks5-auth-menu
 menu-socks5-auth-cf: socks5-menu-auth-cf
 
 socks5-noauth: MODE := socks5
+socks5-noauth: SECRET :=
 socks5-noauth: USERNAME :=
 socks5-noauth: PASSWORD :=
 socks5-noauth: start
 
 socks5-noauth-menu: MODE := socks5
+socks5-noauth-menu: SECRET :=
 socks5-noauth-menu: USERNAME :=
 socks5-noauth-menu: PASSWORD :=
 socks5-noauth-menu: menu
 
 socks5-auth-nocf: MODE := socks5
+socks5-auth-nocf: SECRET :=
 socks5-auth-nocf: CF_PROXY := 0
 socks5-auth-nocf: CF_FIRST := 0
 socks5-auth-nocf: CF_BALANCE := 0
@@ -181,6 +196,7 @@ socks5-auth-nocf: CF_DOMAIN :=
 socks5-auth-nocf: start
 
 socks5-auth-nocf-menu: MODE := socks5
+socks5-auth-nocf-menu: SECRET :=
 socks5-auth-nocf-menu: CF_PROXY := 0
 socks5-auth-nocf-menu: CF_FIRST := 0
 socks5-auth-nocf-menu: CF_BALANCE := 0
@@ -188,6 +204,7 @@ socks5-auth-nocf-menu: CF_DOMAIN :=
 socks5-auth-nocf-menu: menu
 
 socks5-noauth-nocf: MODE := socks5
+socks5-noauth-nocf: SECRET :=
 socks5-noauth-nocf: USERNAME :=
 socks5-noauth-nocf: PASSWORD :=
 socks5-noauth-nocf: CF_PROXY := 0
@@ -197,6 +214,7 @@ socks5-noauth-nocf: CF_DOMAIN :=
 socks5-noauth-nocf: start
 
 socks5-noauth-nocf-menu: MODE := socks5
+socks5-noauth-nocf-menu: SECRET :=
 socks5-noauth-nocf-menu: USERNAME :=
 socks5-noauth-nocf-menu: PASSWORD :=
 socks5-noauth-nocf-menu: CF_PROXY := 0
@@ -206,6 +224,7 @@ socks5-noauth-nocf-menu: CF_DOMAIN :=
 socks5-noauth-nocf-menu: menu
 
 link-socks5-auth: MODE := socks5
+link-socks5-auth: SECRET :=
 link-socks5-auth:
 	@printf 'tg://socks?server=%s&port=%s%s%s\n' \
 		'$(IP)' '$(PORT)' \
@@ -213,6 +232,7 @@ link-socks5-auth:
 		'$(if $(PASSWORD),&pass=$(PASSWORD),)'
 
 link-socks5-noauth: MODE := socks5
+link-socks5-noauth: SECRET :=
 link-socks5-noauth: USERNAME :=
 link-socks5-noauth: PASSWORD :=
 link-socks5-noauth:
@@ -230,6 +250,8 @@ mtproto-plain-auth-cf-menu: MODE := mtproto
 mtproto-plain-auth-cf-menu: SECRET := $(MT_PLAIN_SECRET)
 mtproto-plain-auth-cf-menu: CF_PROXY := 1
 mtproto-plain-auth-cf-menu: mtproto-plain-menu
+
+mtproto-plain-auth-nocf-menu: mtproto-plain-nocf-menu
 
 mtproto-hex-auth-cf-menu: mtproto-plain-auth-cf-menu
 
@@ -262,6 +284,8 @@ mtproto-dd-auth-cf-menu: SECRET := $(MT_DD_SECRET)
 mtproto-dd-auth-cf-menu: CF_PROXY := 1
 mtproto-dd-auth-cf-menu: mtproto-dd-menu
 
+mtproto-dd-auth-nocf-menu: mtproto-dd-nocf-menu
+
 mtproto-dd-nocf: MODE := mtproto
 mtproto-dd-nocf: SECRET := $(MT_DD_SECRET)
 mtproto-dd-nocf: CF_PROXY := 0
@@ -291,6 +315,8 @@ mtproto-ee-auth-cf-menu: SECRET := $(MT_EE_SECRET)
 mtproto-ee-auth-cf-menu: CF_PROXY := 1
 mtproto-ee-auth-cf-menu: mtproto-ee-menu
 
+mtproto-ee-auth-nocf-menu: mtproto-ee-nocf-menu
+
 menu-mtproto-ee-cf: MODE := mtproto
 menu-mtproto-ee-cf: SECRET := $(EE_GOOGLE_SECRET)
 menu-mtproto-ee-cf: CF_PROXY := 1
@@ -318,6 +344,12 @@ test: test-go test-shell
 
 test-go:
 	go test ./...
+
+test-go-leak:
+	GOCACHE=$(GO_LOCAL_CACHE) go test . ./cmd/tg-ws-proxy ./internal/...
+
+test-go-compile:
+	GOCACHE=$(GO_LOCAL_CACHE) go test -run TestNonExistent ./...
 
 test-shell:
 	$(BATS) $(BATS_FLAGS) test

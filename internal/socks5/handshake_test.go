@@ -2,10 +2,12 @@ package socks5
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
 	"testing"
+	"time"
 
 	"tg-ws-proxy/internal/config"
 )
@@ -195,5 +197,31 @@ func TestHandshakeRejectsInvalidUsernamePassword(t *testing.T) {
 	}
 	if clientErr := <-errCh; clientErr != nil {
 		t.Fatalf("client side of handshake failed: %v", clientErr)
+	}
+}
+
+func TestReadWithContextReturnsOnCancelWithoutLeakingReader(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	resultCh := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 8)
+		_, err := readWithContext(ctx, serverConn, buf, 0)
+		resultCh <- err
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-resultCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readWithContext did not return after context cancellation")
 	}
 }

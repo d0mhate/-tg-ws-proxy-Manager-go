@@ -222,29 +222,27 @@ func buildReply(status byte, host string, port int) ([]byte, error) {
 }
 
 func readWithContext(ctx context.Context, conn net.Conn, buf []byte, timeout time.Duration) (int, error) {
+	cancelDone := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = conn.SetReadDeadline(time.Now())
+		close(cancelDone)
+	})
 	if timeout > 0 {
 		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 	}
+	n, err := io.ReadFull(conn, buf)
 
-	type readResult struct {
-		n   int
-		err error
+	if !stopCancel() {
+		<-cancelDone
 	}
-	done := make(chan readResult, 1)
-	go func() {
-		n, err := io.ReadFull(conn, buf)
-		done <- readResult{n: n, err: err}
-	}()
+	if timeout > 0 || ctx.Err() != nil {
+		_ = conn.SetReadDeadline(time.Time{})
+	}
 
-	select {
-	case <-ctx.Done():
+	if ctx.Err() != nil {
 		return 0, ctx.Err()
-	case result := <-done:
-		if timeout > 0 {
-			_ = conn.SetReadDeadline(time.Time{})
-		}
-		return result.n, result.err
 	}
+	return n, err
 }
 
 func normalizeEOF(err error) error {

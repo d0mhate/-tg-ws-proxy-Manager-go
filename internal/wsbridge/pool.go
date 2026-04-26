@@ -199,7 +199,7 @@ func (p *Pool) refill(key poolKey, targetIP string, domains []string) {
 	for {
 		needed, stale := p.trimBucket(key)
 		for _, client := range stale {
-			go client.Close()
+			_ = client.Close()
 		}
 
 		if needed <= 0 {

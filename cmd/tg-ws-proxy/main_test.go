@@ -64,6 +64,17 @@ func TestParseArgsOverridesHostAndPort(t *testing.T) {
 	}
 }
 
+func TestParseArgsPprofAddr(t *testing.T) {
+	pa, err := parseArgs([]string{"--pprof-addr", "127.0.0.1:6060"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	if pa.cfg.PprofAddr != "127.0.0.1:6060" {
+		t.Fatalf("unexpected pprof addr: %q", pa.cfg.PprofAddr)
+	}
+}
+
 func TestParseArgsPoolTuning(t *testing.T) {
 	pa, err := parseArgs([]string{"--pool-max-age", "90s", "--pool-refill-delay", "500ms"})
 	if err != nil {
@@ -283,7 +294,7 @@ func TestStartupSummaryIncludesMTProtoSecretKind(t *testing.T) {
 }
 
 func TestStartupSummaryCanBeLogged(t *testing.T) {
-	pa, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com"})
+	pa, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com", "--pprof-addr", "127.0.0.1:6060"})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -294,5 +305,8 @@ func TestStartupSummaryCanBeLogged(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "mode=socks5") {
 		t.Fatalf("expected startup summary to be loggable, got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "pprof_addr=127.0.0.1:6060") {
+		t.Fatalf("expected startup summary to include pprof addr, got %q", buf.String())
 	}
 }

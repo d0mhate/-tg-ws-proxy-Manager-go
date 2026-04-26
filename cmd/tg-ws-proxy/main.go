@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
 	"rsc.io/qr"
@@ -72,6 +77,7 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs := flag.NewFlagSet("tg-ws-proxy", flag.ContinueOnError)
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "listen host")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "listen port")
+	fs.StringVar(&cfg.PprofAddr, "pprof-addr", cfg.PprofAddr, "enable pprof HTTP server on this address, for example 127.0.0.1:6060")
 	fs.StringVar(&cfg.Username, "username", cfg.Username, "SOCKS5 username auth")
 	fs.StringVar(&cfg.Password, "password", cfg.Password, "SOCKS5 password auth")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
@@ -235,6 +241,9 @@ func startupSummary(pa parsedArgs) string {
 		pa.mode, pa.cfg.Host, pa.cfg.Port, pa.cfg.Verbose, pa.cfg.BufferKB, pa.cfg.PoolSize,
 		pa.cfg.PoolMaxAge, pa.cfg.PoolRefillDelay, pa.cfg.DialTimeout, pa.cfg.InitTimeout,
 	)
+	if pa.cfg.PprofAddr != "" {
+		fmt.Fprintf(&b, " pprof_addr=%s", pa.cfg.PprofAddr)
+	}
 
 	if pa.mode == "socks5" {
 		authMode := "off"
@@ -269,6 +278,48 @@ func startupSummary(pa parsedArgs) string {
 
 	fmt.Fprintf(&b, " dc_overrides=%d upstream_mtproto=%d", len(pa.cfg.DCIPs), len(pa.cfg.UpstreamProxies))
 	return b.String()
+}
+
+func startPprofServer(ctx context.Context, addr string, logger *log.Logger) error {
+	if addr == "" {
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen pprof on %s: %w", addr, err)
+	}
+
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Printf("pprof shutdown error: %v", err)
+		}
+	}()
+
+	go func() {
+		logger.Printf("pprof listening on http://%s/debug/pprof/", addr)
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Printf("pprof server stopped with error: %v", err)
+		}
+	}()
+
+	return nil
 }
 
 func main() {
@@ -315,6 +366,9 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if err := startPprofServer(ctx, pa.cfg.PprofAddr, logger); err != nil {
+		logger.Fatalf("pprof init failed: %v", err)
+	}
 
 	if pa.mode == "mtproto" {
 		if pa.linkIP != "" {

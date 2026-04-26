@@ -359,8 +359,12 @@ func bridgeTCP(ctx context.Context, a net.Conn, b net.Conn) error {
 
 	select {
 	case <-ctx.Done():
+		_ = a.Close()
+		_ = b.Close()
 		return ctx.Err()
 	case err := <-errCh:
+		_ = a.Close()
+		_ = b.Close()
 		return err
 	}
 }

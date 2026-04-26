@@ -81,6 +81,11 @@ func (s *MTServer) Run(ctx context.Context) error {
 			s.pool.Close()
 		}
 	}()
+	defer func() {
+		if s.agg != nil {
+			s.agg.Flush()
+		}
+	}()
 
 	s.logger.Printf("mtproto proxy listening on %s", addr)
 	if s.pool != nil {
@@ -129,7 +134,6 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 			if s.cfg.Verbose {
 				s.agg.Printf("mtproto: FakeTLS ClientHello invalid from %s", conn.RemoteAddr())
 			}
-			go io.Copy(io.Discard, conn)
 			return
 		}
 		if err := faketls.SendFakeServerHello(conn, key, clientRandom); err != nil {
@@ -159,8 +163,6 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 		if s.cfg.Verbose {
 			s.agg.Printf("mtproto: bad handshake: %v", err)
 		}
-		// wrong secret: drain silently so scanners get less signal.
-		go io.Copy(io.Discard, conn)
 		return
 	}
 
@@ -370,6 +372,9 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	case <-ctx.Done():
 	case <-errCh:
 	}
+
+	_ = ws.Close()
+	_ = dataConn.Close()
 }
 
 // connect to one upstream mtproto proxy and do its handshake.

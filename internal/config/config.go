@@ -23,6 +23,7 @@ type UpstreamProxy struct {
 type Config struct {
 	Host            string
 	Port            int
+	PprofAddr       string
 	Username        string
 	Password        string
 	Verbose         bool
@@ -46,6 +47,7 @@ func Default() Config {
 	return Config{
 		Host:            "127.0.0.1",
 		Port:            1080,
+		PprofAddr:       "",
 		Verbose:         false,
 		BufferKB:        256,
 		PoolSize:        4,

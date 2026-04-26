@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,11 +16,23 @@ import (
 	"tg-ws-proxy/internal/wsbridge"
 )
 
+func newTestServer(t *testing.T, cfg config.Config) *MTServer {
+	t.Helper()
+
+	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	t.Cleanup(func() {
+		if srv.pool != nil {
+			srv.pool.Close()
+		}
+	})
+	return srv
+}
+
 func TestEffectiveDCUsesExplicitOverride(t *testing.T) {
 	cfg := config.Default()
 	cfg.DCIPs[203] = "91.105.192.100"
 
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	if got := srv.effectiveDC(203); got != 203 {
 		t.Fatalf("expected explicit dc203 target to be preserved, got %d", got)
@@ -30,7 +43,7 @@ func TestEffectiveDCFallsBackToNormalizedDC(t *testing.T) {
 	cfg := config.Default()
 	delete(cfg.DCIPs, 203)
 
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	if got := srv.effectiveDC(203); got != 2 {
 		t.Fatalf("expected dc203 to normalize to dc2 without explicit override, got %d", got)
@@ -38,7 +51,7 @@ func TestEffectiveDCFallsBackToNormalizedDC(t *testing.T) {
 }
 
 func TestWSDomainDCNormalizesDC203(t *testing.T) {
-	srv := NewMTServer(config.Default(), make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, config.Default())
 
 	if got := srv.wsDomainDC(203); got != 2 {
 		t.Fatalf("expected dc203 websocket domains to use dc2, got %d", got)
@@ -46,7 +59,7 @@ func TestWSDomainDCNormalizesDC203(t *testing.T) {
 }
 
 func TestDialDirectWSIncludesDCInMissingTargetIPErrors(t *testing.T) {
-	srv := NewMTServer(config.Default(), make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, config.Default())
 
 	_, _, err := srv.dialDirectWS(context.Background(), 203, false, directRouteCandidate{
 		targetDC:   203,
@@ -64,7 +77,7 @@ func TestDirectRouteCandidatesUseExplicitTargetWithNormalizedWSDomainForDC203(t 
 	cfg := config.Default()
 	cfg.DCIPs[203] = "91.105.192.100"
 
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 	routes := srv.directRouteCandidates(203)
 
 	if len(routes) != 2 {
@@ -82,7 +95,7 @@ func TestDirectRouteCandidatesDedupSameEndpointForDC203(t *testing.T) {
 	cfg := config.Default()
 	cfg.DCIPs[203] = "149.154.167.220"
 
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 	routes := srv.directRouteCandidates(203)
 
 	if len(routes) != 1 {
@@ -97,7 +110,7 @@ func TestDirectRouteCandidatesFallbackToNormalizedTargetWithoutExplicitDC203(t *
 	cfg := config.Default()
 	delete(cfg.DCIPs, 203)
 
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 	routes := srv.directRouteCandidates(203)
 
 	if len(routes) != 1 {
@@ -108,10 +121,93 @@ func TestDirectRouteCandidatesFallbackToNormalizedTargetWithoutExplicitDC203(t *
 	}
 }
 
+func TestBridgeRelayClosesBothSidesOnContextCancel(t *testing.T) {
+	srv := newTestServer(t, config.Default())
+	client := newBlockingConn()
+	remote := newBlockingConn()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		srv.bridgeRelay(ctx, client, remote, nopStream{}, nopStream{}, nopStream{}, nopStream{})
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("bridgeRelay did not return after context cancellation")
+	}
+
+	if !client.isClosed() {
+		t.Fatal("expected client conn to be closed")
+	}
+	if !remote.isClosed() {
+		t.Fatal("expected remote conn to be closed")
+	}
+}
+
+type nopStream struct{}
+
+func (nopStream) XORKeyStream(dst, src []byte) {
+	copy(dst, src)
+}
+
+type blockingConn struct {
+	mu     sync.Mutex
+	closed bool
+	done   chan struct{}
+}
+
+func newBlockingConn() *blockingConn {
+	return &blockingConn{done: make(chan struct{})}
+}
+
+func (c *blockingConn) Read([]byte) (int, error) {
+	<-c.done
+	return 0, net.ErrClosed
+}
+
+func (c *blockingConn) Write([]byte) (int, error) {
+	<-c.done
+	return 0, net.ErrClosed
+}
+
+func (c *blockingConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	close(c.done)
+	return nil
+}
+
+func (c *blockingConn) isClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
+func (c *blockingConn) LocalAddr() net.Addr                { return dummyAddr("local") }
+func (c *blockingConn) RemoteAddr() net.Addr               { return dummyAddr("remote") }
+func (c *blockingConn) SetDeadline(time.Time) error        { return nil }
+func (c *blockingConn) SetReadDeadline(time.Time) error    { return nil }
+func (c *blockingConn) SetWriteDeadline(time.Time) error   { return nil }
+
+type dummyAddr string
+
+func (a dummyAddr) Network() string { return "tcp" }
+func (a dummyAddr) String() string  { return string(a) }
+
 func TestOrderedDirectRoutesReturnSingleRouteUnchanged(t *testing.T) {
 	cfg := config.Default()
 
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 	routes := srv.directRouteCandidates(2)
 
 	ordered := srv.orderedDirectRoutes(203, false, routes)
@@ -126,7 +222,7 @@ func TestOrderedDirectRoutesReturnSingleRouteUnchanged(t *testing.T) {
 func TestSingleRouteDoesNotEnterRedirectCooldown(t *testing.T) {
 	cfg := config.Default()
 	cfg.DialTimeout = 10 * time.Second
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	srv.wsDialFunc = func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
 		return nil, &wsbridge.HandshakeError{StatusCode: 302, StatusLine: "HTTP/1.1 302 Found"}
@@ -146,7 +242,7 @@ func TestSingleRouteDoesNotEnterRedirectCooldown(t *testing.T) {
 
 func TestSingleRouteDoesNotEnterCooldownOnBridgeFailure(t *testing.T) {
 	cfg := config.Default()
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"}
 	key := routeCooldownKey{requestDC: 2, targetDC: 2, isMedia: false}
@@ -160,7 +256,7 @@ func TestSingleRouteDoesNotEnterCooldownOnBridgeFailure(t *testing.T) {
 func TestDC203FallbackRouteSkipsFailureCooldown(t *testing.T) {
 	cfg := config.Default()
 	cfg.DCIPs[203] = "91.105.192.100"
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	fallbackRoute := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"}
 	explicitRoute := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"}
@@ -180,7 +276,7 @@ func TestDialDirectWSKeepsNormalTimeoutForInactiveMultiRouteCooldown(t *testing.
 	cfg := config.Default()
 	cfg.DialTimeout = 10 * time.Second
 	cfg.DCIPs[203] = "91.105.192.100"
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"}
 	srv.routeCooldowns.markFailure(routeCooldownKey{requestDC: 203, targetDC: 203, isMedia: false})
@@ -209,7 +305,7 @@ func TestDialDirectWSUsesFailFastTimeoutForMultiRouteDC203(t *testing.T) {
 	cfg := config.Default()
 	cfg.DialTimeout = 10 * time.Second
 	cfg.DCIPs[203] = "91.105.192.100"
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	route := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"}
 	srv.routeCooldowns.markFailure(routeCooldownKey{requestDC: 203, targetDC: 203, isMedia: false})
@@ -239,7 +335,7 @@ func TestDialDirectWSKeepsNormalTimeoutForDefaultSingleRouteDCs(t *testing.T) {
 		t.Run(fmt.Sprintf("dc%d", dc), func(t *testing.T) {
 			cfg := config.Default()
 			cfg.DialTimeout = 10 * time.Second
-			srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+			srv := newTestServer(t, cfg)
 
 			route := directRouteCandidate{targetDC: dc, wsDomainDC: dc, targetIP: cfg.DCIPs[dc]}
 			srv.routeCooldowns.markFailure(routeCooldownKey{requestDC: dc, targetDC: dc, isMedia: false})
@@ -267,11 +363,11 @@ func TestDialDirectWSKeepsNormalTimeoutForDefaultSingleRouteDCs(t *testing.T) {
 }
 
 func TestCFDomainsForConnBalancesRoundRobin(t *testing.T) {
-	srv := NewMTServer(config.Config{
+	srv := newTestServer(t, config.Config{
 		UseCFProxy:   true,
 		UseCFBalance: true,
 		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
-	}, make([]byte, 16), log.New(io.Discard, "", 0))
+	})
 
 	got1 := srv.cfDomainsForConn()
 	got2 := srv.cfDomainsForConn()
@@ -294,8 +390,8 @@ func TestCFDomainsForConnUsesPerServerState(t *testing.T) {
 		UseCFBalance: true,
 		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
 	}
-	first := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
-	second := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	first := newTestServer(t, cfg)
+	second := newTestServer(t, cfg)
 
 	_ = first.cfDomainsForConn()
 	got := second.cfDomainsForConn()
@@ -319,7 +415,7 @@ func equalStrings(got []string, want []string) bool {
 
 func TestTCPFallbackTargetIPReturnsEmptyWithoutConfiguredRoute(t *testing.T) {
 	cfg := config.Default()
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	if got := srv.tcpFallbackTargetIP(1, nil); got != "" {
 		t.Fatalf("expected empty tcp fallback ip for dc1 without direct route, got %q", got)
@@ -329,7 +425,7 @@ func TestTCPFallbackTargetIPReturnsEmptyWithoutConfiguredRoute(t *testing.T) {
 func TestTCPFallbackTargetIPPrefersExplicitDC203Override(t *testing.T) {
 	cfg := config.Default()
 	cfg.DCIPs[203] = "91.105.192.100"
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	routes := srv.directRouteCandidates(203)
 	if got := srv.tcpFallbackTargetIP(203, routes); got != "91.105.192.100" {
@@ -339,7 +435,7 @@ func TestTCPFallbackTargetIPPrefersExplicitDC203Override(t *testing.T) {
 
 func TestDialDirectWSSuccessClearsRouteCooldown(t *testing.T) {
 	cfg := config.Default()
-	srv := NewMTServer(cfg, make([]byte, 16), log.New(io.Discard, "", 0))
+	srv := newTestServer(t, cfg)
 
 	route := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"}
 	key := routeCooldownKey{requestDC: 203, targetDC: 203, isMedia: false}
