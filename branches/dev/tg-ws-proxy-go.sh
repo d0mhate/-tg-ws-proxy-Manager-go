@@ -32,6 +32,7 @@ DEFAULT_BINARY_NAME="${DEFAULT_BINARY_NAME:-tg-ws-proxy-openwrt}"
 BINARY_NAME="${BINARY_NAME:-}"
 LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
 LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
+PPROF_ADDR_FROM_ENV="${PPROF_ADDR+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
 POOL_SIZE_FROM_ENV="${POOL_SIZE+x}"
 SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
@@ -83,6 +84,7 @@ PROC_ROOT="${PROC_ROOT:-/proc}"
 LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-1080}"
+PPROF_ADDR="${PPROF_ADDR:-}"
 VERBOSE="${VERBOSE:-0}"
 POOL_SIZE="${POOL_SIZE:-4}"
 SOCKS_USERNAME="${SOCKS_USERNAME:-}"
@@ -338,6 +340,7 @@ write_settings_config() {
         fi
         printf "HOST='%s'\n" "$LISTEN_HOST"
         printf "PORT='%s'\n" "$LISTEN_PORT"
+        printf "PPROF_ADDR='%s'\n" "$PPROF_ADDR"
         printf "VERBOSE='%s'\n" "$VERBOSE"
         printf "POOL_SIZE='%s'\n" "$POOL_SIZE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
@@ -365,6 +368,10 @@ load_saved_settings() {
     if [ -z "$LISTEN_PORT_FROM_ENV" ]; then
         port="$(read_config_value PORT 2>/dev/null || true)"
         [ -n "$port" ] && LISTEN_PORT="$port"
+    fi
+
+    if [ -z "$PPROF_ADDR_FROM_ENV" ]; then
+        PPROF_ADDR="$(read_config_value PPROF_ADDR 2>/dev/null || true)"
     fi
 
     if [ -z "$VERBOSE_FROM_ENV" ]; then
@@ -1053,6 +1060,17 @@ runtime_bin_path() {
     return 1
 }
 
+binary_supports_flag() {
+    bin_path="$1"
+    flag_name="$2"
+
+    [ -n "$bin_path" ] || return 1
+    [ -x "$bin_path" ] || return 1
+    [ -n "$flag_name" ] || return 1
+
+    "$bin_path" --help 2>&1 | grep -F -- "  ${flag_name}" >/dev/null 2>&1
+}
+
 pid_matches_binary() {
     pid="$1"
     path="$2"
@@ -1273,6 +1291,10 @@ _run_proxy_cmd() {
 
     set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --pool-size "$POOL_SIZE"
 
+    if [ -n "$PPROF_ADDR" ]; then
+        set -- "$@" --pprof-addr "$PPROF_ADDR"
+    fi
+
     if [ "$PROXY_MODE" = "mtproto" ]; then
         set -- "$@" --mode mtproto --secret "$MT_SECRET"
         if [ -n "$MT_LINK_IP" ]; then
@@ -1304,7 +1326,7 @@ _run_proxy_cmd() {
         if [ "$CF_PROXY_FIRST" = "1" ]; then
             set -- "$@" --cf-proxy-first
         fi
-        if [ "$CF_BALANCE" = "1" ]; then
+        if [ "$CF_BALANCE" = "1" ] && binary_supports_flag "$_rpc_bin" "-cf-balance"; then
             set -- "$@" --cf-balance
         fi
     fi
@@ -1371,6 +1393,7 @@ start_proxy() {
     show_environment_checks
     printf "\n"
     printf "%sStarting %s in terminal%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
+    printf "Binary path: %s\n" "$(canonical_path "$bin_path")"
     printf "Logs will be printed here.\n"
     printf "Stop with Ctrl+C\n"
     printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
@@ -1421,6 +1444,7 @@ start_proxy_background() {
     show_environment_checks
     printf "\n"
     printf "%sStarting %s in background%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
+    printf "Binary path: %s\n" "$(canonical_path "$bin_path")"
     printf "Logs will not be printed in this session.\n"
     printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
 
@@ -1634,7 +1658,7 @@ write_init_script() {
         printf '%s\n' '        if [ "$CF_PROXY_FIRST" = "1" ]; then'
         printf '%s\n' '            set -- "$@" --cf-proxy-first'
         printf '%s\n' '        fi'
-        printf '%s\n' '        if [ "$CF_BALANCE" = "1" ]; then'
+        printf '%s\n' '        if [ "$CF_BALANCE" = "1" ] && "$BIN" --help 2>&1 | grep -F -- "  -cf-balance" >/dev/null 2>&1; then'
         printf '%s\n' '            set -- "$@" --cf-balance'
         printf '%s\n' '        fi'
         printf '%s\n' '    fi'

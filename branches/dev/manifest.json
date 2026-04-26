@@ -1,6 +1,6 @@
 {
   "branch": "dev",
-  "commit": "81576f5afd40b1d158371d0e47e32e9e949a5006",
+  "commit": "bc0a3d17f47ddc2354ea9edd37358ca41dc9a84e",
   "manager_script": "tg-ws-proxy-go.sh",
   "default_binary": "tg-ws-proxy-openwrt"
 }
