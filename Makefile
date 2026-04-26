@@ -67,7 +67,7 @@ BIN_FLAGS = \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
-.PHONY: help build bundle menu start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file clean install-git-hooks \
+.PHONY: help build bundle menu start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file fmt-shell lint-shell clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
 	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
@@ -130,6 +130,8 @@ help:
 		'make test-shell-ci-local - run shell tests in local ubuntu docker like CI' \
 		'make test-shell-file TEST=test/menu.bats - run one bats file' \
 		'make test         - run Go and bats tests' \
+		'make fmt-shell    - format all shell scripts with shfmt (writes in place)' \
+		'make lint-shell   - check shell formatting with shfmt (diff, non-zero exit if unformatted)' \
 		'make install-git-hooks - enable local pre-commit hook that runs make test' \
 		'' \
 		'You can override vars inline, for example:' \
@@ -378,6 +380,12 @@ test-shell-ci-local:
 test-shell-file:
 	@test -n "$(TEST)" || { printf '%s\n' 'TEST is required, for example: make test-shell-file TEST=test/menu.bats'; exit 1; }
 	$(BATS) $(BATS_FLAGS) "$(TEST)"
+
+fmt-shell:
+	shfmt -w -i 4 tg-ws-proxy-go.sh lib scripts test
+
+lint-shell:
+	shfmt -d -i 4 tg-ws-proxy-go.sh lib scripts test
 
 # if need to uninstall (git config --local --unset core.hooksPath))
 install-git-hooks:
