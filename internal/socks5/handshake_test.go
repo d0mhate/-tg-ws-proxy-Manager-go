@@ -225,3 +225,21 @@ func TestReadWithContextReturnsOnCancelWithoutLeakingReader(t *testing.T) {
 		t.Fatal("readWithContext did not return after context cancellation")
 	}
 }
+
+func TestReadWithContextReturnsImmediatelyWhenContextAlreadyCanceled(t *testing.T) {
+	conn := newBlockingConn()
+	defer conn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	buf := make([]byte, 8)
+	_, err := readWithContext(ctx, conn, buf, time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed >= 100*time.Millisecond {
+		t.Fatalf("expected immediate return for already-canceled context, took %s", elapsed)
+	}
+}

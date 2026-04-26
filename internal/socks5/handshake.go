@@ -222,6 +222,10 @@ func buildReply(status byte, host string, port int) ([]byte, error) {
 }
 
 func readWithContext(ctx context.Context, conn net.Conn, buf []byte, timeout time.Duration) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
 	cancelDone := make(chan struct{})
 	stopCancel := context.AfterFunc(ctx, func() {
 		_ = conn.SetReadDeadline(time.Now())

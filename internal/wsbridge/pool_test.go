@@ -147,7 +147,7 @@ func TestPoolDiscardsExpiredClient(t *testing.T) {
 		t.Fatal("expected expired pooled client to miss")
 	}
 
-	if !conn.closed {
+	if !waitForCondition(2*time.Second, func() bool { return conn.closed }) {
 		t.Fatal("expected expired pooled client to be closed")
 	}
 }
@@ -214,6 +214,45 @@ func TestPoolDiscardsClosedClientBeforeHit(t *testing.T) {
 	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil || hit {
 		t.Fatal("expected closed pooled client to be discarded")
 	}
+}
+
+func TestPoolGetDoesNotBlockOnStaleClose(t *testing.T) {
+	pool := NewPool(config.Config{PoolSize: 1})
+	if pool == nil {
+		t.Fatal("expected non-nil pool")
+	}
+	defer pool.Close()
+
+	pool.dial = func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*Client, error) {
+		return nil, errors.New("test dial blocked")
+	}
+
+	conn := newBlockingWriteConn()
+	client := NewClient(conn)
+	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	pool.idle[key] = []pooledClient{{
+		client:  client,
+		created: time.Now(),
+	}}
+
+	start := time.Now()
+	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil || hit {
+		t.Fatal("expected stale pooled client to miss")
+	}
+	if elapsed := time.Since(start); elapsed >= closeWriteTimeout/2 {
+		t.Fatalf("expected stale close to be asynchronous, Get took %s", elapsed)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	if waitForCondition(time.Until(deadline), func() bool {
+		conn.mu.Lock()
+		defer conn.mu.Unlock()
+		return conn.closed
+	}) {
+		return
+	}
+
+	t.Fatal("expected stale pooled connection to close in background")
 }
 
 func TestPoolRefillDelayAppliedBetweenConnections(t *testing.T) {
@@ -289,4 +328,15 @@ func waitForTime(t *testing.T, ch <-chan time.Time) time.Time {
 		t.Fatal("timed out waiting for pooled dial")
 		return time.Time{}
 	}
+}
+
+func waitForCondition(timeout time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return cond()
 }
