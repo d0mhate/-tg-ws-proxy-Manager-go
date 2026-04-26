@@ -4,15 +4,11 @@ import (
 	"context"
 	"crypto/cipher"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"strconv"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 
 	"tg-ws-proxy/internal/cfbalance"
 	"tg-ws-proxy/internal/config"
@@ -132,263 +128,18 @@ func (s *MTServer) Run(ctx context.Context) error {
 func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 
-	_ = conn.SetDeadline(time.Now().Add(s.cfg.InitTimeout))
-
-	if s.cfg.Verbose {
-		s.agg.Printf("mtproto: new connection from %s", conn.RemoteAddr())
-	}
-
-	key := s.secretKey()
-
-	// ee secrets start with faketls. after the fake handshake, traffic is
-	// wrapped in tls appdata records.
-	var dataConn net.Conn = conn
-	if s.isFakeTLS() {
-		clientRandom := faketls.AcceptClientHello(conn, key)
-		if clientRandom == nil {
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: FakeTLS ClientHello invalid from %s", conn.RemoteAddr())
-			}
-			return
-		}
-		if err := faketls.SendFakeServerHello(conn, key, clientRandom); err != nil {
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: FakeTLS ServerHello send error: %v", err)
-			}
-			return
-		}
-		if s.cfg.Verbose {
-			s.agg.Printf("mtproto: FakeTLS handshake complete from %s", conn.RemoteAddr())
-		}
-		dataConn = faketls.NewConn(conn)
-	}
-
-	var handshake [64]byte
-	if _, err := io.ReadFull(dataConn, handshake[:]); err != nil {
-		if s.cfg.Verbose {
-			s.agg.Printf("mtproto: handshake read error: %v", err)
-		}
+	session, ok := s.prepareClientSession(conn)
+	if !ok {
 		return
 	}
 
-	_ = conn.SetDeadline(time.Time{})
-
-	info, err := mtproto.ParseInitWithSecret(handshake[:], key)
-	if err != nil {
-		if s.cfg.Verbose {
-			s.agg.Printf("mtproto: bad handshake: %v", err)
-		}
-		return
-	}
-
-	if s.cfg.Verbose {
-		s.agg.Printf("mtproto: handshake ok dc=%d media=%v proto=%08x", info.DC, info.IsMedia, info.Proto)
-	}
-
-	clientDec, clientEnc, err := mtproto.BuildConnectionCiphers(handshake, key)
-	if err != nil {
-		s.logger.Printf("mtproto: cipher build: %v", err)
-		return
-	}
-
-	dc := info.DC
-	if dc == 0 {
-		dc = 2
-	}
-	directRoutes := s.directRouteCandidates(dc)
-	hasCF := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
-
-	relayInit, relayEnc, relayDec, err := mtproto.GenerateRelayInit(info.Proto, dc)
-	if err != nil {
-		s.logger.Printf("mtproto: generate relay init: %v", err)
-		return
-	}
-
-	tcpFallbackTarget := s.tcpFallbackTargetIP(dc, directRoutes)
-
-	dialCtx, cancel := context.WithTimeout(ctx, s.cfg.DialTimeout)
-	defer cancel()
-
-	var selectedDirectRoute directRouteCandidate
-
-	dialCF := func() (*wsbridge.Client, error) {
-		for _, cfDomain := range s.cfDomainsForConn() {
-			cfHost := cfWSHost(cfDomain, dc)
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: CF dial dc=%d → %s", dc, cfHost)
-			}
-			ws, err := wsbridge.Dial(dialCtx, s.cfg, cfHost, cfHost)
-			if err == nil {
-				if s.cfg.Verbose {
-					s.agg.Printf("mtproto: CF connected dc=%d → %s", dc, cfHost)
-				}
-				return ws, nil
-			}
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: CF dial failed dc=%d → %s: %v", dc, cfHost, err)
-			}
-		}
-		return nil, fmt.Errorf("all CF domains failed for dc=%d", dc)
-	}
-
-	dialDirect := func() (*wsbridge.Client, error) {
-		ws, route, err := s.dialDirectWSWithFallback(dialCtx, dc, info.IsMedia, directRoutes)
-		selectedDirectRoute = route
-		return ws, err
-	}
-
-	var ws *wsbridge.Client
-	var wsErr error
-
-	if hasCF && s.cfg.UseCFProxyFirst {
-		ws, wsErr = dialCF()
-		if wsErr != nil {
-			if len(directRoutes) > 0 {
-				ws, wsErr = dialDirect()
-			}
-		}
-	} else {
-		if len(directRoutes) > 0 {
-			ws, wsErr = dialDirect()
-		} else {
-			wsErr = fmt.Errorf("no direct route configured for dc=%d", dc)
-		}
-		if wsErr != nil && hasCF {
-			ws, wsErr = dialCF()
-		}
-	}
-
-	if wsErr != nil {
-		// websocket failed, try upstream mtproto proxies.
-		for _, up := range s.cfg.UpstreamProxies {
-			upConn, upEnc, upDec, upErr := s.dialUpstream(ctx, up, dc, info.Proto)
-			if upErr != nil {
-				if s.cfg.Verbose {
-					s.agg.Printf("mtproto: upstream %s:%d failed: %v", up.Host, up.Port, upErr)
-				}
-				continue
-			}
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: upstream %s:%d connected dc=%d", up.Host, up.Port, dc)
-			}
-			defer upConn.Close()
-			s.bridgeUpstream(ctx, dataConn, upConn, clientDec, clientEnc, upEnc, upDec)
-			return
-		}
-		if tcpFallbackTarget != "" {
-			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: tcp fallback dc=%d → %s:%d", dc, tcpFallbackTarget, telegramTCPPort)
-			}
-			if err := s.bridgeTCPFallback(ctx, dataConn, tcpFallbackTarget, relayInit, clientDec, clientEnc, relayEnc, relayDec); err != nil {
-				s.agg.Printf("mtproto: tcp fallback dc=%d: %v", dc, err)
-				return
-			}
-			return
-		}
-		s.agg.Printf("mtproto: ws dial dc=%d: %v", dc, wsErr)
+	ws, selectedDirectRoute, ok := s.connectRelay(ctx, session)
+	if !ok {
 		return
 	}
 	defer ws.Close()
 
-	if err := ws.Send(relayInit[:]); err != nil {
-		s.markDirectRouteBridgeFailure(dc, info.IsMedia, selectedDirectRoute)
-		s.agg.Printf("mtproto: send relay init dc=%d: %v", dc, err)
-		return
-	}
-
-	// The splitter shadows relayEnc so it can detect MTProto packet boundaries
-	// in the re-encrypted byte stream and forward exactly one complete packet
-	// per WebSocket frame.  Without this, a partial TCP read produces a truncated
-	// WebSocket frame that Telegram rejects, causing the client to reconnect.
-	splitter, err := mtproto.NewSplitter(relayInit[:], info.Proto)
-	if err != nil {
-		s.logger.Printf("mtproto: splitter init dc=%d: %v", dc, err)
-		return
-	}
-
-	if s.cfg.Verbose {
-		s.agg.Printf("mtproto: bridge started dc=%d", dc)
-	}
-
-	bridgeCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	g, gctx := errgroup.WithContext(bridgeCtx)
-	go func() {
-		<-gctx.Done()
-		_ = ws.Close()
-		_ = dataConn.Close()
-	}()
-
-	// Client → Telegram: decrypt from client, re-encrypt for relay, then split
-	// into complete MTProto packets before sending each as one WebSocket frame.
-	g.Go(func() error {
-		defer cancel()
-		buf := make([]byte, s.cfg.BufferKB*1024)
-		for {
-			n, readErr := dataConn.Read(buf)
-			if n > 0 {
-				chunk := make([]byte, n)
-				copy(chunk, buf[:n])
-				clientDec.XORKeyStream(chunk, chunk)
-				relayEnc.XORKeyStream(chunk, chunk)
-				for _, part := range splitter.Split(chunk) {
-					if sendErr := ws.Send(part); sendErr != nil {
-						s.markDirectRouteBridgeFailure(dc, info.IsMedia, selectedDirectRoute)
-						if s.cfg.Verbose {
-							s.agg.Printf("mtproto: client→tg send error dc=%d: %v", dc, sendErr)
-						}
-						return normalizeBridgeError(gctx, sendErr)
-					}
-				}
-			}
-			if readErr != nil {
-				if errors.Is(readErr, io.EOF) {
-					readErr = nil
-				} else if s.cfg.Verbose {
-					s.agg.Printf("mtproto: client read error dc=%d: %v", dc, readErr)
-				}
-				for _, part := range splitter.Flush() {
-					_ = ws.Send(part)
-				}
-				return normalizeBridgeError(gctx, readErr)
-			}
-		}
-	})
-
-	// Telegram → Client: decrypt from relay, re-encrypt for client.
-	g.Go(func() error {
-		defer cancel()
-		for {
-			data, recvErr := ws.Recv()
-			if recvErr != nil {
-				s.markDirectRouteBridgeFailure(dc, info.IsMedia, selectedDirectRoute)
-				if s.cfg.Verbose {
-					s.agg.Printf("mtproto: tg→client recv error dc=%d: %v", dc, recvErr)
-				}
-				s.stats.recordRecvError(dc)
-				return normalizeBridgeError(gctx, recvErr)
-			}
-			if data == nil {
-				s.markDirectRouteBridgeFailure(dc, info.IsMedia, selectedDirectRoute)
-				s.stats.recordClosedWS(dc)
-				if s.cfg.Verbose {
-					s.agg.Printf("mtproto: tg closed ws dc=%d", dc)
-				}
-				return nil
-			}
-			relayDec.XORKeyStream(data, data)
-			clientEnc.XORKeyStream(data, data)
-			if _, writeErr := dataConn.Write(data); writeErr != nil {
-				if s.cfg.Verbose {
-					s.agg.Printf("mtproto: tg→client write error dc=%d: %v", dc, writeErr)
-				}
-				return normalizeBridgeError(gctx, writeErr)
-			}
-		}
-	})
-
-	_ = g.Wait()
+	s.bridgeWebsocketRelay(ctx, session, ws, selectedDirectRoute)
 }
 
 // connect to one upstream mtproto proxy and do its handshake.
