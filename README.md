@@ -74,6 +74,24 @@ sh /tmp/tg-ws-proxy-go.sh start-background
 Готовые бинарники лежат в [Releases](../../releases). Меню-скрипт сам выбирает
 подходящий asset по архитектуре роутера.
 
+![OpenWrt](https://img.shields.io/badge/OpenWrt-mipsel__24kc%20%7C%20mips__24kc%20%7C%20armv7%20%7C%20aarch64%20%7C%20x86__64-blue)
+![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20aarch64%20%7C%20armv7%20%7C%20armv6%20%7C%20386%20%7C%20riscv64%20%7C%20loong64-orange)
+![macOS](https://img.shields.io/badge/macOS-amd64%20%7C%20arm64-lightgrey)
+![Windows](https://img.shields.io/badge/Windows-amd64%20%7C%20arm64-0078D6)
+![FreeBSD](https://img.shields.io/badge/FreeBSD-amd64%20%7C%20arm64-red)
+
+<details>
+<summary>Поддерживаемые release-архитектуры</summary>
+
+- OpenWrt: `mipsel_24kc`, `mips_24kc`, `armv7`, `armv8l`, `aarch64`, `x86_64`
+- Linux: `x86_64`, `aarch64`, `armv7`, `armv6`, `386`, `riscv64`, `loong64`
+- Additional targets: `mips64`, `mips64el`
+- macOS: `amd64`, `arm64`
+- Windows: `amd64`, `arm64`
+- FreeBSD: `amd64`, `arm64`
+
+</details>
+
 Проверенная цель:
 
 - `Xiaomi Mi Router 4A Gigabit Edition v2`
