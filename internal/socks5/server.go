@@ -2,12 +2,15 @@ package socks5
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"strconv"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"tg-ws-proxy/internal/cfbalance"
 	"tg-ws-proxy/internal/config"
@@ -23,6 +26,7 @@ const (
 	wsFailCooldown       = 30 * time.Second
 	wsFailFastDial       = 2 * time.Second
 	statsLogEvery        = 5 * time.Second
+	maxConcurrentConns   = 4096
 )
 
 const errInvalidUsernamePassword = "invalid username/password"
@@ -118,9 +122,17 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
+	sem := make(chan struct{}, maxConcurrentConns)
 	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case sem <- struct{}{}:
+		}
+
 		conn, err := ln.Accept()
 		if err != nil {
+			<-sem
 			select {
 			case <-ctx.Done():
 				return nil
@@ -130,7 +142,10 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		s.tuneConn(conn)
 		s.debugf("accepted connection from %s", conn.RemoteAddr())
-		go s.handleConn(ctx, conn)
+		go func(conn net.Conn) {
+			defer func() { <-sem }()
+			s.handleConn(ctx, conn)
+		}(conn)
 	}
 }
 
@@ -351,27 +366,44 @@ func (s *Server) tuneConn(conn net.Conn) {
 }
 
 func bridgeTCP(ctx context.Context, a net.Conn, b net.Conn) error {
-	errCh := make(chan error, 2)
+	bridgeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
+	g, gctx := errgroup.WithContext(bridgeCtx)
 	go func() {
+		<-gctx.Done()
+		_ = a.Close()
+		_ = b.Close()
+	}()
+
+	g.Go(func() error {
+		defer cancel()
 		_, err := io.Copy(b, a)
-		errCh <- normalizeEOF(err)
-	}()
-	go func() {
+		return normalizeBridgeCopyError(gctx, normalizeEOF(err))
+	})
+	g.Go(func() error {
+		defer cancel()
 		_, err := io.Copy(a, b)
-		errCh <- normalizeEOF(err)
-	}()
+		return normalizeBridgeCopyError(gctx, normalizeEOF(err))
+	})
 
-	select {
-	case <-ctx.Done():
-		_ = a.Close()
-		_ = b.Close()
-		return ctx.Err()
-	case err := <-errCh:
-		_ = a.Close()
-		_ = b.Close()
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
+	return ctx.Err()
+}
+
+func normalizeBridgeCopyError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) effectiveDC(dc int) int {

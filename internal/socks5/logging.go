@@ -1,12 +1,13 @@
 package socks5
 
 import (
+	"cmp"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -246,11 +247,11 @@ func (s *Server) flushVerboseConnFailureSummary() {
 	if len(items) == 0 {
 		return
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].count != items[j].count {
-			return items[i].count > items[j].count
+	slices.SortFunc(items, func(a, b item) int {
+		if a.count != b.count {
+			return cmp.Compare(b.count, a.count)
 		}
-		return items[i].key < items[j].key
+		return cmp.Compare(a.key, b.key)
 	})
 	if len(items) > 6 {
 		items = items[:6]
@@ -311,7 +312,7 @@ func (s *Server) flushCFEventSummary() {
 	if len(parts) == 0 {
 		return
 	}
-	sort.Strings(parts)
+	slices.Sort(parts)
 	s.logger.Printf("cloudflare summary in %s: %s last_source=%s", statsLogEvery, strings.Join(parts, "; "), lastAddr)
 }
 
@@ -372,11 +373,11 @@ func (s *Server) flushVerboseDebugSummary() {
 	if len(items) == 0 {
 		return
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].count != items[j].count {
-			return items[i].count > items[j].count
+	slices.SortFunc(items, func(a, b item) int {
+		if a.count != b.count {
+			return cmp.Compare(b.count, a.count)
 		}
-		return items[i].key < items[j].key
+		return cmp.Compare(a.key, b.key)
 	})
 	if len(items) > 12 {
 		items = items[:12]

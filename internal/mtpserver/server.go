@@ -12,12 +12,16 @@ import (
 	"strconv"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"tg-ws-proxy/internal/cfbalance"
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/faketls"
 	"tg-ws-proxy/internal/mtproto"
 	"tg-ws-proxy/internal/wsbridge"
 )
+
+const maxConns = 4096
 
 // mtproto listener that accepts obfuscated client connections and bridges them
 // to tg over websocket, re-encrypting both directions.
@@ -100,9 +104,17 @@ func (s *MTServer) Run(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
+	sem := make(chan struct{}, maxConns)
 	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case sem <- struct{}{}:
+		}
+
 		conn, err := ln.Accept()
 		if err != nil {
+			<-sem
 			select {
 			case <-ctx.Done():
 				return nil
@@ -110,7 +122,10 @@ func (s *MTServer) Run(ctx context.Context) error {
 				return err
 			}
 		}
-		go s.handleConn(ctx, conn)
+		go func(conn net.Conn) {
+			defer func() { <-sem }()
+			s.handleConn(ctx, conn)
+		}(conn)
 	}
 }
 
@@ -295,11 +310,20 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.agg.Printf("mtproto: bridge started dc=%d", dc)
 	}
 
-	errCh := make(chan error, 2)
+	bridgeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	g, gctx := errgroup.WithContext(bridgeCtx)
+	go func() {
+		<-gctx.Done()
+		_ = ws.Close()
+		_ = dataConn.Close()
+	}()
 
 	// Client → Telegram: decrypt from client, re-encrypt for relay, then split
 	// into complete MTProto packets before sending each as one WebSocket frame.
-	go func() {
+	g.Go(func() error {
+		defer cancel()
 		buf := make([]byte, s.cfg.BufferKB*1024)
 		for {
 			n, readErr := dataConn.Read(buf)
@@ -314,8 +338,7 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 						if s.cfg.Verbose {
 							s.agg.Printf("mtproto: client→tg send error dc=%d: %v", dc, sendErr)
 						}
-						errCh <- sendErr
-						return
+						return normalizeBridgeError(gctx, sendErr)
 					}
 				}
 			}
@@ -328,14 +351,14 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 				for _, part := range splitter.Flush() {
 					_ = ws.Send(part)
 				}
-				errCh <- readErr
-				return
+				return normalizeBridgeError(gctx, readErr)
 			}
 		}
-	}()
+	})
 
 	// Telegram → Client: decrypt from relay, re-encrypt for client.
-	go func() {
+	g.Go(func() error {
+		defer cancel()
 		for {
 			data, recvErr := ws.Recv()
 			if recvErr != nil {
@@ -344,8 +367,7 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 					s.agg.Printf("mtproto: tg→client recv error dc=%d: %v", dc, recvErr)
 				}
 				s.stats.recordRecvError(dc)
-				errCh <- recvErr
-				return
+				return normalizeBridgeError(gctx, recvErr)
 			}
 			if data == nil {
 				s.markDirectRouteBridgeFailure(dc, info.IsMedia, selectedDirectRoute)
@@ -353,8 +375,7 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 				if s.cfg.Verbose {
 					s.agg.Printf("mtproto: tg closed ws dc=%d", dc)
 				}
-				errCh <- nil
-				return
+				return nil
 			}
 			relayDec.XORKeyStream(data, data)
 			clientEnc.XORKeyStream(data, data)
@@ -362,19 +383,12 @@ func (s *MTServer) handleConn(ctx context.Context, conn net.Conn) {
 				if s.cfg.Verbose {
 					s.agg.Printf("mtproto: tg→client write error dc=%d: %v", dc, writeErr)
 				}
-				errCh <- writeErr
-				return
+				return normalizeBridgeError(gctx, writeErr)
 			}
 		}
-	}()
+	})
 
-	select {
-	case <-ctx.Done():
-	case <-errCh:
-	}
-
-	_ = ws.Close()
-	_ = dataConn.Close()
+	_ = g.Wait()
 }
 
 // connect to one upstream mtproto proxy and do its handshake.

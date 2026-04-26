@@ -2,7 +2,7 @@ package mtpserver
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -34,49 +34,67 @@ func newStatsCollector() *statsCollector {
 }
 
 func (s *statsCollector) recordPoolHit(dc int) {
-	s.update(dc, func(stats *dcStats) {
-		stats.poolHits++
-	})
-}
-
-func (s *statsCollector) recordPoolMiss(dc int) {
-	s.update(dc, func(stats *dcStats) {
-		stats.poolMisses++
-	})
-}
-
-func (s *statsCollector) recordDirectConnected(dc int) {
-	s.update(dc, func(stats *dcStats) {
-		stats.directConnected++
-	})
-}
-
-func (s *statsCollector) recordDirectDialFailed(dc int) {
-	s.update(dc, func(stats *dcStats) {
-		stats.directDialFailed++
-	})
-}
-
-func (s *statsCollector) recordRecvError(dc int) {
-	s.update(dc, func(stats *dcStats) {
-		stats.recvErrors++
-	})
-}
-
-func (s *statsCollector) recordClosedWS(dc int) {
-	s.update(dc, func(stats *dcStats) {
-		stats.closedWS++
-	})
-}
-
-func (s *statsCollector) update(dc int, fn func(*dcStats)) {
 	if s == nil {
 		return
 	}
-
 	s.mu.Lock()
 	stats := s.perDC[dc]
-	fn(&stats)
+	stats.poolHits++
+	s.perDC[dc] = stats
+	s.mu.Unlock()
+}
+
+func (s *statsCollector) recordPoolMiss(dc int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	stats := s.perDC[dc]
+	stats.poolMisses++
+	s.perDC[dc] = stats
+	s.mu.Unlock()
+}
+
+func (s *statsCollector) recordDirectConnected(dc int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	stats := s.perDC[dc]
+	stats.directConnected++
+	s.perDC[dc] = stats
+	s.mu.Unlock()
+}
+
+func (s *statsCollector) recordDirectDialFailed(dc int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	stats := s.perDC[dc]
+	stats.directDialFailed++
+	s.perDC[dc] = stats
+	s.mu.Unlock()
+}
+
+func (s *statsCollector) recordRecvError(dc int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	stats := s.perDC[dc]
+	stats.recvErrors++
+	s.perDC[dc] = stats
+	s.mu.Unlock()
+}
+
+func (s *statsCollector) recordClosedWS(dc int) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	stats := s.perDC[dc]
+	stats.closedWS++
 	s.perDC[dc] = stats
 	s.mu.Unlock()
 }
@@ -134,7 +152,7 @@ func (s statsSnapshot) format() string {
 	for dc := range s.perDC {
 		dcs = append(dcs, dc)
 	}
-	sort.Ints(dcs)
+	slices.Sort(dcs)
 
 	parts := make([]string, 0, len(dcs))
 	for _, dc := range dcs {
