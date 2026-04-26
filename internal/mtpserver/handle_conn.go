@@ -353,7 +353,7 @@ func (s *MTServer) dialCloudflareWS(ctx context.Context, dc int) (*wsbridge.Clie
 		if s.cfg.Verbose {
 			s.agg.Printf("mtproto: CF dial dc=%d → %s", dc, cfHost)
 		}
-		ws, err := wsbridge.Dial(ctx, s.cfg, cfHost, cfHost)
+		ws, err := s.wsDialFunc(ctx, s.cfg, cfHost, cfHost)
 		if err == nil {
 			if s.cfg.Verbose {
 				s.agg.Printf("mtproto: CF connected dc=%d → %s", dc, cfHost)

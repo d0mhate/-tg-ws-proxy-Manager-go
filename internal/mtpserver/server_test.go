@@ -433,6 +433,36 @@ func TestTCPFallbackTargetIPPrefersExplicitDC203Override(t *testing.T) {
 	}
 }
 
+func TestNormalizeBridgeErrorReturnsNilForNilError(t *testing.T) {
+	ctx := context.Background()
+	if err := normalizeBridgeError(ctx, nil); err != nil {
+		t.Fatalf("expected nil for nil error, got %v", err)
+	}
+}
+
+func TestNormalizeBridgeErrorReturnsNilForEOF(t *testing.T) {
+	ctx := context.Background()
+	if err := normalizeBridgeError(ctx, io.EOF); err != nil {
+		t.Fatalf("expected nil for EOF, got %v", err)
+	}
+}
+
+func TestNormalizeBridgeErrorReturnsNilForCancelledContextWithClosedConn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := normalizeBridgeError(ctx, net.ErrClosed); err != nil {
+		t.Fatalf("expected nil for ErrClosed on cancelled context, got %v", err)
+	}
+}
+
+func TestNormalizeBridgeErrorPreservesUnrelatedErrors(t *testing.T) {
+	ctx := context.Background()
+	sentinel := errors.New("unexpected protocol error")
+	if err := normalizeBridgeError(ctx, sentinel); !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel error to be preserved, got %v", err)
+	}
+}
+
 func TestDialDirectWSSuccessClearsRouteCooldown(t *testing.T) {
 	cfg := config.Default()
 	srv := newTestServer(t, cfg)
