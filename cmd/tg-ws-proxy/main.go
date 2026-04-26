@@ -280,6 +280,17 @@ func startupSummary(pa parsedArgs) string {
 	return b.String()
 }
 
+func currentBinaryPath() string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		if len(os.Args) > 0 && os.Args[0] != "" {
+			return os.Args[0]
+		}
+		return "<unknown>"
+	}
+	return exe
+}
+
 func startPprofServer(ctx context.Context, addr string, logger *log.Logger) error {
 	if addr == "" {
 		return nil
@@ -362,6 +373,7 @@ func main() {
 	}
 
 	logger := log.New(os.Stdout, "tg-ws-proxy ", log.LstdFlags)
+	logger.Printf("binary path: %s", currentBinaryPath())
 	logger.Printf("%s", startupSummary(pa))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -1,6 +1,7 @@
 SHELL := /bin/sh
 
 BIN := tg-ws-proxy
+LOCAL_BIN := ./$(BIN)
 SCRIPT := tg-ws-proxy-go.sh
 BUNDLE := build/tg-ws-proxy-go.sh
 GO_LOCAL_CACHE := $(CURDIR)/.gocache
@@ -12,7 +13,9 @@ BATS_VERBOSE_FLAGS ?= --print-output-on-failure --show-output-of-passing-tests
 -include .env
 
 # Support both current manager env names and older local aliases from .env.
-BIN_PATH ?= ./$(BIN)
+# Make targets always run the freshly built local binary; BIN_PATH from .env
+# is kept only for direct script usage outside of make.
+BIN_PATH ?= $(LOCAL_BIN)
 MODE ?= $(if $(PROXY_MODE),$(PROXY_MODE),socks5)
 HOST ?= $(LISTEN_HOST)
 PORT ?= $(if $(LISTEN_PORT),$(LISTEN_PORT),1080)
@@ -31,12 +34,13 @@ MT_EE_SECRET ?= ee$(MT_PLAIN_SECRET)$(MT_EE_DOMAIN_HEX)
 EE_GOOGLE_SECRET ?= ee$(MT_SECRET)$(shell printf '%s' "$(EE_GOOGLE_DOMAIN)" | xxd -p -c 256 | tr -d '\n')
 
 MANAGER_ENV = \
-	BIN_PATH=$(BIN_PATH) \
+	BIN_PATH=$(LOCAL_BIN) \
 	PROXY_MODE=$(MODE) \
 	LISTEN_PORT=$(PORT) \
 	$(if $(HOST),LISTEN_HOST=$(HOST),) \
 	$(if $(SECRET),MT_SECRET=$(SECRET),) \
 	$(if $(IP),MT_LINK_IP=$(IP),) \
+	$(if $(PPROF_ADDR),PPROF_ADDR=$(PPROF_ADDR),) \
 	$(if $(DC_IPS),DC_IPS=$(DC_IPS),) \
 	$(if $(POOL_SIZE),POOL_SIZE=$(POOL_SIZE),) \
 	$(if $(USERNAME),SOCKS_USERNAME=$(USERNAME),) \
@@ -53,6 +57,7 @@ BIN_FLAGS = \
 	$(if $(HOST),--host $(HOST),) \
 	$(if $(SECRET),--secret $(SECRET),) \
 	$(if $(IP),--link-ip $(IP),) \
+	$(if $(PPROF_ADDR),--pprof-addr $(PPROF_ADDR),) \
 	$(foreach dc_ip,$(subst $(comma), ,$(strip $(DC_IPS))),--dc-ip $(dc_ip)) \
 	$(if $(POOL_SIZE),--pool-size $(POOL_SIZE),) \
 	$(if $(USERNAME),--username $(USERNAME) --password $(PASSWORD),) \
@@ -62,7 +67,7 @@ BIN_FLAGS = \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
-.PHONY: help build bundle menu start start-bg stop restart status run test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file clean install-git-hooks \
+.PHONY: help build bundle menu start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
 	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
@@ -73,14 +78,18 @@ BIN_FLAGS = \
 
 help:
 	@printf '%s\n' \
-		'make build        - build ./$(BIN)' \
-		'make menu         - open manager menu with vars from .env' \
-		'make start        - manager start in foreground with vars from .env' \
-		'make start-bg     - manager start in background with vars from .env' \
+		'make build        - build fresh local ./$(BIN)' \
+		'make menu         - build fresh local ./$(BIN) and open manager menu for it' \
+		'make start        - build fresh local ./$(BIN) and start it in foreground' \
+		'make start-bg     - build fresh local ./$(BIN) and start it in background' \
 		'make stop         - manager stop' \
 		'make restart      - manager restart' \
 		'make status       - manager status' \
 		'make run          - run binary directly without menu' \
+		'make run PPROF_ADDR=127.0.0.1:6060 - run binary with pprof enabled' \
+		'make profile-pprof PPROF_ADDR=127.0.0.1:6060 STEPS=3 LABELS=baseline,load,after_restart - capture and compare pprof steps' \
+		'make profile-pprof PPROF_ADDR=127.0.0.1:6060 STEPS=5 LABELS=baseline,load,cooldown,restart,after_restart_cooldown STRICT_EXIT=1 - fail on likely leak candidate' \
+		'make profile-pprof-leakcheck PPROF_ADDR=127.0.0.1:6060 - run the standard 5-step leak check scenario' \
 		'make socks5-auth  - start SOCKS5 with auth from .env' \
 		'make socks5-auth-menu - open menu with SOCKS5 auth preset' \
 		'make socks5-auth-cf-menu - open menu with SOCKS5 auth preset, CF on' \
@@ -127,7 +136,7 @@ help:
 		'make start MODE=socks5 PORT=1081 USERNAME=alice PASSWORD=secret VERBOSE=1'
 
 build:
-	go build -o $(BIN) ./cmd/tg-ws-proxy/
+	go build -o $(LOCAL_BIN) ./cmd/tg-ws-proxy/
 
 bundle:
 	sh scripts/build-manager-standalone.sh $(BUNDLE)
@@ -151,7 +160,13 @@ status:
 	$(MANAGER_ENV) sh $(SCRIPT) status
 
 run: build
-	./$(BIN) $(BIN_FLAGS)
+	$(LOCAL_BIN) $(BIN_FLAGS)
+
+profile-pprof:
+	sh scripts/profile-pprof.sh --addr "http://$(if $(PPROF_ADDR),$(PPROF_ADDR),127.0.0.1:6060)" --steps "$(if $(STEPS),$(STEPS),3)" $(if $(LABELS),--labels "$(LABELS)",) $(if $(SLEEP),--sleep "$(SLEEP)",) $(if $(TOP),--top "$(TOP)",) $(if $(OUT),--out "$(OUT)",) $(if $(KEEP_RAW),--keep-raw,) $(if $(STRICT_EXIT),--strict-exit,)
+
+profile-pprof-leakcheck:
+	$(MAKE) profile-pprof PPROF_ADDR="$(if $(PPROF_ADDR),$(PPROF_ADDR),127.0.0.1:6060)" STEPS="$(if $(STEPS),$(STEPS),5)" LABELS="$(if $(LABELS),$(LABELS),baseline,load,cooldown,restart,after_restart_cooldown)" TOP="$(if $(TOP),$(TOP),8)" $(if $(SLEEP),SLEEP="$(SLEEP)",) $(if $(OUT),OUT="$(OUT)",) KEEP_RAW="$(if $(KEEP_RAW),$(KEEP_RAW),1)" STRICT_EXIT=1
 
 socks5-auth: MODE := socks5
 socks5-auth: SECRET :=

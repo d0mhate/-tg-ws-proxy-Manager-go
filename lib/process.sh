@@ -20,6 +20,17 @@ runtime_bin_path() {
     return 1
 }
 
+binary_supports_flag() {
+    bin_path="$1"
+    flag_name="$2"
+
+    [ -n "$bin_path" ] || return 1
+    [ -x "$bin_path" ] || return 1
+    [ -n "$flag_name" ] || return 1
+
+    "$bin_path" --help 2>&1 | grep -F -- "  ${flag_name}" >/dev/null 2>&1
+}
+
 pid_matches_binary() {
     pid="$1"
     path="$2"
@@ -240,6 +251,10 @@ _run_proxy_cmd() {
 
     set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --pool-size "$POOL_SIZE"
 
+    if [ -n "$PPROF_ADDR" ]; then
+        set -- "$@" --pprof-addr "$PPROF_ADDR"
+    fi
+
     if [ "$PROXY_MODE" = "mtproto" ]; then
         set -- "$@" --mode mtproto --secret "$MT_SECRET"
         if [ -n "$MT_LINK_IP" ]; then
@@ -271,7 +286,7 @@ _run_proxy_cmd() {
         if [ "$CF_PROXY_FIRST" = "1" ]; then
             set -- "$@" --cf-proxy-first
         fi
-        if [ "$CF_BALANCE" = "1" ]; then
+        if [ "$CF_BALANCE" = "1" ] && binary_supports_flag "$_rpc_bin" "-cf-balance"; then
             set -- "$@" --cf-balance
         fi
     fi
@@ -338,6 +353,7 @@ start_proxy() {
     show_environment_checks
     printf "\n"
     printf "%sStarting %s in terminal%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
+    printf "Binary path: %s\n" "$(canonical_path "$bin_path")"
     printf "Logs will be printed here.\n"
     printf "Stop with Ctrl+C\n"
     printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
@@ -388,6 +404,7 @@ start_proxy_background() {
     show_environment_checks
     printf "\n"
     printf "%sStarting %s in background%s\n\n" "$C_GREEN" "$APP_NAME" "$C_RESET"
+    printf "Binary path: %s\n" "$(canonical_path "$bin_path")"
     printf "Logs will not be printed in this session.\n"
     printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
 

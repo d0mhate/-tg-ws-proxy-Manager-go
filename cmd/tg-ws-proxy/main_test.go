@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -308,5 +309,16 @@ func TestStartupSummaryCanBeLogged(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "pprof_addr=127.0.0.1:6060") {
 		t.Fatalf("expected startup summary to include pprof addr, got %q", buf.String())
+	}
+}
+
+func TestCurrentBinaryPathFallsBackToArgv0(t *testing.T) {
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+	os.Args = []string{"./tg-ws-proxy-test"}
+
+	got := currentBinaryPath()
+	if got == "" || got == "<unknown>" {
+		t.Fatalf("expected currentBinaryPath to return a non-empty path, got %q", got)
 	}
 }
