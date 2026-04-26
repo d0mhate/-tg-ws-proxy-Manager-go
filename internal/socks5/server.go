@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -41,9 +40,7 @@ type Server struct {
 	logger *log.Logger
 	pool   *wsbridge.Pool
 
-	stateMu      sync.Mutex
-	wsBlacklist  map[routeKey]struct{}
-	wsFailUntil  map[routeKey]time.Time
+	routeState   *wsRouteState
 	stats        *runtimeStats
 	authFails    *authFailureTracker
 	hsFails      *handshakeFailureTracker
@@ -60,11 +57,10 @@ type Server struct {
 
 func NewServer(cfg config.Config, logger *log.Logger) *Server {
 	srv := &Server{
-		cfg:         cfg,
-		logger:      logger,
-		pool:        wsbridge.NewPool(cfg),
-		wsBlacklist: make(map[routeKey]struct{}),
-		wsFailUntil: make(map[routeKey]time.Time),
+		cfg:        cfg,
+		logger:     logger,
+		pool:       wsbridge.NewPool(cfg),
+		routeState: newWSRouteState(wsFailCooldown),
 		stats: &runtimeStats{
 			wsByDC:          make(map[int]int),
 			tcpFallbackByDC: make(map[int]int),

@@ -49,7 +49,7 @@ func (s *Server) dialWebsocketDomains(ctx context.Context, dialCfg config.Config
 		s.debugf("ws dial attempt: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, domain)
 		ws, err := s.wsDialFunc(ctx, dialCfg, targetIP, domain)
 		if err == nil {
-			s.clearFailureState(key)
+			s.clearWSFailure(key)
 			s.debugf("ws dial success: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, domain)
 			result.ws = ws
 			return result
@@ -76,6 +76,6 @@ func (s *Server) finalizeWebsocketDialFailure(key routeKey, result wsDialAttempt
 		s.markBlacklisted(key)
 		return fmt.Errorf("all websocket routes redirected: %w", errWSBlacklisted)
 	}
-	s.markFailureCooldown(key)
+	s.markWSFailure(key)
 	return result.lastErr
 }
