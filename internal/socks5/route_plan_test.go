@@ -5,7 +5,10 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
+	"reflect"
 	"testing"
+	"time"
 
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/mtproto"
@@ -87,3 +90,197 @@ func TestBuildTelegramRoutePlanInfersDCFromDestination(t *testing.T) {
 		t.Fatal("expected init to be patched after destination-based inference")
 	}
 }
+
+func TestBuildTelegramRoutePlanUsesTargetAsFallbackForInitOnlyRoute(t *testing.T) {
+	cfg := config.Default()
+	cfg.DCIPs = map[int]string{2: "149.154.167.220"}
+	srv := NewServer(cfg, log.New(io.Discard, "", 0))
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	plan := srv.buildTelegramRoutePlan(request{
+		DstHost: "203.0.113.10",
+		DstPort: 443,
+	}, init, false, true, "client")
+
+	if !plan.routeByInitOnly {
+		t.Fatal("expected routeByInitOnly to be preserved")
+	}
+	if plan.fallbackHost != "149.154.167.220" {
+		t.Fatalf("expected fallback host to use dc target, got %q", plan.fallbackHost)
+	}
+}
+
+func TestBuildTelegramRoutePlanKeepsOriginalFallbackHostForDirectTelegramRoute(t *testing.T) {
+	srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+
+	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	plan := srv.buildTelegramRoutePlan(request{
+		DstHost: "149.154.167.220",
+		DstPort: 443,
+	}, init, false, false, "client")
+
+	if plan.fallbackHost != "149.154.167.220" {
+		t.Fatalf("expected original destination as fallback host, got %q", plan.fallbackHost)
+	}
+}
+
+func TestClassifyInitPacket(t *testing.T) {
+	mtprotoInit := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
+	httpInit := append([]byte("GET / HTTP/1.1"), make([]byte, 64-len("GET / HTTP/1.1"))...)
+
+	tests := []struct {
+		name                string
+		init                []byte
+		isTelegramCandidate bool
+		wantAction          initPacketAction
+		wantInitOnly        bool
+		wantReason          string
+	}{
+		{
+			name:                "non telegram invalid probe becomes passthrough",
+			init:                bytesOfLen(64, 0x01),
+			isTelegramCandidate: false,
+			wantAction:          initPacketPassthrough,
+			wantReason:          "mtproto-probe-miss",
+		},
+		{
+			name:                "non telegram mtproto init continues as inferred route",
+			init:                mtprotoInit,
+			isTelegramCandidate: false,
+			wantAction:          initPacketContinue,
+			wantInitOnly:        true,
+		},
+		{
+			name:                "telegram http transport uses tcp fallback",
+			init:                httpInit,
+			isTelegramCandidate: true,
+			wantAction:          initPacketTCPFallback,
+			wantReason:          "http-transport",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyInitPacket(tc.init, tc.isTelegramCandidate)
+			if got.action != tc.wantAction {
+				t.Fatalf("unexpected action: got %d want %d", got.action, tc.wantAction)
+			}
+			if got.routeByInitOnly != tc.wantInitOnly {
+				t.Fatalf("unexpected routeByInitOnly: got %v want %v", got.routeByInitOnly, tc.wantInitOnly)
+			}
+			if got.reason != tc.wantReason {
+				t.Fatalf("unexpected reason: got %q want %q", got.reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+func TestDecideTelegramWSRoute(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.Config
+		plan telegramRoutePlan
+		want telegramWSRouteDecision
+	}{
+		{
+			name: "no override falls back immediately",
+			cfg:  config.Default(),
+			plan: telegramRoutePlan{},
+			want: telegramWSRouteDecision{action: telegramWSRouteTCPFallbackNoOverride},
+		},
+		{
+			name: "disabled dc falls back to target host",
+			cfg:  config.Default(),
+			plan: telegramRoutePlan{targetIP: "149.154.175.211", fallbackHost: "149.154.175.211", wsDomainDC: 1},
+			want: telegramWSRouteDecision{action: telegramWSRouteTCPFallbackWSDisabled, fallbackHost: "149.154.175.211"},
+		},
+		{
+			name: "cloudflare only still attempts websocket route",
+			cfg: config.Config{
+				UseCFProxy: true,
+				CFDomains:  []string{"cf.example.com"},
+			},
+			plan: telegramRoutePlan{wsDomainDC: 2},
+			want: telegramWSRouteDecision{action: telegramWSRouteConnect, allowCloudflareWS: true},
+		},
+		{
+			name: "telegram websocket allowed for enabled dc",
+			cfg:  config.Default(),
+			plan: telegramRoutePlan{targetIP: "149.154.167.220", fallbackHost: "149.154.167.220", wsDomainDC: 2},
+			want: telegramWSRouteDecision{action: telegramWSRouteConnect, allowTelegramWS: true, fallbackHost: "149.154.167.220"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := decideTelegramWSRoute(tc.cfg, tc.plan)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("unexpected websocket route decision: got %+v want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadAndClassifyInitNonTelegramProbeMissFallsBackToPassthrough(t *testing.T) {
+	var got struct {
+		host string
+		port int
+		init []byte
+	}
+
+	srv := NewServer(config.Default(), log.New(io.Discard, "", 0))
+	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+		got.host = host
+		got.port = port
+		got.init = append([]byte(nil), init...)
+		return nil
+	}
+
+	conn := newScriptedReadConn(bytesOfLen(64, 0x01))
+	_, handled := srv.readAndClassifyInit(context.Background(), conn, request{DstHost: "203.0.113.10", DstPort: 443}, "client", false)
+	if !handled {
+		t.Fatal("expected probe miss to be handled")
+	}
+	if got.host != "203.0.113.10" || got.port != 443 {
+		t.Fatalf("unexpected passthrough target: %s:%d", got.host, got.port)
+	}
+}
+
+func bytesOfLen(n int, b byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = b
+	}
+	return out
+}
+
+type scriptedReadConn struct {
+	data []byte
+	off  int
+}
+
+func newScriptedReadConn(data []byte) *scriptedReadConn {
+	return &scriptedReadConn{data: append([]byte(nil), data...)}
+}
+
+func (c *scriptedReadConn) Read(p []byte) (int, error) {
+	if c.off >= len(c.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, c.data[c.off:])
+	c.off += n
+	return n, nil
+}
+
+func (c *scriptedReadConn) Write(p []byte) (int, error)        { return len(p), nil }
+func (c *scriptedReadConn) Close() error                       { return nil }
+func (c *scriptedReadConn) LocalAddr() net.Addr                { return routePlanDummyAddr("local") }
+func (c *scriptedReadConn) RemoteAddr() net.Addr               { return routePlanDummyAddr("remote") }
+func (c *scriptedReadConn) SetDeadline(_ time.Time) error      { return nil }
+func (c *scriptedReadConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (c *scriptedReadConn) SetWriteDeadline(_ time.Time) error { return nil }
+
+type routePlanDummyAddr string
+
+func (a routePlanDummyAddr) Network() string { return "tcp" }
+func (a routePlanDummyAddr) String() string  { return string(a) }
