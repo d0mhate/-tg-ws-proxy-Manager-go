@@ -72,7 +72,7 @@ write_init_script() {
         printf '%s\n' '        if [ "$CF_PROXY_FIRST" = "1" ]; then'
         printf '%s\n' '            set -- "$@" --cf-proxy-first'
         printf '%s\n' '        fi'
-        printf '%s\n' '        if [ "$CF_BALANCE" = "1" ]; then'
+        printf '%s\n' '        if [ "$CF_BALANCE" = "1" ] && "$BIN" --help 2>&1 | grep -F -- "  -cf-balance" >/dev/null 2>&1; then'
         printf '%s\n' '            set -- "$@" --cf-balance'
         printf '%s\n' '        fi'
         printf '%s\n' '    fi'

@@ -123,6 +123,9 @@ func TestManagerStartCanRestartAlreadyRunningProxy(t *testing.T) {
 	if !strings.Contains(out, "Starting tg-ws-proxy in terminal") {
 		t.Fatalf("expected terminal start output after restart, got:\n%s", out)
 	}
+	if !strings.Contains(out, "Binary path:") {
+		t.Fatalf("expected terminal start output to include binary path, got:\n%s", out)
+	}
 	if !strings.Contains(out, "tg-ws-proxy exited with code 0") {
 		t.Fatalf("expected restarted terminal proxy to exit cleanly, got:\n%s", out)
 	}
@@ -151,6 +154,9 @@ func TestManagerStartBackgroundStartsProxyAndMenuShowsStop(t *testing.T) {
 	}
 	if !strings.Contains(out, "Starting tg-ws-proxy in background") {
 		t.Fatalf("expected background start output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Binary path:") {
+		t.Fatalf("expected background start output to include binary path, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Background process pid:") {
 		t.Fatalf("expected background pid output, got:\n%s", out)

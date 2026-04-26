@@ -118,9 +118,7 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 	}
 	p.mu.Unlock()
 
-	for _, client := range stale {
-		_ = client.Close()
-	}
+	p.closeLater(stale)
 
 	p.scheduleRefill(key, targetIP, domains)
 	if hit != nil {
@@ -198,9 +196,7 @@ func (p *Pool) refill(key poolKey, targetIP string, domains []string) {
 
 	for {
 		needed, stale := p.trimBucket(key)
-		for _, client := range stale {
-			go client.Close()
-		}
+		p.closeLater(stale)
 
 		if needed <= 0 {
 			return
@@ -252,6 +248,20 @@ func warmupDomains(dc int, isMedia bool) []string {
 		return []string{"kws" + dcStr + "-1.web.telegram.org", "kws" + dcStr + ".web.telegram.org"}
 	}
 	return []string{"kws" + dcStr + ".web.telegram.org", "kws" + dcStr + "-1.web.telegram.org"}
+}
+
+func (p *Pool) closeLater(clients []*Client) {
+	if len(clients) == 0 {
+		return
+	}
+
+	go func(toClose []*Client) {
+		for _, client := range toClose {
+			if client != nil {
+				_ = client.Close()
+			}
+		}
+	}(append([]*Client(nil), clients...))
 }
 
 func (p *Pool) trimBucket(key poolKey) (int, []*Client) {

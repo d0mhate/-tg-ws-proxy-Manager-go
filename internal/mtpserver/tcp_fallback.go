@@ -9,6 +9,8 @@ import (
 	"net"
 	"strconv"
 
+	"golang.org/x/sync/errgroup"
+
 	"tg-ws-proxy/internal/config"
 )
 
@@ -63,10 +65,20 @@ func (s *MTServer) bridgeRelay(
 	clientDec, clientEnc cipher.Stream,
 	remoteEnc, remoteDec cipher.Stream,
 ) {
-	errCh := make(chan error, 2)
+	bridgeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	g, gctx := errgroup.WithContext(bridgeCtx)
+	go func() {
+		<-gctx.Done()
+		_ = client.Close()
+		_ = remote.Close()
+	}()
+
 	buf := s.cfg.BufferKB * 1024
 
-	go func() {
+	g.Go(func() error {
+		defer cancel()
 		b := make([]byte, buf)
 		for {
 			n, readErr := client.Read(b)
@@ -76,21 +88,20 @@ func (s *MTServer) bridgeRelay(
 				clientDec.XORKeyStream(chunk, chunk)
 				remoteEnc.XORKeyStream(chunk, chunk)
 				if _, writeErr := remote.Write(chunk); writeErr != nil {
-					errCh <- writeErr
-					return
+					return normalizeBridgeError(gctx, writeErr)
 				}
 			}
 			if readErr != nil {
 				if errors.Is(readErr, io.EOF) {
 					readErr = nil
 				}
-				errCh <- readErr
-				return
+				return normalizeBridgeError(gctx, readErr)
 			}
 		}
-	}()
+	})
 
-	go func() {
+	g.Go(func() error {
+		defer cancel()
 		b := make([]byte, buf)
 		for {
 			n, readErr := remote.Read(b)
@@ -100,24 +111,19 @@ func (s *MTServer) bridgeRelay(
 				remoteDec.XORKeyStream(chunk, chunk)
 				clientEnc.XORKeyStream(chunk, chunk)
 				if _, writeErr := client.Write(chunk); writeErr != nil {
-					errCh <- writeErr
-					return
+					return normalizeBridgeError(gctx, writeErr)
 				}
 			}
 			if readErr != nil {
 				if errors.Is(readErr, io.EOF) {
 					readErr = nil
 				}
-				errCh <- readErr
-				return
+				return normalizeBridgeError(gctx, readErr)
 			}
 		}
-	}()
+	})
 
-	select {
-	case <-ctx.Done():
-	case <-errCh:
-	}
+	_ = g.Wait()
 }
 
 func (s *MTServer) bridgeTCPFallback(
@@ -136,4 +142,14 @@ func (s *MTServer) bridgeTCPFallback(
 
 	s.bridgeRelay(ctx, client, remote, clientDec, clientEnc, relayEnc, relayDec)
 	return nil
+}
+
+func normalizeBridgeError(ctx context.Context, err error) error {
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil
+	}
+	if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
 }

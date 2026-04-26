@@ -10,10 +10,54 @@ import (
 	"tg-ws-proxy/internal/wsbridge"
 )
 
+type initPacketAction uint8
+
+const (
+	initPacketContinue initPacketAction = iota
+	initPacketPassthrough
+	initPacketTCPFallback
+)
+
 type initReadResult struct {
 	init            []byte
 	routeByInitOnly bool
 	handled         bool
+}
+
+type initPacketDecision struct {
+	action          initPacketAction
+	routeByInitOnly bool
+	reason          string
+	info            mtproto.InitInfo
+}
+
+func classifyInitPacket(init []byte, isTelegramCandidate bool) initPacketDecision {
+	decision := initPacketDecision{action: initPacketContinue}
+
+	if !isTelegramCandidate {
+		inferred, info, parseErr := inferTelegramCandidateFromInit(init)
+		if parseErr != nil {
+			return initPacketDecision{
+				action: initPacketPassthrough,
+				reason: "mtproto-probe-miss",
+			}
+		}
+		if inferred {
+			decision.routeByInitOnly = true
+			decision.info = info
+		}
+	}
+
+	if mtproto.IsHTTPTransport(init) {
+		decision.reason = "http-transport"
+		decision.action = initPacketTCPFallback
+		if decision.routeByInitOnly {
+			decision.action = initPacketPassthrough
+			decision.reason = "http-probe"
+		}
+	}
+
+	return decision
 }
 
 func (s *Server) readAndClassifyInit(ctx context.Context, conn net.Conn, req request, clientAddr string, isTelegramCandidate bool) (initReadResult, bool) {
@@ -30,25 +74,19 @@ func (s *Server) readAndClassifyInit(ctx context.Context, conn net.Conn, req req
 	}
 
 	result := initReadResult{init: init}
-	if !isTelegramCandidate {
-		inferred, info, parseErr := inferTelegramCandidateFromInit(init)
-		if parseErr != nil {
-			s.runPassthroughWithInit(ctx, conn, req.DstHost, req.DstPort, init, clientAddr, "mtproto-probe-miss")
-			return initReadResult{}, true
-		}
-		if inferred {
-			result.routeByInitOnly = true
-			s.debugf("[%s] telegram route inferred from mtproto init on destination %s:%d dc=%d media=%v", clientAddr, req.DstHost, req.DstPort, info.DC, info.IsMedia)
-		}
+	decision := classifyInitPacket(init, isTelegramCandidate)
+	result.routeByInitOnly = decision.routeByInitOnly
+	if decision.routeByInitOnly {
+		s.debugf("[%s] telegram route inferred from mtproto init on destination %s:%d dc=%d media=%v", clientAddr, req.DstHost, req.DstPort, decision.info.DC, decision.info.IsMedia)
 	}
 
-	if mtproto.IsHTTPTransport(result.init) {
-		if result.routeByInitOnly {
-			s.runPassthroughWithInit(ctx, conn, req.DstHost, req.DstPort, result.init, clientAddr, "http-probe")
-			return initReadResult{handled: true}, true
-		}
+	switch decision.action {
+	case initPacketPassthrough:
+		s.runPassthroughWithInit(ctx, conn, req.DstHost, req.DstPort, result.init, clientAddr, decision.reason)
+		return initReadResult{handled: true}, true
+	case initPacketTCPFallback:
 		s.runTCPFallbackWithInit(ctx, conn, req.DstHost, req.DstPort, result.init, 0, false, clientAddr, func() {
-			s.debugf("[%s] route=tcp-fallback reason=http-transport destination=%s:%d", clientAddr, req.DstHost, req.DstPort)
+			s.debugf("[%s] route=tcp-fallback reason=%s destination=%s:%d", clientAddr, decision.reason, req.DstHost, req.DstPort)
 		})
 		return initReadResult{handled: true}, true
 	}

@@ -1,82 +1,105 @@
 package socks5
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 type runtimeStats struct {
-	mu               sync.Mutex
-	handshakeWait    int
-	handshakeEOF     int
-	handshakeBadVer  int
-	handshakeOther   int
-	connections      int
-	wsConnections    int
-	wsMedia          int
-	tcpFallbacks     int
-	tcpFallbackMedia int
-	httpRejected     int
-	passthrough      int
-	wsErrors         int
-	poolHits         int
-	poolMisses       int
-	blacklistHits    int
-	cooldownActivs   int
-	wsByDC           map[int]int
-	tcpFallbackByDC  map[int]int
-	errorCounts      map[string]int
+	handshakeWait    atomic.Int64
+	handshakeEOF     atomic.Int64
+	handshakeBadVer  atomic.Int64
+	handshakeOther   atomic.Int64
+	connections      atomic.Int64
+	wsConnections    atomic.Int64
+	wsMedia          atomic.Int64
+	tcpFallbacks     atomic.Int64
+	tcpFallbackMedia atomic.Int64
+	httpRejected     atomic.Int64
+	passthrough      atomic.Int64
+	wsErrors         atomic.Int64
+	poolHits         atomic.Int64
+	poolMisses       atomic.Int64
+	blacklistHits    atomic.Int64
+	cooldownActivs   atomic.Int64
+
+	mapMu           sync.Mutex
+	wsByDC          map[int]int
+	tcpFallbackByDC map[int]int
+	errorCounts     map[string]int
 }
 
-func (s *runtimeStats) incHandshakeWait() { s.add(func() { s.handshakeWait++ }) }
-func (s *runtimeStats) decHandshakeWait() {
-	s.add(func() {
-		if s.handshakeWait > 0 {
-			s.handshakeWait--
-		}
-	})
+func (s *runtimeStats) incHandshakeWait() {
+	if s == nil {
+		return
+	}
+	s.handshakeWait.Add(1)
 }
-func (s *runtimeStats) incHandshakeEOF()        { s.add(func() { s.handshakeEOF++ }) }
-func (s *runtimeStats) incHandshakeBadVersion() { s.add(func() { s.handshakeBadVer++ }) }
-func (s *runtimeStats) incHandshakeOther()      { s.add(func() { s.handshakeOther++ }) }
-func (s *runtimeStats) incConnections()         { s.add(func() { s.connections++ }) }
-func (s *runtimeStats) incWSConnections()       { s.add(func() { s.wsConnections++ }) }
-func (s *runtimeStats) incTCPFallback()         { s.add(func() { s.tcpFallbacks++ }) }
-func (s *runtimeStats) incHTTPRejected()        { s.add(func() { s.httpRejected++ }) }
-func (s *runtimeStats) incPassthrough()         { s.add(func() { s.passthrough++ }) }
-func (s *runtimeStats) incWSErrors()            { s.add(func() { s.wsErrors++ }) }
-func (s *runtimeStats) incPoolHit()             { s.add(func() { s.poolHits++ }) }
-func (s *runtimeStats) incPoolMiss()            { s.add(func() { s.poolMisses++ }) }
-func (s *runtimeStats) incBlacklistHits()       { s.add(func() { s.blacklistHits++ }) }
-func (s *runtimeStats) incCooldownActivations() { s.add(func() { s.cooldownActivs++ }) }
+
+func (s *runtimeStats) decHandshakeWait() {
+	if s == nil {
+		return
+	}
+	for {
+		v := s.handshakeWait.Load()
+		if v <= 0 {
+			return
+		}
+		if s.handshakeWait.CompareAndSwap(v, v-1) {
+			return
+		}
+	}
+}
+
+func (s *runtimeStats) incHandshakeEOF()        { if s != nil { s.handshakeEOF.Add(1) } }
+func (s *runtimeStats) incHandshakeBadVersion() { if s != nil { s.handshakeBadVer.Add(1) } }
+func (s *runtimeStats) incHandshakeOther()      { if s != nil { s.handshakeOther.Add(1) } }
+func (s *runtimeStats) incConnections()         { if s != nil { s.connections.Add(1) } }
+func (s *runtimeStats) incWSConnections()       { if s != nil { s.wsConnections.Add(1) } }
+func (s *runtimeStats) incTCPFallback()         { if s != nil { s.tcpFallbacks.Add(1) } }
+func (s *runtimeStats) incHTTPRejected()        { if s != nil { s.httpRejected.Add(1) } }
+func (s *runtimeStats) incPassthrough()         { if s != nil { s.passthrough.Add(1) } }
+func (s *runtimeStats) incWSErrors()            { if s != nil { s.wsErrors.Add(1) } }
+func (s *runtimeStats) incPoolHit()             { if s != nil { s.poolHits.Add(1) } }
+func (s *runtimeStats) incPoolMiss()            { if s != nil { s.poolMisses.Add(1) } }
+func (s *runtimeStats) incBlacklistHits()       { if s != nil { s.blacklistHits.Add(1) } }
+func (s *runtimeStats) incCooldownActivations() { if s != nil { s.cooldownActivs.Add(1) } }
 
 func (s *runtimeStats) recordWSRoute(dc int, isMedia bool) {
-	s.add(func() {
-		if isMedia {
-			s.wsMedia++
-		}
-		if s.wsByDC == nil {
-			s.wsByDC = make(map[int]int)
-		}
-		s.wsByDC[dc]++
-	})
+	if s == nil {
+		return
+	}
+	if isMedia {
+		s.wsMedia.Add(1)
+	}
+	s.mapMu.Lock()
+	if s.wsByDC == nil {
+		s.wsByDC = make(map[int]int)
+	}
+	s.wsByDC[dc]++
+	s.mapMu.Unlock()
 }
 
 func (s *runtimeStats) recordTCPFallbackRoute(dc int, isMedia bool) {
-	s.add(func() {
-		if isMedia {
-			s.tcpFallbackMedia++
-		}
-		if s.tcpFallbackByDC == nil {
-			s.tcpFallbackByDC = make(map[int]int)
-		}
-		s.tcpFallbackByDC[dc]++
-	})
+	if s == nil {
+		return
+	}
+	if isMedia {
+		s.tcpFallbackMedia.Add(1)
+	}
+	s.mapMu.Lock()
+	if s.tcpFallbackByDC == nil {
+		s.tcpFallbackByDC = make(map[int]int)
+	}
+	s.tcpFallbackByDC[dc]++
+	s.mapMu.Unlock()
 }
 
 func classifyRuntimeError(prefix string, err error) string {
@@ -106,46 +129,38 @@ func classifyRuntimeError(prefix string, err error) string {
 }
 
 func (s *runtimeStats) recordError(prefix string, err error) {
-	s.add(func() {
-		if s.errorCounts == nil {
-			s.errorCounts = make(map[string]int)
-		}
-		s.errorCounts[classifyRuntimeError(prefix, err)]++
-	})
-}
-
-func (s *runtimeStats) add(fn func()) {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	fn()
-	s.mu.Unlock()
+	key := classifyRuntimeError(prefix, err)
+	s.mapMu.Lock()
+	if s.errorCounts == nil {
+		s.errorCounts = make(map[string]int)
+	}
+	s.errorCounts[key]++
+	s.mapMu.Unlock()
 }
 
 func (s *runtimeStats) summary() string {
 	if s == nil {
 		return "disabled"
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	return fmt.Sprintf(
 		"hs_wait=%d hs_eof=%d hs_badver=%d hs_other=%d conn=%d ws=%d tcp_fb=%d passthrough=%d http_reject=%d ws_err=%d pool_hit=%d pool_miss=%d blacklist_hit=%d cooldown_set=%d",
-		s.handshakeWait,
-		s.handshakeEOF,
-		s.handshakeBadVer,
-		s.handshakeOther,
-		s.connections,
-		s.wsConnections,
-		s.tcpFallbacks,
-		s.passthrough,
-		s.httpRejected,
-		s.wsErrors,
-		s.poolHits,
-		s.poolMisses,
-		s.blacklistHits,
-		s.cooldownActivs,
+		s.handshakeWait.Load(),
+		s.handshakeEOF.Load(),
+		s.handshakeBadVer.Load(),
+		s.handshakeOther.Load(),
+		s.connections.Load(),
+		s.wsConnections.Load(),
+		s.tcpFallbacks.Load(),
+		s.passthrough.Load(),
+		s.httpRejected.Load(),
+		s.wsErrors.Load(),
+		s.poolHits.Load(),
+		s.poolMisses.Load(),
+		s.blacklistHits.Load(),
+		s.cooldownActivs.Load(),
 	)
 }
 
@@ -154,23 +169,24 @@ func (s *runtimeStats) summaryBlock(blacklist, cooldown int) string {
 		return "stats: disabled"
 	}
 
-	s.mu.Lock()
-	hsWait := s.handshakeWait
-	hsEOF := s.handshakeEOF
-	hsBadVer := s.handshakeBadVer
-	hsOther := s.handshakeOther
-	connections := s.connections
-	wsConnections := s.wsConnections
-	wsMedia := s.wsMedia
-	tcpFallbacks := s.tcpFallbacks
-	tcpFallbackMedia := s.tcpFallbackMedia
-	passthrough := s.passthrough
-	httpRejected := s.httpRejected
-	wsErrors := s.wsErrors
-	poolHits := s.poolHits
-	poolMisses := s.poolMisses
-	blacklistHits := s.blacklistHits
-	cooldownActivs := s.cooldownActivs
+	hsWait := s.handshakeWait.Load()
+	hsEOF := s.handshakeEOF.Load()
+	hsBadVer := s.handshakeBadVer.Load()
+	hsOther := s.handshakeOther.Load()
+	connections := s.connections.Load()
+	wsConnections := s.wsConnections.Load()
+	wsMedia := s.wsMedia.Load()
+	tcpFallbacks := s.tcpFallbacks.Load()
+	tcpFallbackMedia := s.tcpFallbackMedia.Load()
+	passthrough := s.passthrough.Load()
+	httpRejected := s.httpRejected.Load()
+	wsErrors := s.wsErrors.Load()
+	poolHits := s.poolHits.Load()
+	poolMisses := s.poolMisses.Load()
+	blacklistHits := s.blacklistHits.Load()
+	cooldownActivs := s.cooldownActivs.Load()
+
+	s.mapMu.Lock()
 	wsByDC := make(map[int]int, len(s.wsByDC))
 	for dc, count := range s.wsByDC {
 		wsByDC[dc] = count
@@ -183,7 +199,7 @@ func (s *runtimeStats) summaryBlock(blacklist, cooldown int) string {
 	for key, count := range s.errorCounts {
 		errorCounts[key] = count
 	}
-	s.mu.Unlock()
+	s.mapMu.Unlock()
 
 	lines := []string{
 		"stats:",
@@ -229,7 +245,7 @@ func summarizeDCMap(label string, counts map[int]int) string {
 	if len(dcs) == 0 {
 		return ""
 	}
-	sort.Ints(dcs)
+	slices.Sort(dcs)
 	parts := make([]string, 0, len(dcs))
 	for _, dc := range dcs {
 		parts = append(parts, fmt.Sprintf("%d=%d", dc, counts[dc]))
@@ -251,11 +267,11 @@ func summarizeErrorCounts(counts map[string]int) string {
 			items = append(items, item{key: key, count: count})
 		}
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].count != items[j].count {
-			return items[i].count > items[j].count
+	slices.SortFunc(items, func(a, b item) int {
+		if a.count != b.count {
+			return cmp.Compare(b.count, a.count)
 		}
-		return items[i].key < items[j].key
+		return cmp.Compare(a.key, b.key)
 	})
 	if len(items) > 4 {
 		items = items[:4]
@@ -297,11 +313,11 @@ func summarizePrefixedCounts(prefix, label string, counts map[string]int) string
 	for key, count := range filtered {
 		items = append(items, item{key: key, count: count})
 	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].count != items[j].count {
-			return items[i].count > items[j].count
+	slices.SortFunc(items, func(a, b item) int {
+		if a.count != b.count {
+			return cmp.Compare(b.count, a.count)
 		}
-		return items[i].key < items[j].key
+		return cmp.Compare(a.key, b.key)
 	})
 	if len(items) > 3 {
 		items = items[:3]

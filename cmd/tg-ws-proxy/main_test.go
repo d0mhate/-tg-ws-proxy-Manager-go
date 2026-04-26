@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"log"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,17 @@ func TestParseArgsOverridesHostAndPort(t *testing.T) {
 	}
 	if pa.cfg.Port != 19080 {
 		t.Fatalf("unexpected overridden port: %d", pa.cfg.Port)
+	}
+}
+
+func TestParseArgsPprofAddr(t *testing.T) {
+	pa, err := parseArgs([]string{"--pprof-addr", "127.0.0.1:6060"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	if pa.cfg.PprofAddr != "127.0.0.1:6060" {
+		t.Fatalf("unexpected pprof addr: %q", pa.cfg.PprofAddr)
 	}
 }
 
@@ -283,7 +295,7 @@ func TestStartupSummaryIncludesMTProtoSecretKind(t *testing.T) {
 }
 
 func TestStartupSummaryCanBeLogged(t *testing.T) {
-	pa, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com"})
+	pa, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com", "--pprof-addr", "127.0.0.1:6060"})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -294,5 +306,19 @@ func TestStartupSummaryCanBeLogged(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "mode=socks5") {
 		t.Fatalf("expected startup summary to be loggable, got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "pprof_addr=127.0.0.1:6060") {
+		t.Fatalf("expected startup summary to include pprof addr, got %q", buf.String())
+	}
+}
+
+func TestCurrentBinaryPathFallsBackToArgv0(t *testing.T) {
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+	os.Args = []string{"./tg-ws-proxy-test"}
+
+	got := currentBinaryPath()
+	if got == "" || got == "<unknown>" {
+		t.Fatalf("expected currentBinaryPath to return a non-empty path, got %q", got)
 	}
 }

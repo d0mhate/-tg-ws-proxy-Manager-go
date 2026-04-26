@@ -2,12 +2,14 @@ package socks5
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net"
 	"strconv"
-	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"tg-ws-proxy/internal/cfbalance"
 	"tg-ws-proxy/internal/config"
@@ -23,6 +25,7 @@ const (
 	wsFailCooldown       = 30 * time.Second
 	wsFailFastDial       = 2 * time.Second
 	statsLogEvery        = 5 * time.Second
+	maxConcurrentConns   = 4096
 )
 
 const errInvalidUsernamePassword = "invalid username/password"
@@ -37,9 +40,7 @@ type Server struct {
 	logger *log.Logger
 	pool   *wsbridge.Pool
 
-	stateMu      sync.Mutex
-	wsBlacklist  map[routeKey]struct{}
-	wsFailUntil  map[routeKey]time.Time
+	routeState   *wsRouteState
 	stats        *runtimeStats
 	authFails    *authFailureTracker
 	hsFails      *handshakeFailureTracker
@@ -56,11 +57,10 @@ type Server struct {
 
 func NewServer(cfg config.Config, logger *log.Logger) *Server {
 	srv := &Server{
-		cfg:         cfg,
-		logger:      logger,
-		pool:        wsbridge.NewPool(cfg),
-		wsBlacklist: make(map[routeKey]struct{}),
-		wsFailUntil: make(map[routeKey]time.Time),
+		cfg:        cfg,
+		logger:     logger,
+		pool:       wsbridge.NewPool(cfg),
+		routeState: newWSRouteState(wsFailCooldown),
 		stats: &runtimeStats{
 			wsByDC:          make(map[int]int),
 			tcpFallbackByDC: make(map[int]int),
@@ -118,9 +118,17 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = ln.Close()
 	}()
 
+	sem := make(chan struct{}, maxConcurrentConns)
 	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case sem <- struct{}{}:
+		}
+
 		conn, err := ln.Accept()
 		if err != nil {
+			<-sem
 			select {
 			case <-ctx.Done():
 				return nil
@@ -130,7 +138,10 @@ func (s *Server) Run(ctx context.Context) error {
 		}
 		s.tuneConn(conn)
 		s.debugf("accepted connection from %s", conn.RemoteAddr())
-		go s.handleConn(ctx, conn)
+		go func(conn net.Conn) {
+			defer func() { <-sem }()
+			s.handleConn(ctx, conn)
+		}(conn)
 	}
 }
 
@@ -219,9 +230,10 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 	return nil, s.finalizeWebsocketDialFailure(key, result)
 }
 
-func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string) (*wsbridge.Client, error) {
+func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string, allowTelegramWS bool) (*wsbridge.Client, error) {
 	tryCloudflare := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
 	cfDomains := s.cfDomainsForConn()
+	var lastErr error
 
 	tryBridgeCF := func() (*wsbridge.Client, error) {
 		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, cfDomains)
@@ -231,6 +243,7 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 			s.recordVerboseConnFailure(clientAddr, "ws_cf_connect", cfErr)
 			s.recordCFEvent(clientAddr, effectiveDC, isMedia, cfErr)
 			s.debugf("[%s] cloudflare websocket failed: %v", clientAddr, cfErr)
+			lastErr = cfErr
 			return nil, cfErr
 		}
 		s.recordCFEvent(clientAddr, effectiveDC, isMedia, nil)
@@ -242,6 +255,7 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 		if err != nil {
 			s.stats.recordError("ws_connect", err)
 			s.recordVerboseConnFailure(clientAddr, "ws_connect", err)
+			lastErr = err
 			return nil, err
 		}
 		return ws, nil
@@ -254,9 +268,11 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 		}
 	}
 
-	ws, err := tryTelegram()
-	if err == nil {
-		return ws, nil
+	if allowTelegramWS {
+		ws, err := tryTelegram()
+		if err == nil {
+			return ws, nil
+		}
 	}
 
 	if tryCloudflare && !s.cfg.UseCFProxyFirst {
@@ -266,10 +282,10 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 		}
 	}
 
-	if tryCloudflare && s.cfg.UseCFProxyFirst {
-		s.debugf("[%s] cloudflare-first fallback exhausted, telegram websocket failed: %v", clientAddr, err)
+	if tryCloudflare && s.cfg.UseCFProxyFirst && allowTelegramWS {
+		s.debugf("[%s] cloudflare-first fallback exhausted, telegram websocket failed: %v", clientAddr, lastErr)
 	}
-	return nil, err
+	return nil, lastErr
 }
 
 func (s *Server) cfDomainsForConn() []string {
@@ -346,23 +362,44 @@ func (s *Server) tuneConn(conn net.Conn) {
 }
 
 func bridgeTCP(ctx context.Context, a net.Conn, b net.Conn) error {
-	errCh := make(chan error, 2)
+	bridgeCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
+	g, gctx := errgroup.WithContext(bridgeCtx)
 	go func() {
+		<-gctx.Done()
+		_ = a.Close()
+		_ = b.Close()
+	}()
+
+	g.Go(func() error {
+		defer cancel()
 		_, err := io.Copy(b, a)
-		errCh <- normalizeEOF(err)
-	}()
-	go func() {
+		return normalizeBridgeCopyError(gctx, normalizeEOF(err))
+	})
+	g.Go(func() error {
+		defer cancel()
 		_, err := io.Copy(a, b)
-		errCh <- normalizeEOF(err)
-	}()
+		return normalizeBridgeCopyError(gctx, normalizeEOF(err))
+	})
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-errCh:
+	if err := g.Wait(); err != nil {
+		if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return err
 	}
+	return ctx.Err()
+}
+
+func normalizeBridgeCopyError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil && (errors.Is(err, net.ErrClosed) || errors.Is(err, context.Canceled)) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) effectiveDC(dc int) int {

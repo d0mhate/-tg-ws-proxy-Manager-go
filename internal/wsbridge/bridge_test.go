@@ -3,8 +3,11 @@ package wsbridge
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -199,6 +202,77 @@ func TestCloseWritesCloseFrame(t *testing.T) {
 	}
 }
 
+func TestCloseDoesNotBlockOnStuckWrite(t *testing.T) {
+	conn := newBlockingWriteConn()
+	client := &Client{
+		conn:   conn,
+		reader: bufio.NewReader(bytes.NewReader(nil)),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- client.Close()
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected close to report underlying close error")
+		}
+		if !errors.Is(err, errBlockingConnClosed) {
+			t.Fatalf("unexpected close error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close blocked on stuck write")
+	}
+
+	if !conn.closed {
+		t.Fatal("expected underlying connection to be closed")
+	}
+}
+
+func TestBindConnToContextInterruptsBlockedReadOnCancel(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	release := bindConnToContext(ctx, serverConn, 0)
+	defer release()
+
+	errCh := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 1)
+		_, err := serverConn.Read(buf)
+		errCh <- err
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected read to be interrupted")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blocked read was not interrupted by context cancellation")
+	}
+}
+
+func TestEffectiveConnDeadlinePrefersEarlierContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(50*time.Millisecond))
+	defer cancel()
+
+	deadline, ok := effectiveConnDeadline(ctx, time.Second)
+	if !ok {
+		t.Fatal("expected deadline")
+	}
+	if remaining := time.Until(deadline); remaining > 200*time.Millisecond {
+		t.Fatalf("expected earlier context deadline, got remaining=%s", remaining)
+	}
+}
+
 func frameForServer(t *testing.T, opcode byte, payload []byte) []byte {
 	t.Helper()
 
@@ -266,3 +340,54 @@ type dummyAddr string
 
 func (a dummyAddr) Network() string { return "tcp" }
 func (a dummyAddr) String() string  { return string(a) }
+
+var errBlockingConnClosed = errors.New("blocking conn closed")
+
+type blockingWriteConn struct {
+	mu            sync.Mutex
+	writeDeadline time.Time
+	closed        bool
+}
+
+func newBlockingWriteConn() *blockingWriteConn {
+	return &blockingWriteConn{}
+}
+
+func (c *blockingWriteConn) Read([]byte) (int, error) {
+	return 0, io.EOF
+}
+
+func (c *blockingWriteConn) Write([]byte) (int, error) {
+	for {
+		c.mu.Lock()
+		closed := c.closed
+		deadline := c.writeDeadline
+		c.mu.Unlock()
+
+		if closed {
+			return 0, errBlockingConnClosed
+		}
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
+			return 0, timeoutError{}
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (c *blockingWriteConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	return errBlockingConnClosed
+}
+
+func (c *blockingWriteConn) LocalAddr() net.Addr                { return dummyAddr("local") }
+func (c *blockingWriteConn) RemoteAddr() net.Addr               { return dummyAddr("remote") }
+func (c *blockingWriteConn) SetDeadline(t time.Time) error      { return c.SetReadDeadline(t) }
+func (c *blockingWriteConn) SetReadDeadline(time.Time) error    { return nil }
+func (c *blockingWriteConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.writeDeadline = t
+	c.mu.Unlock()
+	return nil
+}

@@ -4,7 +4,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/d0mhate/-tg-ws-proxy-Manager-go)](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/d0mhate/-tg-ws-proxy-Manager-go/total)](https://github.com/d0mhate/-tg-ws-proxy-Manager-go/releases)
 [![Go Report Card](https://goreportcard.com/badge/github.com/d0mhate/-tg-ws-proxy-Manager-go)](https://goreportcard.com/report/github.com/d0mhate/-tg-ws-proxy-Manager-go)
-![Go Version](https://img.shields.io/badge/go-1.22-00ADD8)
+![Go Version](https://img.shields.io/badge/go-1.26-00ADD8)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CGO](https://img.shields.io/badge/CGO__enabled-0-brightgreen)
 ![Protocol](https://img.shields.io/badge/protocol-SOCKS5%20%7C%20MTProto-blueviolet)
@@ -126,6 +126,7 @@ Telegram или вывести QR-код через `15) Show QR code`.
 | `--mode <socks5\|mtproto>` | `socks5` | Режим работы прокси |
 | `--host <IP>` | `127.0.0.1` | Адрес, на котором слушает сервер |
 | `--port <PORT>` | `1080` | Порт, на котором слушает сервер |
+| `--pprof-addr <ADDR>` | пусто | Включить `pprof` HTTP endpoint, например `127.0.0.1:6060` |
 | `--username <NAME>` | пусто | Логин для SOCKS5 auth |
 | `--password <PASS>` | пусто | Пароль для SOCKS5 auth |
 | `--verbose` | `off` | Подробные логи |
@@ -157,6 +158,9 @@ Telegram или вывести QR-код через `15) Show QR code`.
 
 # SOCKS5 с Cloudflare route
 ./tg-ws-proxy --mode socks5 --cf-proxy --cf-domain yourdomain.com
+
+# Включить pprof на localhost:6060
+./tg-ws-proxy --mode socks5 --pprof-addr 127.0.0.1:6060
 
 # MTProto
 ./tg-ws-proxy --mode mtproto --secret dda1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4 --port 1080 --link-ip 1.2.3.4
