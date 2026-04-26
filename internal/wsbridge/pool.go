@@ -2,19 +2,24 @@ package wsbridge
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
 	"tg-ws-proxy/internal/config"
 )
 
-const defaultPoolMaxAge = 120 * time.Second
+const (
+	defaultPoolMaxAge      = 55 * time.Second
+	defaultPoolRefillDelay = 250 * time.Millisecond
+)
 
 type DialFunc func(ctx context.Context, cfg config.Config, targetIP string, domain string) (*Client, error)
 
 type poolKey struct {
-	dc      int
-	isMedia bool
+	dc       int
+	isMedia  bool
+	targetIP string
 }
 
 type pooledClient struct {
@@ -23,15 +28,17 @@ type pooledClient struct {
 }
 
 type Pool struct {
-	cfg       config.Config
-	maxIdle   int
-	maxAge    time.Duration
-	dial      DialFunc
-	now       func() time.Time
-	mu        sync.Mutex
-	idle      map[poolKey][]pooledClient
-	refilling map[poolKey]bool
-	closed    bool
+	cfg         config.Config
+	maxIdle     int
+	maxAge      time.Duration
+	refillDelay time.Duration
+	dial        DialFunc
+	now         func() time.Time
+	sleep       func(time.Duration)
+	mu          sync.Mutex
+	idle        map[poolKey][]pooledClient
+	refilling   map[poolKey]bool
+	closed      bool
 }
 
 func NewPool(cfg config.Config) *Pool {
@@ -40,14 +47,23 @@ func NewPool(cfg config.Config) *Pool {
 	}
 
 	return &Pool{
-		cfg:       cfg,
-		maxIdle:   cfg.PoolSize,
-		maxAge:    defaultPoolMaxAge,
-		dial:      Dial,
-		now:       time.Now,
-		idle:      make(map[poolKey][]pooledClient),
-		refilling: make(map[poolKey]bool),
+		cfg:         cfg,
+		maxIdle:     cfg.PoolSize,
+		maxAge:      durationOrDefault(cfg.PoolMaxAge, defaultPoolMaxAge),
+		refillDelay: durationOrDefault(cfg.PoolRefillDelay, defaultPoolRefillDelay),
+		dial:        Dial,
+		now:         time.Now,
+		sleep:       time.Sleep,
+		idle:        make(map[poolKey][]pooledClient),
+		refilling:   make(map[poolKey]bool),
 	}
+}
+
+func durationOrDefault(value time.Duration, fallback time.Duration) time.Duration {
+	if value >= 0 {
+		return value
+	}
+	return fallback
 }
 
 func (p *Pool) SetDialFunc(dial DialFunc) {
@@ -64,7 +80,7 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 		return nil, false
 	}
 
-	key := poolKey{dc: dc, isMedia: isMedia}
+	key := poolKey{dc: dc, isMedia: isMedia, targetIP: targetIP}
 	now := p.now()
 
 	var stale []*Client
@@ -77,19 +93,23 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 	}
 
 	bucket := p.idle[key]
-	kept := bucket[:0]
+	kept := make([]pooledClient, 0, len(bucket))
 	for _, entry := range bucket {
-		if entry.client == nil || now.Sub(entry.created) > p.maxAge {
+		if entry.client == nil || (p.maxAge > 0 && now.Sub(entry.created) > p.maxAge) {
 			if entry.client != nil {
 				stale = append(stale, entry.client)
 			}
 			continue
 		}
-		if hit == nil {
-			hit = entry.client
+		if !entry.client.IsReusable() {
+			stale = append(stale, entry.client)
 			continue
 		}
 		kept = append(kept, entry)
+	}
+	if n := len(kept); n > 0 {
+		hit = kept[n-1].client
+		kept = kept[:n-1]
 	}
 	if len(kept) == 0 {
 		delete(p.idle, key)
@@ -98,15 +118,28 @@ func (p *Pool) Get(dc int, isMedia bool, targetIP string, domains []string) (*Cl
 	}
 	p.mu.Unlock()
 
-	for _, client := range stale {
-		_ = client.Close()
-	}
+	p.closeLater(stale)
 
 	p.scheduleRefill(key, targetIP, domains)
 	if hit != nil {
 		return hit, true
 	}
 	return nil, false
+}
+
+func (p *Pool) Warmup(dcIPs map[int]string) {
+	if p == nil || p.maxIdle <= 0 {
+		return
+	}
+
+	for dc, targetIP := range dcIPs {
+		if targetIP == "" {
+			continue
+		}
+		for _, isMedia := range []bool{false, true} {
+			p.scheduleRefill(poolKey{dc: dc, isMedia: isMedia, targetIP: targetIP}, targetIP, warmupDomains(dc, isMedia))
+		}
+	}
 }
 
 func (p *Pool) Close() {
@@ -162,32 +195,8 @@ func (p *Pool) refill(key poolKey, targetIP string, domains []string) {
 	}()
 
 	for {
-		p.mu.Lock()
-		if p.closed {
-			p.mu.Unlock()
-			return
-		}
-
-		now := p.now()
-		bucket := p.idle[key]
-		kept := bucket[:0]
-		for _, entry := range bucket {
-			if entry.client == nil || now.Sub(entry.created) > p.maxAge {
-				if entry.client != nil {
-					go entry.client.Close()
-				}
-				continue
-			}
-			kept = append(kept, entry)
-		}
-		if len(kept) == 0 {
-			delete(p.idle, key)
-		} else {
-			p.idle[key] = kept
-		}
-
-		needed := p.maxIdle - len(kept)
-		p.mu.Unlock()
+		needed, stale := p.trimBucket(key)
+		p.closeLater(stale)
 
 		if needed <= 0 {
 			return
@@ -211,6 +220,10 @@ func (p *Pool) refill(key poolKey, targetIP string, domains []string) {
 			created: p.now(),
 		})
 		p.mu.Unlock()
+
+		if needed > 1 && p.refillDelay > 0 {
+			p.sleep(p.refillDelay)
+		}
 	}
 }
 
@@ -227,4 +240,66 @@ func (p *Pool) connectOne(ctx context.Context, targetIP string, domains []string
 		}
 	}
 	return nil
+}
+
+func warmupDomains(dc int, isMedia bool) []string {
+	dcStr := strconv.Itoa(dc)
+	if isMedia {
+		return []string{"kws" + dcStr + "-1.web.telegram.org", "kws" + dcStr + ".web.telegram.org"}
+	}
+	return []string{"kws" + dcStr + ".web.telegram.org", "kws" + dcStr + "-1.web.telegram.org"}
+}
+
+func (p *Pool) closeLater(clients []*Client) {
+	if len(clients) == 0 {
+		return
+	}
+
+	go func(toClose []*Client) {
+		for _, client := range toClose {
+			if client != nil {
+				_ = client.Close()
+			}
+		}
+	}(append([]*Client(nil), clients...))
+}
+
+func (p *Pool) trimBucket(key poolKey) (int, []*Client) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed {
+		return 0, nil
+	}
+
+	now := p.now()
+	bucket := p.idle[key]
+	if len(bucket) == 0 {
+		delete(p.idle, key)
+		return p.maxIdle, nil
+	}
+
+	kept := bucket[:0]
+	stale := make([]*Client, 0)
+	for _, entry := range bucket {
+		if entry.client == nil || (p.maxAge > 0 && now.Sub(entry.created) > p.maxAge) {
+			if entry.client != nil {
+				stale = append(stale, entry.client)
+			}
+			continue
+		}
+		if !entry.client.IsReusable() {
+			stale = append(stale, entry.client)
+			continue
+		}
+		kept = append(kept, entry)
+	}
+
+	if len(kept) == 0 {
+		delete(p.idle, key)
+	} else {
+		p.idle[key] = kept
+	}
+
+	return p.maxIdle - len(kept), stale
 }

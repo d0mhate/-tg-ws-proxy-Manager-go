@@ -87,6 +87,28 @@ func TestManagerStartBackgroundPassesMTProtoLinkIP(t *testing.T) {
 	runManager(t, env, "stop") //nolint
 }
 
+func TestManagerStartBackgroundPassesPoolSize(t *testing.T) {
+	env := append(managerEnv(t), "POOL_SIZE=6")
+	binPath := envValue(env, "BIN_PATH")
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+
+	if !strings.Contains(args, "--pool-size") || !strings.Contains(args, "6") {
+		t.Errorf("expected --pool-size 6 in args, got:\n%s", args)
+	}
+
+	runManager(t, env, "stop") //nolint
+}
+
 func TestManagerStartBackgroundOmitsLinkIPWhenUnset(t *testing.T) {
 	env := append(managerEnv(t),
 		"PROXY_MODE=mtproto",
@@ -107,6 +129,36 @@ func TestManagerStartBackgroundOmitsLinkIPWhenUnset(t *testing.T) {
 
 	if strings.Contains(args, "--link-ip") {
 		t.Errorf("expected --link-ip to be absent when MT_LINK_IP unset, got:\n%s", args)
+	}
+
+	runManager(t, env, "stop") //nolint
+}
+
+func TestManagerStartBackgroundUsesRuntimeBinOverride(t *testing.T) {
+	env := managerEnv(t)
+
+	overrideBin := filepath.Join(t.TempDir(), "override", "tg-ws-proxy")
+	overrideArgsFile := filepath.Join(t.TempDir(), "override-args.txt")
+	binPath := envValue(env, "BIN_PATH")
+
+	writeCapturingProxyScript(t, overrideBin)
+	writeModeAwareProxyScript(t, binPath)
+
+	env = append(env,
+		"RUNTIME_BIN_OVERRIDE="+overrideBin,
+		"ARGS_FILE="+overrideArgsFile,
+	)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background with runtime override failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, overrideArgsFile)
+	args := readTrimmed(t, overrideArgsFile)
+
+	if !strings.Contains(args, "--host") || !strings.Contains(args, "0.0.0.0") {
+		t.Fatalf("expected override binary to receive normal proxy args, got:\n%s", args)
 	}
 
 	runManager(t, env, "stop") //nolint

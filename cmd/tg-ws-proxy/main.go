@@ -1,16 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 
 	"rsc.io/qr"
@@ -71,17 +77,21 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs := flag.NewFlagSet("tg-ws-proxy", flag.ContinueOnError)
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "listen host")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "listen port")
+	fs.StringVar(&cfg.PprofAddr, "pprof-addr", cfg.PprofAddr, "enable pprof HTTP server on this address, for example 127.0.0.1:6060")
 	fs.StringVar(&cfg.Username, "username", cfg.Username, "SOCKS5 username auth")
 	fs.StringVar(&cfg.Password, "password", cfg.Password, "SOCKS5 password auth")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
 	fs.IntVar(&cfg.BufferKB, "buf-kb", cfg.BufferKB, "socket buffer size in KB")
 	fs.IntVar(&cfg.PoolSize, "pool-size", cfg.PoolSize, "number of pre-opened idle WebSocket connections per active DC bucket")
+	fs.DurationVar(&cfg.PoolMaxAge, "pool-max-age", cfg.PoolMaxAge, "maximum age of an idle pooled WebSocket connection before it is discarded")
+	fs.DurationVar(&cfg.PoolRefillDelay, "pool-refill-delay", cfg.PoolRefillDelay, "delay between opening pooled WebSocket connections while refilling a bucket")
 	fs.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP dial timeout")
 	fs.DurationVar(&cfg.InitTimeout, "init-timeout", cfg.InitTimeout, "client MTProto init timeout")
 	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:149.154.167.220")
 	var cfDomainFlag string
 	fs.BoolVar(&cfg.UseCFProxy, "cf-proxy", cfg.UseCFProxy, "enable Cloudflare proxy mode for websocket routing")
 	fs.BoolVar(&cfg.UseCFProxyFirst, "cf-proxy-first", cfg.UseCFProxyFirst, "try Cloudflare websocket routing before direct Telegram websocket routing")
+	fs.BoolVar(&cfg.UseCFBalance, "cf-balance", cfg.UseCFBalance, "round-robin across multiple Cloudflare websocket domains while preserving fallback order")
 	fs.StringVar(&cfDomainFlag, "cf-domain", "", "Cloudflare domain(s) for websocket routing, e.g. example.com or domain1.com,domain2.com (required for CF proxy mode)")
 
 	var mode string
@@ -113,6 +123,12 @@ func parseArgs(args []string) (parsedArgs, error) {
 	}
 	if (cfg.Username == "") != (cfg.Password == "") {
 		return parsedArgs{}, fmt.Errorf("--username and --password must be used together")
+	}
+	if cfg.PoolMaxAge < 0 {
+		return parsedArgs{}, fmt.Errorf("--pool-max-age must be >= 0")
+	}
+	if cfg.PoolRefillDelay < 0 {
+		return parsedArgs{}, fmt.Errorf("--pool-refill-delay must be >= 0")
 	}
 	if cfDomainFlag != "" {
 		parts := strings.Split(cfDomainFlag, ",")
@@ -204,6 +220,119 @@ func isValidDomain(domain string) bool {
 	return true
 }
 
+func mtSecretKind(secret []byte) string {
+	switch {
+	case len(secret) >= 17 && secret[0] == 0xee:
+		return "ee-faketls"
+	case len(secret) >= 17 && secret[0] == 0xdd:
+		return "dd-intermediate"
+	case len(secret) == 16:
+		return "hex"
+	default:
+		return "unknown"
+	}
+}
+
+func startupSummary(pa parsedArgs) string {
+	var b bytes.Buffer
+
+	fmt.Fprintf(&b,
+		"startup mode=%s listen=%s:%d verbose=%t buf_kb=%d pool_size=%d pool_max_age=%s pool_refill_delay=%s dial_timeout=%s init_timeout=%s",
+		pa.mode, pa.cfg.Host, pa.cfg.Port, pa.cfg.Verbose, pa.cfg.BufferKB, pa.cfg.PoolSize,
+		pa.cfg.PoolMaxAge, pa.cfg.PoolRefillDelay, pa.cfg.DialTimeout, pa.cfg.InitTimeout,
+	)
+	if pa.cfg.PprofAddr != "" {
+		fmt.Fprintf(&b, " pprof_addr=%s", pa.cfg.PprofAddr)
+	}
+
+	if pa.mode == "socks5" {
+		authMode := "off"
+		if pa.cfg.Username != "" {
+			authMode = "userpass"
+		}
+		fmt.Fprintf(&b, " socks5_auth=%s", authMode)
+	}
+
+	if pa.mode == "mtproto" {
+		fmt.Fprintf(&b, " mtproto_secret=%s", mtSecretKind(pa.secret))
+		if pa.linkIP != "" {
+			fmt.Fprintf(&b, " link_ip=%s", pa.linkIP)
+		}
+	}
+
+	cfOrder := "fallback"
+	if pa.cfg.UseCFProxyFirst {
+		cfOrder = "first"
+	}
+	cfMode := "ordered"
+	if pa.cfg.UseCFBalance {
+		cfMode = "balance"
+	}
+	fmt.Fprintf(&b,
+		" cf_proxy=%t cf_order=%s cf_mode=%s cf_domains=%d",
+		pa.cfg.UseCFProxy, cfOrder, cfMode, len(pa.cfg.CFDomains),
+	)
+	if len(pa.cfg.CFDomains) > 0 {
+		fmt.Fprintf(&b, " cf_domain_list=%s", strings.Join(pa.cfg.CFDomains, ","))
+	}
+
+	fmt.Fprintf(&b, " dc_overrides=%d upstream_mtproto=%d", len(pa.cfg.DCIPs), len(pa.cfg.UpstreamProxies))
+	return b.String()
+}
+
+func currentBinaryPath() string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		if len(os.Args) > 0 && os.Args[0] != "" {
+			return os.Args[0]
+		}
+		return "<unknown>"
+	}
+	return exe
+}
+
+func startPprofServer(ctx context.Context, addr string, logger *log.Logger) error {
+	if addr == "" {
+		return nil
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen pprof on %s: %w", addr, err)
+	}
+
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Printf("pprof shutdown error: %v", err)
+		}
+	}()
+
+	go func() {
+		logger.Printf("pprof listening on http://%s/debug/pprof/", addr)
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Printf("pprof server stopped with error: %v", err)
+		}
+	}()
+
+	return nil
+}
+
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "qr" {
 		if len(os.Args) < 3 {
@@ -244,12 +373,14 @@ func main() {
 	}
 
 	logger := log.New(os.Stdout, "tg-ws-proxy ", log.LstdFlags)
-	if pa.cfg.Verbose {
-		logger.Printf("starting with verbose logging enabled")
-	}
+	logger.Printf("binary path: %s", currentBinaryPath())
+	logger.Printf("%s", startupSummary(pa))
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	if err := startPprofServer(ctx, pa.cfg.PprofAddr, logger); err != nil {
+		logger.Fatalf("pprof init failed: %v", err)
+	}
 
 	if pa.mode == "mtproto" {
 		if pa.linkIP != "" {

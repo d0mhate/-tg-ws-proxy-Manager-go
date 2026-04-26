@@ -123,6 +123,9 @@ func TestManagerStartCanRestartAlreadyRunningProxy(t *testing.T) {
 	if !strings.Contains(out, "Starting tg-ws-proxy in terminal") {
 		t.Fatalf("expected terminal start output after restart, got:\n%s", out)
 	}
+	if !strings.Contains(out, "Binary path:") {
+		t.Fatalf("expected terminal start output to include binary path, got:\n%s", out)
+	}
 	if !strings.Contains(out, "tg-ws-proxy exited with code 0") {
 		t.Fatalf("expected restarted terminal proxy to exit cleanly, got:\n%s", out)
 	}
@@ -152,6 +155,9 @@ func TestManagerStartBackgroundStartsProxyAndMenuShowsStop(t *testing.T) {
 	if !strings.Contains(out, "Starting tg-ws-proxy in background") {
 		t.Fatalf("expected background start output, got:\n%s", out)
 	}
+	if !strings.Contains(out, "Binary path:") {
+		t.Fatalf("expected background start output to include binary path, got:\n%s", out)
+	}
 	if !strings.Contains(out, "Background process pid:") {
 		t.Fatalf("expected background pid output, got:\n%s", out)
 	}
@@ -169,6 +175,48 @@ func TestManagerStartBackgroundStartsProxyAndMenuShowsStop(t *testing.T) {
 	menuOut = waitForMenuText(t, env, "2) Start proxy")
 	if !strings.Contains(menuOut, "proxy: stopped") {
 		t.Fatalf("expected menu to show stopped proxy after background stop, got:\n%s", menuOut)
+	}
+}
+
+func TestManagerStartBackgroundWithRuntimeOverrideShowsRunningAndStops(t *testing.T) {
+	env := managerEnv(t)
+	overrideBin := filepath.Join(t.TempDir(), "override", "tg-ws-proxy")
+
+	buildFakeProxyBinary(t, overrideBin)
+	env = append(env, "RUNTIME_BIN_OVERRIDE="+overrideBin)
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background with runtime override failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Background process pid:") {
+		t.Fatalf("expected background pid output, got:\n%s", out)
+	}
+
+	menuOut := waitForMenuText(t, env, "2) Stop proxy")
+	if !strings.Contains(menuOut, "proxy: running") {
+		t.Fatalf("expected menu to show running proxy for runtime override, got:\n%s", menuOut)
+	}
+
+	statusOut, statusErr := runManager(t, env, "status")
+	if statusErr != nil {
+		t.Fatalf("status failed for runtime override: %v\n%s", statusErr, statusOut)
+	}
+	if !strings.Contains(statusOut, "process   : running") {
+		t.Fatalf("expected status to report running proxy for runtime override, got:\n%s", statusOut)
+	}
+
+	stopOut, stopErr := runManager(t, env, "stop")
+	if stopErr != nil {
+		t.Fatalf("stop failed for runtime override: %v\n%s", stopErr, stopOut)
+	}
+	if !strings.Contains(stopOut, "Proxy stopped") {
+		t.Fatalf("expected stop confirmation for runtime override, got:\n%s", stopOut)
+	}
+
+	menuOut = waitForMenuText(t, env, "2) Start proxy")
+	if !strings.Contains(menuOut, "proxy: stopped") {
+		t.Fatalf("expected menu to show stopped proxy after runtime override stop, got:\n%s", menuOut)
 	}
 }
 

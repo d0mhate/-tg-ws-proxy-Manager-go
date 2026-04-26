@@ -14,23 +14,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-publish-preview:
+  go-tests:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 0
 
     steps:
       - name: checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: setup go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache: false
 
-      - name: run tests
-        run: go test ./...
+      - name: run go tests
+        run: make test-go
+
+  shell-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: setup bats
+        uses: bats-core/bats-action@5b1e60c2ee94cb1b44a616ea4b1f466f9d6e38ef
+        with:
+          bats-version: "1.13.0"
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
+
+      - name: run shell tests
+        run: make test-shell
+
+  build-and-publish-preview:
+    needs: [go-tests, shell-tests]
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: 0
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: setup go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version: "1.26"
+          cache: false
 
       - name: install lipo (llvm)
         run: |

@@ -122,12 +122,22 @@ show_telegram_settings() {
             printf "  username : <empty>\n"
         fi
         printf "  password : %s\n" "$(password_display)"
+        if [ -n "$MT_LINK_IP" ]; then
+            printf "  link ip  : %s\n" "$MT_LINK_IP"
+            link="$(socks5_proxy_link 2>/dev/null || true)"
+            if [ -n "$link" ]; then
+                printf "  tg link  : %s\n" "$link"
+            fi
+        else
+            printf "  link ip  : <not set>\n"
+        fi
     fi
     if [ -n "$DC_IPS" ]; then
         printf "  dc map   : %s\n" "$DC_IPS"
     else
         printf "  dc map   : <default>\n"
     fi
+    printf "  pool size: %s\n" "$POOL_SIZE"
     if [ "$CF_PROXY" = "1" ]; then
         printf "  cf proxy : on\n"
     else
@@ -137,6 +147,11 @@ show_telegram_settings() {
         printf "  cf order : first\n"
     else
         printf "  cf order : fallback\n"
+    fi
+    if [ "$CF_BALANCE" = "1" ]; then
+        printf "  cf mode  : balance\n"
+    else
+        printf "  cf mode  : ordered\n"
     fi
     if [ -z "$CF_DOMAIN" ]; then
         printf "  cf domain: not set\n"
@@ -168,6 +183,7 @@ show_telegram_settings_compact() {
     else
         dc_part="dc:default"
     fi
+    pool_part="pool:$POOL_SIZE"
 
     if [ "$PROXY_MODE" = "mtproto" ]; then
         if mt_secret_valid 2>/dev/null; then
@@ -180,7 +196,7 @@ show_telegram_settings_compact() {
         else
             ip_part="${C_DIM}ip:none${C_RESET}"
         fi
-        printf "  MTProto %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part"
+        printf "  MTProto  %s:%s  %s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$secret_part" "$ip_part" "$dc_part" "$pool_part"
         if [ -n "$MT_LINK_IP" ] && mt_secret_valid 2>/dev/null; then
             printf "  tg://proxy?server=%s&port=%s&secret=%s\n" "$MT_LINK_IP" "$LISTEN_PORT" "$MT_SECRET"
         fi
@@ -194,7 +210,13 @@ show_telegram_settings_compact() {
         else
             auth_part="no auth"
         fi
-        printf "  SOCKS5  %s:%s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part"
+        printf "  SOCKS5  %s:%s  %s  %s  %s\n" "$host" "$LISTEN_PORT" "$auth_part" "$dc_part" "$pool_part"
+        if [ -n "$MT_LINK_IP" ]; then
+            link="$(socks5_proxy_link 2>/dev/null || true)"
+            if [ -n "$link" ]; then
+                printf "  %s\n" "$link"
+            fi
+        fi
     fi
 
     if [ "$CF_PROXY" = "1" ]; then
@@ -207,6 +229,11 @@ show_telegram_settings_compact() {
     else
         cf_order="fallback"
     fi
+    if [ "$CF_BALANCE" = "1" ]; then
+        cf_mode="balance"
+    else
+        cf_mode="ordered"
+    fi
     if [ -z "$CF_DOMAIN" ]; then
         cf_domain_part="domain:none"
     else
@@ -218,7 +245,7 @@ show_telegram_settings_compact() {
             cf_domain_part="domain:${_cf_count} set"
         fi
     fi
-    printf "  CF      %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_domain_part"
+    printf "  CF      %s / %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_mode" "$cf_domain_part"
 }
 
 show_update_source_settings() {

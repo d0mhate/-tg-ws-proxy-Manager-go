@@ -15,7 +15,7 @@ func TestManagerConfigureDCIPMappingViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n11\n203:91.105.192.100, 2:149.154.167.220\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n12\n203:91.105.192.100, 2:149.154.167.220\n\n\n")
 	if err != nil {
 		t.Fatalf("configure dc mapping failed: %v\n%s", err, out)
 	}
@@ -40,7 +40,7 @@ func TestManagerConfigureDCIPMappingCanResetToDefaults(t *testing.T) {
 		t.Fatalf("status failed: %v\n%s", err, out)
 	}
 
-	out, err := runManagerMenu(t, env, "4\n11\ndefault\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n12\ndefault\n\n\n")
 	if err != nil {
 		t.Fatalf("reset dc mapping failed: %v\n%s", err, out)
 	}
@@ -61,7 +61,7 @@ func TestManagerCFDomainPersistedViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n8\nexample.com\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n9\nexample.com\n\n\n")
 	if err != nil {
 		t.Fatalf("configure cf domain failed: %v\n%s", err, out)
 	}
@@ -145,7 +145,7 @@ func TestManagerCFDomainClearViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n8\nclear\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n9\nclear\n\n\n")
 	if err != nil {
 		t.Fatalf("clear cf domain failed: %v\n%s", err, out)
 	}
@@ -184,7 +184,7 @@ func TestManagerCheckCFDomainViaAdvancedMenu(t *testing.T) {
 	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
 	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
 
-	out, err := runManagerMenu(t, env, "4\n9\n\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n10\n\n\n\n")
 	if err != nil {
 		t.Fatalf("check cf domain failed: %v\n%s", err, out)
 	}
@@ -219,7 +219,7 @@ func TestManagerCheckCFDomainViaCurlFallback(t *testing.T) {
 	}
 	env = setEnvValue(env, "PATH", fakeBinDir+":"+strings.Join(filteredDirs, ":"))
 
-	out, err := runManagerMenu(t, env, "4\n9\n\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n10\n\n\n\n")
 	if err != nil {
 		t.Fatalf("check cf domain (curl fallback) failed: %v\n%s", err, out)
 	}
@@ -239,8 +239,8 @@ func TestManagerConfigurePortViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	// 4 = Advanced, 12 = Port, enter new port, back, exit
-	out, err := runManagerMenu(t, env, "4\n12\n2080\n\n\n")
+	// 4 = Advanced, 13 = Port, enter new port, back, exit
+	out, err := runManagerMenu(t, env, "4\n13\n2080\n\n\n")
 	if err != nil {
 		t.Fatalf("configure port failed: %v\n%s", err, out)
 	}
@@ -258,9 +258,41 @@ func TestManagerConfigurePortRejectsInvalidValues(t *testing.T) {
 	env := managerEnv(t)
 
 	for _, bad := range []string{"0", "65536", "abc", "-1"} {
-		out, _ := runManagerMenu(t, env, "4\n12\n"+bad+"\n\n\n")
+		out, _ := runManagerMenu(t, env, "4\n13\n"+bad+"\n\n\n")
 		if !strings.Contains(out, "Port must") {
 			t.Errorf("expected validation error for port %q, got:\n%s", bad, out)
+		}
+	}
+}
+
+func TestManagerConfigurePoolSizeViaAdvancedMenu(t *testing.T) {
+	env := managerEnv(t)
+	configPath := envValue(env, "PERSIST_CONFIG_FILE")
+	if configPath == "" {
+		t.Fatal("PERSIST_CONFIG_FILE not found in env")
+	}
+
+	out, err := runManagerMenu(t, env, "4\n14\n8\n\n\n")
+	if err != nil {
+		t.Fatalf("configure pool size failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Pool size saved: 8") {
+		t.Fatalf("expected success message, got:\n%s", out)
+	}
+
+	config := readTrimmed(t, configPath)
+	if !strings.Contains(config, "POOL_SIZE='8'") {
+		t.Fatalf("expected pool size to be persisted, got:\n%s", config)
+	}
+}
+
+func TestManagerConfigurePoolSizeRejectsInvalidValues(t *testing.T) {
+	env := managerEnv(t)
+
+	for _, bad := range []string{"-1", "65", "abc"} {
+		out, _ := runManagerMenu(t, env, "4\n14\n"+bad+"\n\n\n")
+		if !strings.Contains(out, "Pool size must") {
+			t.Errorf("expected validation error for pool size %q, got:\n%s", bad, out)
 		}
 	}
 }
@@ -281,6 +313,27 @@ func TestManagerStartBackgroundUsesConfiguredPort(t *testing.T) {
 	args := readTrimmed(t, argsFile)
 	if !strings.Contains(args, "--port") || !strings.Contains(args, "9999") {
 		t.Errorf("expected --port 9999 in args, got:\n%s", args)
+	}
+
+	runManager(t, env, "stop") //nolint
+}
+
+func TestManagerStartBackgroundUsesConfiguredPoolSize(t *testing.T) {
+	env := managerEnv(t)
+	binPath := envValue(env, "BIN_PATH")
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	writeCapturingProxyScript(t, binPath)
+	env = append(env, "ARGS_FILE="+argsFile, "POOL_SIZE=7")
+
+	out, err := runManager(t, env, "start-background")
+	if err != nil {
+		t.Fatalf("start-background failed: %v\n%s", err, out)
+	}
+
+	waitForFile(t, argsFile)
+	args := readTrimmed(t, argsFile)
+	if !strings.Contains(args, "--pool-size") || !strings.Contains(args, "7") {
+		t.Errorf("expected --pool-size 7 in args, got:\n%s", args)
 	}
 
 	runManager(t, env, "stop") //nolint

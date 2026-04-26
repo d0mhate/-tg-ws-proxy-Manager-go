@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"log"
+	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestDCIPFlagsSetAndString(t *testing.T) {
@@ -38,6 +43,12 @@ func TestParseArgsDefaults(t *testing.T) {
 	if pa.mode != "socks5" {
 		t.Fatalf("unexpected default mode: %q", pa.mode)
 	}
+	if pa.cfg.PoolMaxAge != 55*time.Second {
+		t.Fatalf("unexpected default pool max age: %s", pa.cfg.PoolMaxAge)
+	}
+	if pa.cfg.PoolRefillDelay != 250*time.Millisecond {
+		t.Fatalf("unexpected default pool refill delay: %s", pa.cfg.PoolRefillDelay)
+	}
 }
 
 func TestParseArgsOverridesHostAndPort(t *testing.T) {
@@ -51,6 +62,40 @@ func TestParseArgsOverridesHostAndPort(t *testing.T) {
 	}
 	if pa.cfg.Port != 19080 {
 		t.Fatalf("unexpected overridden port: %d", pa.cfg.Port)
+	}
+}
+
+func TestParseArgsPprofAddr(t *testing.T) {
+	pa, err := parseArgs([]string{"--pprof-addr", "127.0.0.1:6060"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	if pa.cfg.PprofAddr != "127.0.0.1:6060" {
+		t.Fatalf("unexpected pprof addr: %q", pa.cfg.PprofAddr)
+	}
+}
+
+func TestParseArgsPoolTuning(t *testing.T) {
+	pa, err := parseArgs([]string{"--pool-max-age", "90s", "--pool-refill-delay", "500ms"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	if pa.cfg.PoolMaxAge != 90*time.Second {
+		t.Fatalf("unexpected pool max age: %s", pa.cfg.PoolMaxAge)
+	}
+	if pa.cfg.PoolRefillDelay != 500*time.Millisecond {
+		t.Fatalf("unexpected pool refill delay: %s", pa.cfg.PoolRefillDelay)
+	}
+}
+
+func TestParseArgsRejectsNegativePoolTuning(t *testing.T) {
+	if _, err := parseArgs([]string{"--pool-max-age", "-1s"}); err == nil {
+		t.Fatal("expected negative pool max age to be rejected")
+	}
+	if _, err := parseArgs([]string{"--pool-refill-delay", "-1ms"}); err == nil {
+		t.Fatal("expected negative pool refill delay to be rejected")
 	}
 }
 
@@ -103,6 +148,19 @@ func TestParseArgsCFProxyFirst(t *testing.T) {
 	}
 	if !pa.cfg.UseCFProxyFirst {
 		t.Fatal("expected UseCFProxyFirst to be true")
+	}
+}
+
+func TestParseArgsCFBalance(t *testing.T) {
+	pa, err := parseArgs([]string{"--cf-proxy", "--cf-balance", "--cf-domain", "a.example.com,b.example.com"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if !pa.cfg.UseCFBalance {
+		t.Fatal("expected UseCFBalance to be true")
+	}
+	if got, want := pa.cfg.CFDomains, []string{"a.example.com", "b.example.com"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("unexpected CFDomains: got %v want %v", got, want)
 	}
 }
 
@@ -171,5 +229,96 @@ func TestParseArgsMTProtoRejectsBadSecret(t *testing.T) {
 func TestParseArgsRejectsUnknownMode(t *testing.T) {
 	if _, err := parseArgs([]string{"--mode", "foobar"}); err == nil {
 		t.Fatal("expected error for unknown mode")
+	}
+}
+
+func TestStartupSummaryIncludesCFBalanceForSocks5(t *testing.T) {
+	pa, err := parseArgs([]string{
+		"--verbose",
+		"--cf-proxy",
+		"--cf-proxy-first",
+		"--cf-balance",
+		"--cf-domain", "a.example.com,b.example.com",
+		"--username", "alice",
+		"--password", "secret",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	got := startupSummary(pa)
+	for _, want := range []string{
+		"mode=socks5",
+		"socks5_auth=userpass",
+		"cf_proxy=true",
+		"cf_order=first",
+		"cf_mode=balance",
+		"cf_domains=2",
+		"cf_domain_list=a.example.com,b.example.com",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("startup summary missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "secret") {
+		t.Fatalf("did not expect startup summary to expose a password or secret: %s", got)
+	}
+}
+
+func TestStartupSummaryIncludesMTProtoSecretKind(t *testing.T) {
+	pa, err := parseArgs([]string{
+		"--mode", "mtproto",
+		"--secret", "ee0123456789abcdef0123456789abcdef676f6f676c652e636f6d",
+		"--link-ip", "127.0.0.1",
+		"--cf-proxy",
+		"--cf-balance",
+		"--cf-domain", "cf.example.com",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	got := startupSummary(pa)
+	for _, want := range []string{
+		"mode=mtproto",
+		"mtproto_secret=ee-faketls",
+		"link_ip=127.0.0.1",
+		"cf_mode=balance",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("startup summary missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "ee0123456789abcdef") {
+		t.Fatalf("did not expect startup summary to expose the secret value: %s", got)
+	}
+}
+
+func TestStartupSummaryCanBeLogged(t *testing.T) {
+	pa, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com", "--pprof-addr", "127.0.0.1:6060"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	var buf bytes.Buffer
+	logger := log.New(&buf, "", 0)
+	logger.Printf("%s", startupSummary(pa))
+
+	if !strings.Contains(buf.String(), "mode=socks5") {
+		t.Fatalf("expected startup summary to be loggable, got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "pprof_addr=127.0.0.1:6060") {
+		t.Fatalf("expected startup summary to include pprof addr, got %q", buf.String())
+	}
+}
+
+func TestCurrentBinaryPathFallsBackToArgv0(t *testing.T) {
+	oldArgs := os.Args
+	defer func() { os.Args = oldArgs }()
+	os.Args = []string{"./tg-ws-proxy-test"}
+
+	got := currentBinaryPath()
+	if got == "" || got == "<unknown>" {
+		t.Fatalf("expected currentBinaryPath to return a non-empty path, got %q", got)
 	}
 }

@@ -26,6 +26,8 @@ const (
 	opClose  = 0x8
 	opPing   = 0x9
 	opPong   = 0xA
+
+	closeWriteTimeout = 250 * time.Millisecond
 )
 
 type HandshakeError struct {
@@ -80,11 +82,8 @@ func DialEndpoint(ctx context.Context, cfg config.Config, ep WSEndpoint) (*Clien
 		MinVersion:         tls.VersionTLS12,
 		NextProtos:         []string{"http/1.1"},
 	})
-
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = tlsConn.SetDeadline(deadline)
-		defer tlsConn.SetDeadline(time.Time{})
-	}
+	releaseDeadline := bindConnToContext(ctx, tlsConn, cfg.DialTimeout)
+	defer releaseDeadline()
 
 	if err := tlsConn.Handshake(); err != nil {
 		_ = tlsConn.Close()
@@ -106,6 +105,45 @@ func Dial(ctx context.Context, cfg config.Config, targetIP string, domain string
 		TLSHost:  domain,
 		HTTPHost: domain,
 	})
+}
+
+func bindConnToContext(ctx context.Context, conn net.Conn, timeout time.Duration) func() {
+	deadline, hasDeadline := effectiveConnDeadline(ctx, timeout)
+	if hasDeadline {
+		_ = conn.SetDeadline(deadline)
+	}
+
+	cancelDone := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+		close(cancelDone)
+	})
+
+	return func() {
+		if !stopCancel() {
+			<-cancelDone
+		}
+		if hasDeadline || ctx.Err() != nil {
+			_ = conn.SetDeadline(time.Time{})
+		}
+	}
+}
+
+func effectiveConnDeadline(ctx context.Context, timeout time.Duration) (time.Time, bool) {
+	var deadline time.Time
+	hasDeadline := false
+
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+		hasDeadline = true
+	}
+
+	if ctxDeadline, ok := ctx.Deadline(); ok && (!hasDeadline || ctxDeadline.Before(deadline)) {
+		deadline = ctxDeadline
+		hasDeadline = true
+	}
+
+	return deadline, hasDeadline
 }
 
 func (c *Client) Send(data []byte) error {
@@ -153,8 +191,44 @@ func (c *Client) Recv() ([]byte, error) {
 	}
 }
 
+func (c *Client) IsReusable() bool {
+	if c == nil || c.conn == nil || c.reader == nil {
+		return false
+	}
+	if c.reader.Buffered() > 0 {
+		return false
+	}
+
+	if err := c.conn.SetReadDeadline(time.Now()); err != nil {
+		return false
+	}
+	defer c.conn.SetReadDeadline(time.Time{})
+
+	_, err := c.reader.Peek(1)
+	if err == nil {
+		return false
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+
+	return false
+}
+
 func (c *Client) Close() error {
+	if c == nil || c.conn == nil {
+		return nil
+	}
+
+	if closeWriteTimeout > 0 {
+		_ = c.conn.SetWriteDeadline(time.Now().Add(closeWriteTimeout))
+	}
 	_ = c.writeControl(opClose, nil)
+	if closeWriteTimeout > 0 {
+		_ = c.conn.SetWriteDeadline(time.Time{})
+	}
 	return c.conn.Close()
 }
 

@@ -27,7 +27,6 @@ type aggLogger struct {
 	logger  *log.Logger
 	window  time.Duration
 	buckets map[string]*aggBucket
-	stopCh  chan struct{}
 }
 
 type aggBucket struct {
@@ -42,7 +41,6 @@ func newAggLogger(logger *log.Logger, window time.Duration) *aggLogger {
 		logger:  logger,
 		window:  window,
 		buckets: make(map[string]*aggBucket),
-		stopCh:  make(chan struct{}),
 	}
 }
 

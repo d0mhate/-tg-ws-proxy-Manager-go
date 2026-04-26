@@ -23,17 +23,21 @@ type UpstreamProxy struct {
 type Config struct {
 	Host            string
 	Port            int
+	PprofAddr       string
 	Username        string
 	Password        string
 	Verbose         bool
 	BufferKB        int
 	PoolSize        int
+	PoolMaxAge      time.Duration
+	PoolRefillDelay time.Duration
 	DialTimeout     time.Duration
 	InitTimeout     time.Duration
 	ConnectWSPath   string
 	DCIPs           map[int]string
 	UseCFProxy      bool
 	UseCFProxyFirst bool
+	UseCFBalance    bool
 	CFDomain        string
 	CFDomains       []string
 	UpstreamProxies []UpstreamProxy
@@ -41,21 +45,21 @@ type Config struct {
 
 func Default() Config {
 	return Config{
-		Host:          "127.0.0.1",
-		Port:          1080,
-		Verbose:       false,
-		BufferKB:      256,
-		PoolSize:      1,
-		DialTimeout:   10 * time.Second,
-		InitTimeout:   15 * time.Second,
-		ConnectWSPath: "/apiws",
-		CFDomains:     nil,
+		Host:            "127.0.0.1",
+		Port:            1080,
+		PprofAddr:       "",
+		Verbose:         false,
+		BufferKB:        256,
+		PoolSize:        4,
+		PoolMaxAge:      55 * time.Second,
+		PoolRefillDelay: 250 * time.Millisecond,
+		DialTimeout:     10 * time.Second,
+		InitTimeout:     15 * time.Second,
+		ConnectWSPath:   "/apiws",
+		CFDomains:       nil,
 		DCIPs: map[int]string{
-			1: "149.154.175.205",
 			2: "149.154.167.220",
-			3: "149.154.175.100",
 			4: "149.154.167.220",
-			5: "91.108.56.100",
 		},
 	}
 }

@@ -58,12 +58,15 @@ write_settings_config() {
         fi
         printf "HOST='%s'\n" "$LISTEN_HOST"
         printf "PORT='%s'\n" "$LISTEN_PORT"
+        printf "PPROF_ADDR='%s'\n" "$PPROF_ADDR"
         printf "VERBOSE='%s'\n" "$VERBOSE"
+        printf "POOL_SIZE='%s'\n" "$POOL_SIZE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
         printf "PASSWORD='%s'\n" "$SOCKS_PASSWORD"
         printf "DC_IPS='%s'\n" "$DC_IPS"
         printf "CF_PROXY='%s'\n" "$CF_PROXY"
         printf "CF_PROXY_FIRST='%s'\n" "$CF_PROXY_FIRST"
+        printf "CF_BALANCE='%s'\n" "$CF_BALANCE"
         printf "CF_DOMAIN='%s'\n" "$CF_DOMAIN"
         printf "PROXY_MODE='%s'\n" "$PROXY_MODE"
         printf "MT_SECRET='%s'\n" "$MT_SECRET"
@@ -85,9 +88,18 @@ load_saved_settings() {
         [ -n "$port" ] && LISTEN_PORT="$port"
     fi
 
+    if [ -z "$PPROF_ADDR_FROM_ENV" ]; then
+        PPROF_ADDR="$(read_config_value PPROF_ADDR 2>/dev/null || true)"
+    fi
+
     if [ -z "$VERBOSE_FROM_ENV" ]; then
         verbose_value="$(read_config_value VERBOSE 2>/dev/null || true)"
         [ -n "$verbose_value" ] && VERBOSE="$verbose_value"
+    fi
+
+    if [ -z "$POOL_SIZE_FROM_ENV" ]; then
+        pool_size_value="$(read_config_value POOL_SIZE 2>/dev/null || true)"
+        [ -n "$pool_size_value" ] && POOL_SIZE="$pool_size_value"
     fi
 
     if [ -z "$SOCKS_USERNAME_FROM_ENV" ]; then
@@ -110,6 +122,11 @@ load_saved_settings() {
     if [ -z "$CF_PROXY_FIRST_FROM_ENV" ]; then
         cf_proxy_first_value="$(read_config_value CF_PROXY_FIRST 2>/dev/null || true)"
         [ -n "$cf_proxy_first_value" ] && CF_PROXY_FIRST="$cf_proxy_first_value"
+    fi
+
+    if [ -z "$CF_BALANCE_FROM_ENV" ]; then
+        cf_balance_value="$(read_config_value CF_BALANCE 2>/dev/null || true)"
+        [ -n "$cf_balance_value" ] && CF_BALANCE="$cf_balance_value"
     fi
 
     if [ -z "$CF_DOMAIN_FROM_ENV" ]; then
