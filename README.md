@@ -157,6 +157,7 @@ Telegram или вывести QR-код через `15) Show QR code`.
 | `--dc-ip <DC:IP>` | DC2 + DC4 | IP для конкретного Telegram DC, можно повторять |
 | `--cf-proxy` | `off` | Включить Cloudflare route |
 | `--cf-proxy-first` | `off` | Сначала пробовать Cloudflare, потом direct route |
+| `--cf-balance` | `off` | Балансировать трафик между несколькими Cloudflare доменами с сохранением fallback-порядка |
 | `--cf-domain <DOMAIN[,DOMAIN2]>` | пусто | Домен или список доменов для Cloudflare route |
 | `--secret <HEX>` | пусто | MTProto secret, нужен для `--mode mtproto` |
 | `--link-ip <IP>` | пусто | IP, который попадет в `tg://proxy` ссылку |
@@ -241,6 +242,28 @@ Advanced:
 - `Update source` - `release/latest`, конкретный тег или preview-ветка
 - `Remove binary` - удаление установки
 - `Mode` / `Secret` / `Upstream proxies` - MTProto-режим
+
+### Как переключиться на тестовую ветку
+
+Если нужно получать не обычные релизы, а тестовые обновления из ветки:
+
+1. Откройте меню `tgm`
+2. Перейдите в `Advanced`
+3. Выберите `Update source`
+4. Выберите режим `preview`
+5. Укажите имя тестовой ветки, например `dev` или другую ветку, которую вам дали
+6. После сохранения вернитесь в главное меню и запустите `Setup / Update`
+
+После этого менеджер будет обновляться из выбранной preview-ветки, а не из обычных release-тегов.
+
+Если нужно вернуться обратно на стабильные релизы:
+
+1. Снова откройте `Advanced -> Update source`
+2. Выберите режим `release`
+3. Оставьте `latest` или укажите конкретный тег
+4. Запустите `Setup / Update`
+
+Если у вас уже включен автозапуск, источник обновлений тоже будет сохранён.
 
 ## Cloudflare Proxy
 
