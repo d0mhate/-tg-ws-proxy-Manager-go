@@ -109,6 +109,132 @@ EOF
   [ "$status" -eq 0 ]
 }
 
+@test "run_binary adds cf-balance when binary supports it" {
+  run bash -c '
+    BIN_PATH="$1"
+    capture_file="$2"
+    LISTEN_HOST="127.0.0.1"
+    LISTEN_PORT="1081"
+    PROXY_MODE="socks5"
+    SOCKS_USERNAME=""
+    SOCKS_PASSWORD=""
+    VERBOSE="0"
+    POOL_SIZE="4"
+    DC_IPS=""
+    CF_PROXY="1"
+    CF_PROXY_FIRST="0"
+    CF_BALANCE="1"
+    CF_DOMAIN="a.example.com,b.example.com"
+    MT_LINK_IP=""
+    MT_SECRET=""
+    MT_UPSTREAM_PROXIES=""
+
+    read_first_line() {
+      [ -f "$1" ] || return 1
+      sed -n '\''1p'\'' "$1"
+    }
+
+    source ./lib/config.sh
+    source ./lib/process.sh
+
+    mkdir -p "$(dirname "$BIN_PATH")"
+    cat > "$BIN_PATH" <<'\''EOF'\''
+#!/bin/sh
+if [ "${1:-}" = "--help" ]; then
+  cat <<'\''HELP'\''
+Usage of tg-ws-proxy:
+  -cf-balance
+  -cf-domain string
+  -cf-proxy
+HELP
+  exit 0
+fi
+for arg in "$@"; do
+  printf "%s\n" "$arg"
+done > "$CAPTURE_FILE"
+EOF
+    chmod +x "$BIN_PATH"
+    CAPTURE_FILE="$capture_file" run_binary || exit 1
+
+    diff -u - "$capture_file" <<'\''EOF'\''
+--host
+127.0.0.1
+--port
+1081
+--pool-size
+4
+--cf-proxy
+--cf-domain
+a.example.com,b.example.com
+--cf-balance
+EOF
+  ' _ "$BIN_PATH" "$tmpdir/cf-balance-supported.args"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "run_binary skips cf-balance when binary does not support it" {
+  run bash -c '
+    BIN_PATH="$1"
+    capture_file="$2"
+    LISTEN_HOST="127.0.0.1"
+    LISTEN_PORT="1081"
+    PROXY_MODE="socks5"
+    SOCKS_USERNAME=""
+    SOCKS_PASSWORD=""
+    VERBOSE="0"
+    POOL_SIZE="4"
+    DC_IPS=""
+    CF_PROXY="1"
+    CF_PROXY_FIRST="0"
+    CF_BALANCE="1"
+    CF_DOMAIN="a.example.com,b.example.com"
+    MT_LINK_IP=""
+    MT_SECRET=""
+    MT_UPSTREAM_PROXIES=""
+
+    read_first_line() {
+      [ -f "$1" ] || return 1
+      sed -n '\''1p'\'' "$1"
+    }
+
+    source ./lib/config.sh
+    source ./lib/process.sh
+
+    mkdir -p "$(dirname "$BIN_PATH")"
+    cat > "$BIN_PATH" <<'\''EOF'\''
+#!/bin/sh
+if [ "${1:-}" = "--help" ]; then
+  cat <<'\''HELP'\''
+Usage of tg-ws-proxy:
+  -cf-domain string
+  -cf-proxy
+HELP
+  exit 0
+fi
+for arg in "$@"; do
+  printf "%s\n" "$arg"
+done > "$CAPTURE_FILE"
+EOF
+    chmod +x "$BIN_PATH"
+    CAPTURE_FILE="$capture_file" run_binary || exit 1
+
+    diff -u - "$capture_file" <<'\''EOF'\''
+--host
+127.0.0.1
+--port
+1081
+--pool-size
+4
+--cf-proxy
+--cf-domain
+a.example.com,b.example.com
+EOF
+  ' _ "$BIN_PATH" "$tmpdir/cf-balance-unsupported.args"
+
+  [ "$status" -eq 0 ]
+}
+
 @test "run_binary builds mtproto command with link ip and upstream proxies" {
   run bash -c '
     BIN_PATH="$1"

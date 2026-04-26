@@ -501,6 +501,45 @@ func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 			t.Fatalf("expected original init to stay unchanged without direct dc mapping, got %+v", info)
 		}
 	})
+
+	t.Run("dc1 host routes through cloudflare websocket when enabled", func(t *testing.T) {
+		var got struct {
+			targetIP string
+			domain   string
+		}
+
+		cfg := config.Default()
+		cfg.UseCFProxy = true
+		cfg.CFDomains = []string{"example.com"}
+
+		srv := NewServer(cfg, log.New(io.Discard, "", 0))
+		srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+			t.Fatal("did not expect direct telegram websocket dial for dc1 cloudflare route")
+			return nil, nil
+		}
+		srv.wsDialFunc = func(ctx context.Context, dialCfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+			got.targetIP = targetIP
+			got.domain = domain
+			clientConn, peerConn := net.Pipe()
+			go func() { _ = peerConn.Close() }()
+			return wsbridge.NewClient(clientConn), nil
+		}
+		srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+			t.Fatal("did not expect tcp fallback for dc1 cloudflare route")
+			return nil
+		}
+
+		init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 0)
+		runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.175.211", 443), init, func(reply []byte) {
+			if reply[1] != 0x00 {
+				t.Fatalf("unexpected socks reply status: %d", reply[1])
+			}
+		})
+
+		if got.targetIP != "kws1.example.com" || got.domain != "kws1.example.com" {
+			t.Fatalf("unexpected cloudflare websocket route: %+v", got)
+		}
+	})
 }
 
 func TestHandleConnCFFallbackTriedBeforeTCP(t *testing.T) {
@@ -565,6 +604,164 @@ func TestHandleConnTCPFallbackWhenCFDisabled(t *testing.T) {
 	want := []string{"ws", "tcp"}
 	if !reflect.DeepEqual(order, want) {
 		t.Fatalf("unexpected order when CF disabled: got %v want %v", order, want)
+	}
+}
+
+func TestHandleConnCFRouteForNonWhitelistDCs(t *testing.T) {
+	cases := []struct {
+		name       string
+		initDC     int16
+		dst        string
+		dcIPs      map[int]string
+		wantCFHost string
+	}{
+		{
+			name:       "dc1 raw init routes through cloudflare websocket",
+			initDC:     1,
+			dst:        "149.154.175.50",
+			dcIPs:      nil,
+			wantCFHost: "kws1.example.com",
+		},
+		{
+			name:       "dc5 raw init routes through cloudflare websocket",
+			initDC:     5,
+			dst:        "91.108.56.100",
+			dcIPs:      nil,
+			wantCFHost: "kws5.example.com",
+		},
+		{
+			name:       "dc1 with DCIPs mapping still uses cloudflare websocket",
+			initDC:     1,
+			dst:        "149.154.175.50",
+			dcIPs:      map[int]string{1: "149.154.175.50"},
+			wantCFHost: "kws1.example.com",
+		},
+		{
+			name:       "dc5 with DCIPs mapping still uses cloudflare websocket",
+			initDC:     5,
+			dst:        "91.108.56.100",
+			dcIPs:      map[int]string{5: "91.108.56.100"},
+			wantCFHost: "kws5.example.com",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.UseCFProxy = true
+			cfg.CFDomains = []string{"example.com"}
+			if tc.dcIPs != nil {
+				cfg.DCIPs = tc.dcIPs
+			} else {
+				cfg.DCIPs = map[int]string{}
+			}
+
+			var got struct {
+				targetIP string
+				domain   string
+			}
+
+			srv := NewServer(cfg, log.New(io.Discard, "", 0))
+			srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+				t.Fatalf("did not expect direct telegram websocket dial for dc%d cloudflare route", tc.initDC)
+				return nil, nil
+			}
+			srv.wsDialFunc = func(ctx context.Context, dialCfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+				got.targetIP = targetIP
+				got.domain = domain
+				clientConn, peerConn := net.Pipe()
+				go func() { _ = peerConn.Close() }()
+				return wsbridge.NewClient(clientConn), nil
+			}
+			srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+				t.Fatalf("did not expect tcp fallback for dc%d cloudflare route", tc.initDC)
+				return nil
+			}
+
+			init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, tc.initDC)
+			runHandleConnFlow(t, srv, ipv4ConnectRequest(tc.dst, 443), init, func(reply []byte) {
+				if reply[1] != 0x00 {
+					t.Fatalf("unexpected socks reply status: %d", reply[1])
+				}
+			})
+
+			if got.targetIP != tc.wantCFHost || got.domain != tc.wantCFHost {
+				t.Fatalf("unexpected cloudflare websocket route: got target=%q domain=%q want %q", got.targetIP, got.domain, tc.wantCFHost)
+			}
+		})
+	}
+}
+
+func TestHandleConnCFFallbackUsesDCIPMappingTargetForTCPWhenCFFails(t *testing.T) {
+	cases := []struct {
+		name        string
+		initDC      int16
+		dst         string
+		dcIPs       map[int]string
+		wantTCPHost string
+	}{
+		{
+			name:        "dc1 raw init falls back to dst host when cf fails",
+			initDC:      1,
+			dst:         "149.154.175.50",
+			dcIPs:       nil,
+			wantTCPHost: "149.154.175.50",
+		},
+		{
+			name:        "dc5 raw init falls back to dst host when cf fails",
+			initDC:      5,
+			dst:         "91.108.56.100",
+			dcIPs:       nil,
+			wantTCPHost: "91.108.56.100",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.UseCFProxy = true
+			cfg.CFDomains = []string{"example.com"}
+			if tc.dcIPs != nil {
+				cfg.DCIPs = tc.dcIPs
+			} else {
+				cfg.DCIPs = map[int]string{}
+			}
+
+			var order []string
+			var tcpHost string
+
+			srv := NewServer(cfg, log.New(io.Discard, "", 0))
+			srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
+				t.Fatalf("did not expect direct telegram websocket dial for dc%d", tc.initDC)
+				return nil, nil
+			}
+			srv.wsDialFunc = func(ctx context.Context, dialCfg config.Config, targetIP string, domain string) (*wsbridge.Client, error) {
+				order = append(order, "cf:"+domain)
+				return nil, io.EOF
+			}
+			srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
+				order = append(order, "tcp")
+				tcpHost = host
+				return nil
+			}
+
+			init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, tc.initDC)
+			runHandleConnFlow(t, srv, ipv4ConnectRequest(tc.dst, 443), init, func(reply []byte) {
+				if reply[1] != 0x00 {
+					t.Fatalf("unexpected socks reply status: %d", reply[1])
+				}
+			})
+
+			if len(order) < 2 || order[0] == "tcp" {
+				t.Fatalf("expected CF attempt before tcp fallback, got order=%v", order)
+			}
+			if order[len(order)-1] != "tcp" {
+				t.Fatalf("expected tcp fallback as final step, got order=%v", order)
+			}
+			if tcpHost != tc.wantTCPHost {
+				t.Fatalf("unexpected tcp fallback host: got %q want %q", tcpHost, tc.wantTCPHost)
+			}
+		})
 	}
 }
 

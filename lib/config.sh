@@ -58,6 +58,7 @@ write_settings_config() {
         fi
         printf "HOST='%s'\n" "$LISTEN_HOST"
         printf "PORT='%s'\n" "$LISTEN_PORT"
+        printf "PPROF_ADDR='%s'\n" "$PPROF_ADDR"
         printf "VERBOSE='%s'\n" "$VERBOSE"
         printf "POOL_SIZE='%s'\n" "$POOL_SIZE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
@@ -85,6 +86,10 @@ load_saved_settings() {
     if [ -z "$LISTEN_PORT_FROM_ENV" ]; then
         port="$(read_config_value PORT 2>/dev/null || true)"
         [ -n "$port" ] && LISTEN_PORT="$port"
+    fi
+
+    if [ -z "$PPROF_ADDR_FROM_ENV" ]; then
+        PPROF_ADDR="$(read_config_value PPROF_ADDR 2>/dev/null || true)"
     fi
 
     if [ -z "$VERBOSE_FROM_ENV" ]; then

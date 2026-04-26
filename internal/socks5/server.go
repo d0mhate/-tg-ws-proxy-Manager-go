@@ -219,9 +219,10 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 	return nil, s.finalizeWebsocketDialFailure(key, result)
 }
 
-func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string) (*wsbridge.Client, error) {
+func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string, allowTelegramWS bool) (*wsbridge.Client, error) {
 	tryCloudflare := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
 	cfDomains := s.cfDomainsForConn()
+	var lastErr error
 
 	tryBridgeCF := func() (*wsbridge.Client, error) {
 		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, cfDomains)
@@ -231,6 +232,7 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 			s.recordVerboseConnFailure(clientAddr, "ws_cf_connect", cfErr)
 			s.recordCFEvent(clientAddr, effectiveDC, isMedia, cfErr)
 			s.debugf("[%s] cloudflare websocket failed: %v", clientAddr, cfErr)
+			lastErr = cfErr
 			return nil, cfErr
 		}
 		s.recordCFEvent(clientAddr, effectiveDC, isMedia, nil)
@@ -242,6 +244,7 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 		if err != nil {
 			s.stats.recordError("ws_connect", err)
 			s.recordVerboseConnFailure(clientAddr, "ws_connect", err)
+			lastErr = err
 			return nil, err
 		}
 		return ws, nil
@@ -254,9 +257,11 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 		}
 	}
 
-	ws, err := tryTelegram()
-	if err == nil {
-		return ws, nil
+	if allowTelegramWS {
+		ws, err := tryTelegram()
+		if err == nil {
+			return ws, nil
+		}
 	}
 
 	if tryCloudflare && !s.cfg.UseCFProxyFirst {
@@ -266,10 +271,10 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 		}
 	}
 
-	if tryCloudflare && s.cfg.UseCFProxyFirst {
-		s.debugf("[%s] cloudflare-first fallback exhausted, telegram websocket failed: %v", clientAddr, err)
+	if tryCloudflare && s.cfg.UseCFProxyFirst && allowTelegramWS {
+		s.debugf("[%s] cloudflare-first fallback exhausted, telegram websocket failed: %v", clientAddr, lastErr)
 	}
-	return nil, err
+	return nil, lastErr
 }
 
 func (s *Server) cfDomainsForConn() []string {
