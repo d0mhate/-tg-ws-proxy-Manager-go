@@ -92,13 +92,12 @@ func TestHandleConnHandshakeFailuresLogEachAttemptInVerboseMode(t *testing.T) {
 }
 
 func TestRuntimeStatsSummaryIncludesHandshakeCounters(t *testing.T) {
-	stats := &runtimeStats{
-		handshakeWait:   3,
-		handshakeEOF:    2,
-		handshakeBadVer: 1,
-		handshakeOther:  4,
-		connections:     5,
-	}
+	stats := &runtimeStats{}
+	stats.handshakeWait.Store(3)
+	stats.handshakeEOF.Store(2)
+	stats.handshakeBadVer.Store(1)
+	stats.handshakeOther.Store(4)
+	stats.connections.Store(5)
 
 	out := stats.summary()
 	if !strings.Contains(out, "hs_wait=3") ||
@@ -112,26 +111,25 @@ func TestRuntimeStatsSummaryIncludesHandshakeCounters(t *testing.T) {
 
 func TestRuntimeStatsSummaryBlockIncludesReadableBreakdown(t *testing.T) {
 	stats := &runtimeStats{
-		handshakeWait:    1,
-		handshakeEOF:     2,
-		handshakeBadVer:  3,
-		handshakeOther:   4,
-		connections:      10,
-		wsConnections:    7,
-		wsMedia:          5,
-		tcpFallbacks:     3,
-		tcpFallbackMedia: 2,
-		passthrough:      1,
-		httpRejected:     0,
-		wsErrors:         2,
-		poolHits:         8,
-		poolMisses:       9,
-		blacklistHits:    1,
-		cooldownActivs:   2,
-		wsByDC:           map[int]int{2: 6, 203: 1},
-		tcpFallbackByDC:  map[int]int{1: 2, 5: 1},
-		errorCounts:      map[string]int{"tcp_fb_timeout": 4, "ws_connect_reset": 1, "mtproto_init_eof": 2},
+		wsByDC:          map[int]int{2: 6, 203: 1},
+		tcpFallbackByDC: map[int]int{1: 2, 5: 1},
+		errorCounts:     map[string]int{"tcp_fb_timeout": 4, "ws_connect_reset": 1, "mtproto_init_eof": 2},
 	}
+	stats.handshakeWait.Store(1)
+	stats.handshakeEOF.Store(2)
+	stats.handshakeBadVer.Store(3)
+	stats.handshakeOther.Store(4)
+	stats.connections.Store(10)
+	stats.wsConnections.Store(7)
+	stats.wsMedia.Store(5)
+	stats.tcpFallbacks.Store(3)
+	stats.tcpFallbackMedia.Store(2)
+	stats.passthrough.Store(1)
+	stats.wsErrors.Store(2)
+	stats.poolHits.Store(8)
+	stats.poolMisses.Store(9)
+	stats.blacklistHits.Store(1)
+	stats.cooldownActivs.Store(2)
 
 	out := stats.summaryBlock(3, 4)
 	for _, want := range []string{
