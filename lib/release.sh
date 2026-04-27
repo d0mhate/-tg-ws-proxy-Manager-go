@@ -380,6 +380,10 @@ sha256_file() {
 verify_source_binary() {
     [ -x "$SOURCE_BIN" ] || return 0
 
+    if [ "$(selected_update_channel 2>/dev/null || true)" = "preview" ]; then
+        return 0
+    fi
+
     asset_name="$(resolved_binary_name)"
     raw_digest="$(release_asset_digest "$asset_name" 2>/dev/null || true)"
     [ -n "$raw_digest" ] || return 0
