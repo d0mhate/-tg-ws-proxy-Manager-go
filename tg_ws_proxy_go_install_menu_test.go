@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsNumberedSelection(t 
 	}
 }
 
-func TestManagerConfigureUpdateSourcePreviewBranchPromptShowsExampleAndCanReuseSavedBranch(t *testing.T) {
+func TestManagerConfigureUpdateSourcePreviewBranchSelectionCanReuseSavedBranch(t *testing.T) {
 	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
 	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
 	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
@@ -106,22 +107,145 @@ func TestManagerConfigureUpdateSourcePreviewBranchPromptShowsExampleAndCanReuseS
 	if err != nil {
 		t.Fatalf("initial configure update source failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Preview branch name (for example: preview-channel):") {
-		t.Fatalf("expected example preview branch prompt, got:\n%s", out)
+	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
+		t.Fatalf("expected preview update source to be saved, got:\n%s", out)
 	}
 
 	out, err = runManagerMenu(t, env, "4\n17\n2\n\n\n")
 	if err != nil {
 		t.Fatalf("reusing saved preview branch failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Preview branch name (Enter to keep feature/auth-flow):") {
-		t.Fatalf("expected keep-current preview branch prompt, got:\n%s", out)
+	if !strings.Contains(out, "Select branch [1-") {
+		t.Fatalf("expected numbered preview branch picker, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
+		t.Fatalf("expected saved preview branch to be reused, got:\n%s", out)
 	}
 	if got := readTrimmed(t, updateChannelPath); got != "preview" {
 		t.Fatalf("expected persisted update channel preview, got %q", got)
 	}
 	if got := readTrimmed(t, previewBranchPath); got != "feature/auth-flow" {
 		t.Fatalf("expected persisted preview branch to stay unchanged, got %q", got)
+	}
+}
+
+func TestManagerConfigureUpdateSourceShowsPreviewBranchListFromPrettyPrintedAPIJSON(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if updateChannelPath == "" || previewBranchPath == "" {
+		t.Fatal("missing update source state files in env")
+	}
+
+	branchesFile := filepath.Join(t.TempDir(), "branches.json")
+	writeFile(t, branchesFile, `[
+  {
+    "name": "dev",
+    "type": "dir"
+  },
+  {
+    "name": "preview-channel",
+    "type": "dir"
+  }
+]
+`, 0o644)
+	env = setEnvValue(env, "PREVIEW_BRANCHES_API_URL", "file://"+branchesFile)
+
+	out, err := runManagerMenu(t, env, "4\n17\n2\n1\n\n\n")
+	if err != nil {
+		t.Fatalf("configure update source with preview branch list failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Preview branch:") || !strings.Contains(out, "1) dev") {
+		t.Fatalf("expected numbered preview branch list, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Update source saved: preview dev") {
+		t.Fatalf("expected selected preview branch to be saved, got:\n%s", out)
+	}
+	if got := readTrimmed(t, updateChannelPath); got != "preview" {
+		t.Fatalf("expected persisted update channel preview, got %q", got)
+	}
+	if got := readTrimmed(t, previewBranchPath); got != "dev" {
+		t.Fatalf("expected persisted preview branch dev, got %q", got)
+	}
+}
+
+func TestListPreviewBranchesParsesPrettyPrintedAPIJSON(t *testing.T) {
+	branchesFile := filepath.Join(t.TempDir(), "branches.json")
+	writeFile(t, branchesFile, `[
+  {
+    "name": "dev",
+    "type": "dir"
+  },
+  {
+    "name": "preview-channel",
+    "type": "dir"
+  }
+]
+`, 0o644)
+
+	cmd := exec.Command("sh", "-c", ". ./lib/globals.sh; . ./lib/release.sh; list_preview_branches 20")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(), "PREVIEW_BRANCHES_API_URL=file://"+branchesFile)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("list_preview_branches failed: %v\n%s", err, out)
+	}
+	got := string(out)
+	if !strings.Contains(got, "dev") || !strings.Contains(got, "preview-channel") {
+		t.Fatalf("expected both preview branches from pretty JSON, got:\n%s", got)
+	}
+}
+
+func TestManagerConfigureUpdateSourceShowsManualOptionWhenPreviewBranchListAvailable(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	branchesFile := filepath.Join(t.TempDir(), "branches.json")
+	writeFile(t, branchesFile, `[
+  {
+    "name": "dev",
+    "type": "dir"
+  }
+]
+`, 0o644)
+	env = setEnvValue(env, "PREVIEW_BRANCHES_API_URL", "file://"+branchesFile)
+
+	out, err := runManagerMenu(t, env, "4\n17\n2\nfeature/auth-flow\n\n\n")
+	if err != nil {
+		t.Fatalf("configure update source with typed preview branch failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "enter branch manually") {
+		t.Fatalf("expected manual option in preview branch list, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
+		t.Fatalf("expected selected preview branch to be saved, got:\n%s", out)
+	}
+}
+
+func TestManagerConfigureUpdateSourcePreviewListStillAcceptsTypedBranchName(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
+	if previewBranchPath == "" {
+		t.Fatal("missing preview branch state file in env")
+	}
+
+	branchesFile := filepath.Join(t.TempDir(), "branches.json")
+	writeFile(t, branchesFile, `[
+  {
+    "name": "dev",
+    "type": "dir"
+  }
+]
+`, 0o644)
+	env = setEnvValue(env, "PREVIEW_BRANCHES_API_URL", "file://"+branchesFile)
+
+	out, err := runManagerMenu(t, env, "4\n17\n2\nfeature/auth-flow\n\n\n")
+	if err != nil {
+		t.Fatalf("configure update source with typed preview branch failed: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "Unknown branch selection") {
+		t.Fatalf("expected typed preview branch to be accepted, got:\n%s", out)
+	}
+	if got := readTrimmed(t, previewBranchPath); got != "feature/auth-flow" {
+		t.Fatalf("expected persisted preview branch feature/auth-flow, got %q", got)
 	}
 }
 

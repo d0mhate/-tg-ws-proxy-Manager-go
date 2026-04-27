@@ -236,6 +236,42 @@ recent_release_tags() {
     return 1
 }
 
+_parse_preview_branch_names() {
+    tr -d '\n' | sed 's/},[[:space:]]*{/}\
+{/g' | while IFS= read -r _ppbn_item || [ -n "$_ppbn_item" ]; do
+        case "$_ppbn_item" in
+            *'"type":"dir"'*|*'"type": "dir"'*)
+                _ppbn_name="$(printf "%s" "$_ppbn_item" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+                [ -n "$_ppbn_name" ] && printf "%s\n" "$_ppbn_name"
+                ;;
+        esac
+    done
+}
+
+list_preview_branches() {
+    _lpb_max="${1:-20}"
+
+    case "$PREVIEW_BRANCHES_API_URL" in
+        file://*)
+            _lpb_path="${PREVIEW_BRANCHES_API_URL#file://}"
+            _parse_preview_branch_names < "$_lpb_path" 2>/dev/null | sed -n "1,${_lpb_max}p"
+            return 0
+            ;;
+    esac
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO - "$PREVIEW_BRANCHES_API_URL" 2>/dev/null | _parse_preview_branch_names | sed -n "1,${_lpb_max}p"
+        return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$PREVIEW_BRANCHES_API_URL" 2>/dev/null | _parse_preview_branch_names | sed -n "1,${_lpb_max}p"
+        return 0
+    fi
+
+    return 1
+}
+
 release_url_reachable() {
     url="$(resolved_release_url)"
     if command -v wget >/dev/null 2>&1; then

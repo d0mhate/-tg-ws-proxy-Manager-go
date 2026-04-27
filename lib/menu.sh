@@ -895,6 +895,126 @@ configure_dc_ip_mapping() {
     pause
 }
 
+choose_preview_branch_numbered() {
+    _cpbn_current="${1:-}"
+    _cpbn_branches="$(list_preview_branches 20 2>/dev/null || true)"
+
+    if [ -n "$_cpbn_current" ] && ! printf "%s\n" "$_cpbn_branches" | grep -Fx "$_cpbn_current" >/dev/null 2>&1; then
+        if [ -n "$_cpbn_branches" ]; then
+            _cpbn_branches="$(printf '%s\n%s' "$_cpbn_current" "$_cpbn_branches")"
+        else
+            _cpbn_branches="$_cpbn_current"
+        fi
+    fi
+
+    if [ -z "$_cpbn_branches" ]; then
+        if [ -n "$_cpbn_current" ]; then
+            printf "Preview branch (Enter to keep %s): " "$_cpbn_current" >&2
+        else
+            printf "Preview branch (for example: preview-channel): " >&2
+        fi
+        IFS= read -r _cpbn_typed
+        if [ -z "$_cpbn_typed" ]; then
+            if [ -n "$_cpbn_current" ]; then
+                printf "%s" "$_cpbn_current"
+                return 0
+            fi
+            printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+            return 1
+        fi
+        printf "%s" "$_cpbn_typed"
+        return 0
+    fi
+
+    printf "Preview branch:\n" >&2
+    _cpbn_count=0
+    _cpbn_old_ifs="$IFS"
+    IFS='
+'
+    for _cpbn_b in $_cpbn_branches; do
+        [ -n "$_cpbn_b" ] || continue
+        _cpbn_count=$((_cpbn_count + 1))
+        printf "  %s) %s\n" "$_cpbn_count" "$_cpbn_b" >&2
+    done
+    IFS="$_cpbn_old_ifs"
+
+    _cpbn_manual=$((_cpbn_count + 1))
+    printf "  %s) enter branch manually\n" "$_cpbn_manual" >&2
+    if [ -n "$_cpbn_current" ]; then
+        printf "Select branch [1-%s] (Enter for %s): " "$_cpbn_manual" "$_cpbn_current" >&2
+    else
+        printf "Select branch [1-%s]: " "$_cpbn_manual" >&2
+    fi
+    IFS= read -r _cpbn_sel
+
+    case "$_cpbn_sel" in
+        "")
+            if [ -n "$_cpbn_current" ]; then
+                printf "%s" "$_cpbn_current"
+                return 0
+            fi
+            printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+            return 1
+            ;;
+        "$_cpbn_manual"|m|M|manual)
+            if [ -n "$_cpbn_current" ]; then
+                printf "Preview branch (Enter to keep %s): " "$_cpbn_current" >&2
+            else
+                printf "Preview branch: " >&2
+            fi
+            IFS= read -r _cpbn_typed
+            if [ -z "$_cpbn_typed" ]; then
+                if [ -n "$_cpbn_current" ]; then
+                    printf "%s" "$_cpbn_current"
+                    return 0
+                fi
+                printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+                return 1
+            fi
+            printf "%s" "$_cpbn_typed"
+            return 0
+            ;;
+        *[!0-9]*)
+            printf "%s" "$_cpbn_sel"
+            return 0
+            ;;
+    esac
+
+    _cpbn_chosen="$(printf "%s\n" "$_cpbn_branches" | sed -n "${_cpbn_sel}p" 2>/dev/null || true)"
+    if [ -z "$_cpbn_chosen" ]; then
+        printf "\n%sUnknown branch selection%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+    printf "%s" "$_cpbn_chosen"
+    return 0
+}
+
+choose_preview_branch() {
+    _cpb_current="${1:-}"
+
+    if can_use_numbered_update_source_picker; then
+        choose_preview_branch_numbered "$_cpb_current"
+        return $?
+    fi
+
+    if [ -n "$_cpb_current" ]; then
+        printf "Preview branch (Enter to keep %s): " "$_cpb_current" >&2
+    else
+        printf "Preview branch (for example: preview-channel): " >&2
+    fi
+    IFS= read -r _cpb_typed
+    if [ -z "$_cpb_typed" ]; then
+        if [ -n "$_cpb_current" ]; then
+            printf "%s" "$_cpb_current"
+            return 0
+        fi
+        printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+    printf "%s" "$_cpb_typed"
+    return 0
+}
+
 configure_update_source() {
     show_header
     show_update_source_settings
@@ -920,21 +1040,10 @@ configure_update_source() {
             ;;
         preview)
             current_preview_branch="$(selected_preview_branch_value 2>/dev/null || true)"
-            if [ -n "$current_preview_branch" ]; then
-                printf "Preview branch name (Enter to keep %s): " "$current_preview_branch"
-            else
-                printf "Preview branch name (for example: preview-channel): "
-            fi
-            IFS= read -r new_ref
-            if [ -z "$new_ref" ]; then
-                if [ -n "$current_preview_branch" ]; then
-                    new_ref="$current_preview_branch"
-                else
-                    printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET"
-                    pause
-                    return 1
-                fi
-            fi
+            new_ref="$(choose_preview_branch "$current_preview_branch")" || {
+                pause
+                return 1
+            }
 
             UPDATE_CHANNEL="preview"
             PREVIEW_BRANCH="$new_ref"
