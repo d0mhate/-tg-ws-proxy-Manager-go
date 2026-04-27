@@ -35,6 +35,7 @@ EE_GOOGLE_SECRET ?= ee$(MT_SECRET)$(shell printf '%s' "$(EE_GOOGLE_DOMAIN)" | xx
 
 MANAGER_ENV = \
 	BIN_PATH=$(LOCAL_BIN) \
+	PERSIST_STATE_DIR=$(CURDIR)/.dev-state \
 	PROXY_MODE=$(MODE) \
 	LISTEN_PORT=$(PORT) \
 	$(if $(HOST),LISTEN_HOST=$(HOST),) \

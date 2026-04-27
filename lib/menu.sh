@@ -1164,6 +1164,56 @@ check_cf_domain() {
     pause
 }
 
+check_mt_upstream_proxies() {
+    show_header
+    printf "%sTest MTProto upstream proxies%s\n\n" "$C_BOLD" "$C_RESET"
+    _cmu_bin="$(runtime_bin_path 2>/dev/null || true)"
+    if [ ! -x "$_cmu_bin" ]; then
+        printf "%sProxy binary not found - cannot run test.%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+    _cmu_ok=0
+    _cmu_total=0
+    _cmu_interrupted=0
+    trap '_cmu_interrupted=1' INT
+    _cmu_old_ifs="$IFS"
+    IFS=','
+    for _cmu_e in $MT_UPSTREAM_PROXIES; do
+        _cmu_e="$(printf "%s" "$_cmu_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -n "$_cmu_e" ] || continue
+        [ "$_cmu_interrupted" = "0" ] || break
+        _cmu_host="$(printf "%s" "$_cmu_e" | cut -d: -f1)"
+        _cmu_port="$(printf "%s" "$_cmu_e" | cut -d: -f2)"
+        _cmu_label="${_cmu_host}:${_cmu_port}"
+        _cmu_total=$((_cmu_total + 1))
+        printf "  %-28s checking...\r" "$_cmu_label"
+        _cmu_line="$("$_cmu_bin" probe-upstream "${_cmu_host}:${_cmu_port}" 2>/dev/null || true)"
+        _cmu_status="$(printf "%s" "$_cmu_line" | cut -d' ' -f2)"
+        _cmu_detail="$(printf "%s" "$_cmu_line" | cut -d' ' -f3)"
+        case "$_cmu_status" in
+            ok)
+                printf "  %-28s %stcp ok | %s%s\n" "$_cmu_label" "$C_GREEN" "$_cmu_detail" "$C_RESET"
+                _cmu_ok=$((_cmu_ok + 1))
+                ;;
+            fail)
+                printf "  %-28s %sfailed | %s%s\n" "$_cmu_label" "$C_RED" "$_cmu_detail" "$C_RESET"
+                ;;
+            *)
+                printf "  %-28s %sunknown error%s\n" "$_cmu_label" "$C_RED" "$C_RESET"
+                ;;
+        esac
+    done
+    IFS="$_cmu_old_ifs"
+    trap - INT
+    if [ "$_cmu_interrupted" = "1" ]; then
+        printf "\nCancelled.\n"
+    else
+        printf "\n%d of %d reachable.\n" "$_cmu_ok" "$_cmu_total"
+    fi
+    pause
+}
+
 configure_mt_upstream_proxies() {
     while true; do
         show_header
@@ -1179,7 +1229,10 @@ configure_mt_upstream_proxies() {
                 _up_e="$(printf "%s" "$_up_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
                 [ -n "$_up_e" ] || continue
                 _up_count=$((_up_count + 1))
-                printf "  %d. %s\n" "$_up_count" "$_up_e"
+                _up_host="$(printf "%s" "$_up_e" | cut -d: -f1)"
+                _up_port="$(printf "%s" "$_up_e" | cut -d: -f2)"
+                _up_sec="$(printf "%s" "$_up_e" | cut -d: -f3-)"
+                printf "  %d. %s:%s  [%s]\n" "$_up_count" "$_up_host" "$_up_port" "$(upstream_secret_kind "$_up_sec")"
             done
             IFS="$_up_old_ifs"
         fi
@@ -1189,8 +1242,9 @@ configure_mt_upstream_proxies() {
 
         printf "\n  1) Add proxy\n"
         if [ "$_up_count" -gt 0 ]; then
-            printf "  2) Remove proxy\n"
-            printf "  3) Clear all\n"
+            printf "  2) Test\n"
+            printf "  3) Remove proxy\n"
+            printf "  4) Clear all\n"
         fi
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
@@ -1199,12 +1253,37 @@ configure_mt_upstream_proxies() {
         case "$_up_choice" in
             1|add)
                 printf "\nEnter HOST:PORT:SECRET\n"
-                printf "Example: proxy.example.com:443:ddf0e1d2c3b4a5968778695a4b3c2d1e0f\n"
-                printf "Entry: "
+                printf "  %sexample:%s proxy.example.com:443:ddf0e1d2c3b4a5968778695a4b3c2d1e0f\n" "$C_DIM" "$C_RESET"
+                printf "\n%sTip:%s you can also paste a block directly from a proxy channel:\n" "$C_BOLD" "$C_RESET"
+                printf "  %sServer: proxy.example.com\n" "$C_DIM"
+                printf "  Port: 443\n"
+                printf "  Secret: ddf0e1d2c3b4a5968778695a4b3c2d1e0f%s\n" "$C_RESET"
+                printf "\nEntry: "
                 IFS= read -r _up_new
                 if [ -z "$_up_new" ]; then
                     continue
                 fi
+                case "$_up_new" in
+                    [Ss]erver:*)
+                        _up_srv="$(printf "%s" "$_up_new" | sed 's/^[^:]*:[[:space:]]*//')"
+                        _up_prt=""
+                        _up_sec=""
+                        IFS= read -r _up_l2
+                        case "$_up_l2" in
+                            [Pp]ort:*)
+                                _up_prt="$(printf "%s" "$_up_l2" | sed 's/^[^:]*:[[:space:]]*//')" ;;
+                        esac
+                        IFS= read -r _up_l3
+                        case "$_up_l3" in
+                            [Ss]ecret:*|[Kk]ey:*)
+                                _up_sec="$(printf "%s" "$_up_l3" | sed 's/^[^:]*:[[:space:]]*//')" ;;
+                        esac
+                        if [ -n "$_up_srv" ] && [ -n "$_up_prt" ] && [ -n "$_up_sec" ]; then
+                            _up_new="${_up_srv}:${_up_prt}:${_up_sec}"
+                        fi
+                        ;;
+                esac
+                _up_new="$(normalize_upstream_proxy_entry "$_up_new")"
                 if ! validate_upstream_proxy_entry "$_up_new" 2>/dev/null; then
                     printf "\n%sInvalid entry. Expected HOST:PORT:SECRET\n" "$C_RED"
                     printf "SECRET: 32 hex (plain) | 34 hex dd-prefix | 34+ hex ee-prefix%s\n" "$C_RESET"
@@ -1221,7 +1300,11 @@ configure_mt_upstream_proxies() {
                 prompt_restart_proxy_for_updated_settings
                 pause
                 ;;
-            2|remove)
+            2|test)
+                [ "$_up_count" -gt 0 ] || continue
+                check_mt_upstream_proxies
+                ;;
+            3|remove)
                 [ "$_up_count" -gt 0 ] || continue
                 if [ "$_up_count" -eq 1 ]; then
                     MT_UPSTREAM_PROXIES=""
@@ -1257,7 +1340,7 @@ configure_mt_upstream_proxies() {
                 prompt_restart_proxy_for_updated_settings
                 pause
                 ;;
-            3|clear)
+            4|clear)
                 [ "$_up_count" -gt 0 ] || continue
                 MT_UPSTREAM_PROXIES=""
                 write_settings_config || { pause; continue; }

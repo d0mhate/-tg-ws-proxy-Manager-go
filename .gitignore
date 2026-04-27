@@ -17,6 +17,7 @@ Desktop.ini
 
 # local dev
 .env
+/.dev-state/
 
 # Project-specific (not for the repo)
 scan_ips.py

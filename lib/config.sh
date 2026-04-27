@@ -329,6 +329,23 @@ generate_mt_secret() {
 }
 
 # Returns 0 if HOST:PORT:SECRET entry is valid, 1 otherwise.
+# If secret contains non-hex chars (e.g. base64 from a Telegram proxy link),
+# decode it to hex. Handles both base64url (-_) and standard (+/) variants.
+normalize_upstream_proxy_entry() {
+    _nup_host="$(printf "%s" "$1" | cut -d: -f1)"
+    _nup_port="$(printf "%s" "$1" | cut -d: -f2)"
+    _nup_secret="$(printf "%s" "$1" | cut -d: -f3-)"
+    case "$_nup_secret" in
+        *[!0-9a-fA-F]*)
+            _nup_hex="$(printf "%s" "$_nup_secret" | tr -- '-_' '+/' | \
+                awk '{r=length($0)%4; if(r==2)print $0"=="; else if(r==3)print $0"="; else print $0}' | \
+                base64 -d 2>/dev/null | xxd -p 2>/dev/null | tr -d '\n')"
+            [ -n "$_nup_hex" ] && _nup_secret="$_nup_hex"
+            ;;
+    esac
+    printf "%s:%s:%s" "$_nup_host" "$_nup_port" "$_nup_secret"
+}
+
 validate_upstream_proxy_entry() {
     _vup_entry="$1"
     _vup_host="$(printf "%s" "$_vup_entry" | cut -d: -f1)"
@@ -350,6 +367,14 @@ validate_upstream_proxy_entry() {
         *)         [ "$_vup_slen" -eq 32 ]  || return 1 ;;
     esac
     return 0
+}
+
+upstream_secret_kind() {
+    case "$1" in
+        [eE][eE]*) printf "ee-faketls" ;;
+        [dD][dD]*) printf "dd-intermediate" ;;
+        *)         printf "plain" ;;
+    esac
 }
 
 mt_proxy_link() {

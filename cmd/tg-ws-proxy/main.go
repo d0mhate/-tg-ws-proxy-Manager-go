@@ -333,7 +333,57 @@ func startPprofServer(ctx context.Context, addr string, logger *log.Logger) erro
 	return nil
 }
 
+func classifyDialErr(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	if strings.Contains(err.Error(), "connection refused") {
+		return "refused"
+	}
+	return "error"
+}
+
+func probeUpstream(targets []string) int {
+	if len(targets) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: tg-ws-proxy probe-upstream HOST:PORT [HOST:PORT ...]")
+		return 2
+	}
+	const dialTimeout = 5 * time.Second
+	allOK := true
+	for _, target := range targets {
+		if _, _, err := net.SplitHostPort(target); err != nil {
+			fmt.Printf("%s fail invalid\n", target)
+			allOK = false
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		start := time.Now()
+		conn, err := new(net.Dialer).DialContext(ctx, "tcp", target)
+		elapsed := time.Since(start).Round(time.Millisecond)
+		cancel()
+		if err != nil {
+			fmt.Printf("%s fail %s\n", target, classifyDialErr(err))
+			allOK = false
+			continue
+		}
+		_ = conn.Close()
+		fmt.Printf("%s ok %s\n", target, elapsed)
+	}
+	if allOK {
+		return 0
+	}
+	return 1
+}
+
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "probe-upstream" {
+		os.Exit(probeUpstream(os.Args[2:]))
+	}
+
 	if len(os.Args) >= 2 && os.Args[1] == "qr" {
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: tg-ws-proxy qr <link>")
