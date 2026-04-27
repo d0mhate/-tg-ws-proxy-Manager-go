@@ -37,6 +37,9 @@ teardown() {
     DEFAULT_BINARY_NAME="tg-ws-proxy-openwrt"
     BINARY_NAME=""
 
+    source ./lib/platform.sh
+    source ./lib/platform.sh
+    source ./lib/platform.sh
     source ./lib/release.sh
 
     is_openwrt() { return 1; }
@@ -150,6 +153,118 @@ EOF
     [ -x "$SOURCE_BIN" ] || exit 1
     [ "$(sed -n '\''1p'\'' "$SOURCE_VERSION_FILE")" = "v1.0.0" ] || exit 1
   ' _ "$SOURCE_BIN" "$SOURCE_VERSION_FILE"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "verify_source_binary checks sha256 without executing downloaded binary" {
+  run bash -c '
+    SOURCE_BIN="$1"
+    RELEASE_API_URL="file://$2"
+    OPENWRT_RELEASE_FILE="$3"
+    DEFAULT_BINARY_NAME="tg-ws-proxy-openwrt"
+    MARKER_FILE="$4"
+
+    mkdir -p "$(dirname "$SOURCE_BIN")"
+    cat > "$SOURCE_BIN" <<'\''EOF'\''
+#!/bin/sh
+echo executed > "$MARKER_FILE"
+exit 0
+EOF
+    chmod +x "$SOURCE_BIN"
+
+    cat > "$OPENWRT_RELEASE_FILE" <<'\''EOF'\''
+DISTRIB_ID='\''OpenWrt'\''
+DISTRIB_ARCH='\''mipsel_24kc'\''
+EOF
+
+    digest="$(sha256sum "$SOURCE_BIN" | awk '\''{print $1}'\'')"
+    cat > "$2" <<EOF
+{"tag_name":"v1.2.3","assets":[{"name":"tg-ws-proxy-openwrt-mipsel_24kc","digest":"sha256:$digest"}]}
+EOF
+
+    source ./lib/platform.sh
+    source ./lib/release.sh
+
+    verify_source_binary || exit 1
+    [ -x "$SOURCE_BIN" ] || exit 1
+    [ ! -f "$4" ] || exit 1
+  ' _ "$SOURCE_BIN" "$tmpdir/release_api.json" "$tmpdir/openwrt_release" "$tmpdir/executed.marker"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "resolved_release_url and release_asset_digest use the same asset name" {
+  run bash -c '
+    RELEASE_API_URL="file://$1"
+    RELEASE_DOWNLOAD_BASE_URL="https://example.com/latest/download"
+    BINARY_NAME=""
+
+    cat > "$1" <<'\''EOF'\''
+{"tag_name":"v1.2.3","assets":[
+  {"name":"tg-ws-proxy-linux-amd64","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+  {"name":"tg-ws-proxy-linux-arm64","digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222"}
+]}
+EOF
+
+    source ./lib/release.sh
+
+    is_openwrt() { return 1; }
+    generic_binary_name() { printf "tg-ws-proxy-linux-amd64"; }
+    selected_preview_branch() { return 1; }
+    selected_release_tag() { return 1; }
+
+    [ "$(resolved_release_url)" = "https://example.com/latest/download/tg-ws-proxy-linux-amd64" ] || exit 1
+    [ "$(release_asset_digest "$(resolved_binary_name)")" = "sha256:1111111111111111111111111111111111111111111111111111111111111111" ] || exit 1
+    [ -z "$(release_asset_digest "tg-ws-proxy-linux-armv7" 2>/dev/null || true)" ] || exit 1
+  ' _ "$tmpdir/release_api.json"
+
+  [ "$status" -eq 0 ]
+}
+
+@test "resolved_release_url and release_asset_digest stay aligned across supported architectures" {
+  run bash -c '
+    RELEASE_API_URL="file://$1"
+    RELEASE_DOWNLOAD_BASE_URL="https://example.com/latest/download"
+    PREVIEW_BASE_URL="https://example.com/preview"
+    SCRIPT_RELEASE_BASE_URL="https://example.com/releases"
+    DEFAULT_BINARY_NAME="tg-ws-proxy-openwrt"
+    BINARY_NAME=""
+
+    cat > "$1" <<'\''EOF'\''
+{"tag_name":"v1.2.3","assets":[
+  {"name":"tg-ws-proxy-openwrt-mipsel_24kc","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"},
+  {"name":"tg-ws-proxy-openwrt-mips_24kc","digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222"},
+  {"name":"tg-ws-proxy-openwrt-aarch64","digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333"},
+  {"name":"tg-ws-proxy-openwrt-x86_64","digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444"},
+  {"name":"tg-ws-proxy-openwrt-armv7","digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555"}
+]}
+EOF
+
+    source ./lib/platform.sh
+    source ./lib/release.sh
+
+    is_openwrt() { return 0; }
+    selected_preview_branch() { return 1; }
+    selected_release_tag() { return 1; }
+
+    check_case() {
+      arch="$1"
+      want_name="$2"
+      want_digest="$3"
+      openwrt_arch() { printf "%s" "$arch"; }
+
+      [ "$(resolved_binary_name)" = "$want_name" ] || return 1
+      [ "$(resolved_release_url)" = "https://example.com/latest/download/$want_name" ] || return 1
+      [ "$(release_asset_digest "$(resolved_binary_name)")" = "$want_digest" ] || return 1
+    }
+
+    check_case "mipsel_24kc" "tg-ws-proxy-openwrt-mipsel_24kc" "sha256:1111111111111111111111111111111111111111111111111111111111111111" || exit 1
+    check_case "mips_24kc" "tg-ws-proxy-openwrt-mips_24kc" "sha256:2222222222222222222222222222222222222222222222222222222222222222" || exit 1
+    check_case "aarch64" "tg-ws-proxy-openwrt-aarch64" "sha256:3333333333333333333333333333333333333333333333333333333333333333" || exit 1
+    check_case "x86_64" "tg-ws-proxy-openwrt-x86_64" "sha256:4444444444444444444444444444444444444444444444444444444444444444" || exit 1
+    check_case "arm_cortex-a7_neon-vfpv4" "tg-ws-proxy-openwrt-armv7" "sha256:5555555555555555555555555555555555555555555555555555555555555555" || exit 1
+  ' _ "$tmpdir/release_api_matrix.json"
 
   [ "$status" -eq 0 ]
 }

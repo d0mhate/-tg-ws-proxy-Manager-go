@@ -262,21 +262,128 @@ script_release_url() {
     printf "%s/%s/%s" "$SCRIPT_RELEASE_BASE_URL" "$ref" "$PERSIST_MANAGER_NAME"
 }
 
+release_api_payload() {
+    case "$RELEASE_API_URL" in
+        file://*)
+            cat "${RELEASE_API_URL#file://}" 2>/dev/null || return 1
+            return 0
+            ;;
+    esac
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO - "$RELEASE_API_URL" 2>/dev/null && return 0
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$RELEASE_API_URL" 2>/dev/null && return 0
+    fi
+
+    return 1
+}
+
+release_asset_digest() {
+    asset_name="$1"
+    payload="$(release_api_payload 2>/dev/null || true)"
+    [ -n "$payload" ] || return 1
+
+    printf "%s" "$payload" | tr -d '\n' | awk -v target="$asset_name" -F'"' '
+        {
+            current = ""
+            for (i = 1; i <= NF; i++) {
+                if ($i == "name" && (i + 2) <= NF) {
+                    current = $(i + 2)
+                    continue
+                }
+                if ($i == "digest" && current == target && (i + 2) <= NF) {
+                    print $(i + 2)
+                    exit
+                }
+            }
+        }
+    '
+}
+
+parse_sha256_digest() {
+    digest="$1"
+    case "$digest" in
+        sha256:????????????????????????????????????????????????????????????????)
+            sum="${digest#sha256:}"
+            case "$sum" in
+                *[!0-9a-fA-F]*)
+                    return 1
+                    ;;
+            esac
+            printf "%s" "$sum" | tr '[:upper:]' '[:lower:]'
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+sha256_file() {
+    file_path="$1"
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file_path" 2>/dev/null | awk '{print $1}'
+        return $?
+    fi
+
+    if command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file_path" 2>/dev/null | sed 's/^.*= //'
+        return $?
+    fi
+
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file_path" 2>/dev/null | awk '{print $1}'
+        return $?
+    fi
+
+    return 1
+}
+
+verify_source_binary() {
+    [ -x "$SOURCE_BIN" ] || return 0
+
+    asset_name="$(resolved_binary_name)"
+    raw_digest="$(release_asset_digest "$asset_name" 2>/dev/null || true)"
+    [ -n "$raw_digest" ] || return 0
+
+    want_sum="$(parse_sha256_digest "$raw_digest" 2>/dev/null || true)"
+    [ -n "$want_sum" ] || return 0
+
+    got_sum="$(sha256_file "$SOURCE_BIN" 2>/dev/null || true)"
+    [ -n "$got_sum" ] || return 0
+
+    got_sum="$(printf "%s" "$got_sum" | tr '[:upper:]' '[:lower:]')"
+    if [ "$got_sum" = "$want_sum" ]; then
+        return 0
+    fi
+
+    printf "%sSHA256 mismatch: downloaded binary does not match release digest%s\n" "$C_RED" "$C_RESET"
+    printf "The file may be corrupted or tampered with\n"
+    return 1
+}
+
 download_binary() {
     mkdir -p "$(dirname "$SOURCE_BIN")" || return 1
     url="$(resolved_release_url)"
 
     if command -v wget >/dev/null 2>&1; then
-        wget -O "$SOURCE_BIN" "$url"
-        return $?
+        wget -O "$SOURCE_BIN" "$url" || return 1
+    elif command -v curl >/dev/null 2>&1; then
+        curl -L --fail -o "$SOURCE_BIN" "$url" || return 1
+    else
+        return 1
     fi
 
-    if command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "$SOURCE_BIN" "$url"
-        return $?
+    chmod +x "$SOURCE_BIN" 2>/dev/null || true
+
+    if ! verify_source_binary; then
+        rm -f "$SOURCE_BIN"
+        return 1
     fi
 
-    return 1
+    return 0
 }
 
 download_manager_script() {

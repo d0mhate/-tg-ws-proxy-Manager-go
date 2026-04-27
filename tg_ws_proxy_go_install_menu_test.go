@@ -1,7 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -271,5 +276,62 @@ func TestManagerUpdateShowsRateLimitHintWhenAPIReturnsEmpty(t *testing.T) {
 	}
 	if !strings.Contains(out, "rate limit") {
 		t.Fatalf("expected rate limit hint in output, got:\n%s", out)
+	}
+}
+
+func TestManagerMenuUpdateDoesNotExecuteDownloadedBinaryDuringVerification(t *testing.T) {
+	env := managerEnv(t)
+
+	sourceBin := envValue(env, "SOURCE_BIN")
+	sourceManager := envValue(env, "SOURCE_MANAGER_SCRIPT")
+	releaseAPI := strings.TrimPrefix(envValue(env, "RELEASE_API_URL"), "file://")
+	binaryName := "tg-ws-proxy-openwrt-mipsel_24kc"
+	if sourceBin == "" || sourceManager == "" || releaseAPI == "" {
+		t.Fatal("missing SOURCE_BIN, SOURCE_MANAGER_SCRIPT, or RELEASE_API_URL in env")
+	}
+	copyManagerBundle(t, sourceManager)
+
+	markerPath := filepath.Join(t.TempDir(), "executed.marker")
+	script := "#!/bin/sh\nprintf 'executed' > \"" + markerPath + "\"\nexit 0\n"
+	managerScript, err := os.ReadFile(managerScriptPath(env))
+	if err != nil {
+		t.Fatalf("read manager script: %v", err)
+	}
+	downloadServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		switch r.URL.Path {
+		case "/" + binaryName:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(script))
+		case "/v9.9.9/tg-ws-proxy-go.sh":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(managerScript)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer downloadServer.Close()
+	env = setEnvValue(env, "RELEASE_URL", downloadServer.URL+"/"+binaryName)
+	env = setEnvValue(env, "SCRIPT_RELEASE_BASE_URL", downloadServer.URL)
+
+	sum := sha256.Sum256([]byte(script))
+	digest := hex.EncodeToString(sum[:])
+	writeFile(t, releaseAPI, "{\"tag_name\":\"v9.9.9\",\"assets\":[{\"name\":\""+binaryName+"\",\"digest\":\"sha256:"+digest+"\"}]}\n", 0o644)
+
+	out, err := runManagerMenu(t, env, "1\ny\n\n\n")
+	if err != nil {
+		t.Fatalf("menu update failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Fatalf("downloaded binary was executed during verification, output:\n%s", out)
+	}
+	if !strings.Contains(out, "Updated to v9.9.9") {
+		t.Fatalf("expected successful update output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "1) Setup / Update") {
+		t.Fatalf("expected menu to restart after update, got:\n%s", out)
 	}
 }

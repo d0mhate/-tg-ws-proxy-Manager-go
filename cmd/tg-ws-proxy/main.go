@@ -22,6 +22,7 @@ import (
 	"rsc.io/qr"
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/mtpserver"
+	"tg-ws-proxy/internal/release"
 	"tg-ws-proxy/internal/socks5"
 )
 
@@ -379,7 +380,73 @@ func probeUpstream(targets []string) int {
 	return 1
 }
 
+// Exit codes for verify-asset: 0=ok, 1=mismatch, 2=no digest, 3=error.
+const (
+	exitVerifyOK       = 0
+	exitVerifyMismatch = 1
+	exitVerifyNoDigest = 2
+	exitVerifyError    = 3
+)
+
+func verifyAsset(args []string) int {
+	fs := flag.NewFlagSet("verify-asset", flag.ContinueOnError)
+	var apiURL, assetName string
+	fs.StringVar(&apiURL, "api-url", "", "GitHub releases/latest API URL")
+	fs.StringVar(&assetName, "asset-name", "", "release asset filename to look up")
+	if err := fs.Parse(args); err != nil {
+		return exitVerifyError
+	}
+	filePath := fs.Arg(0)
+	if apiURL == "" || assetName == "" || filePath == "" {
+		fmt.Fprintln(os.Stderr, "usage: tg-ws-proxy verify-asset --api-url <url> --asset-name <name> <file>")
+		return exitVerifyError
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rel, err := release.FetchLatest(ctx, apiURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "verify-asset: fetch: %v\n", err)
+		return exitVerifyError
+	}
+
+	asset, ok := rel.AssetByName(assetName)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "verify-asset: asset %q not found in release %s\n", assetName, rel.Tag)
+		return exitVerifyError
+	}
+
+	if asset.Digest == "" {
+		return exitVerifyNoDigest
+	}
+
+	want, err := release.ParseDigest(asset.Digest)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "verify-asset: %v\n", err)
+		return exitVerifyError
+	}
+
+	got, err := release.SHA256File(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "verify-asset: read file: %v\n", err)
+		return exitVerifyError
+	}
+
+	if got != want {
+		fmt.Fprintf(os.Stderr, "verify-asset: SHA256 mismatch\n  want: %s\n  got:  %s\n", want, got)
+		return exitVerifyMismatch
+	}
+
+	fmt.Printf("verify-asset: ok %s %s\n", rel.Tag, assetName)
+	return exitVerifyOK
+}
+
 func main() {
+	if len(os.Args) >= 2 && os.Args[1] == "verify-asset" {
+		os.Exit(verifyAsset(os.Args[2:]))
+	}
+
 	if len(os.Args) >= 2 && os.Args[1] == "probe-upstream" {
 		os.Exit(probeUpstream(os.Args[2:]))
 	}

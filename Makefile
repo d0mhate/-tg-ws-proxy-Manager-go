@@ -9,6 +9,7 @@ comma := ,
 BATS ?= bats
 BATS_FLAGS ?= --print-output-on-failure
 BATS_VERBOSE_FLAGS ?= --print-output-on-failure --show-output-of-passing-tests
+SAFE_MENU_ROOT_FILE := $(CURDIR)/.safe-menu-root
 
 -include .env
 
@@ -68,7 +69,7 @@ BIN_FLAGS = \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
-.PHONY: help build bundle menu start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file fmt-shell lint-shell clean install-git-hooks \
+.PHONY: help build bundle menu menu-safe menu-safe-clean start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file fmt-shell lint-shell clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
 	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
@@ -81,6 +82,8 @@ help:
 	@printf '%s\n' \
 		'make build        - build fresh local ./$(BIN)' \
 		'make menu         - build fresh local ./$(BIN) and open manager menu for it' \
+		'make menu-safe    - open manager menu in an isolated temp dir safe for update testing' \
+		'make menu-safe-clean - remove the last temp dir created by make menu-safe' \
 		'make start        - build fresh local ./$(BIN) and start it in foreground' \
 		'make start-bg     - build fresh local ./$(BIN) and start it in background' \
 		'make stop         - manager stop' \
@@ -146,6 +149,65 @@ bundle:
 
 menu: build
 	$(MANAGER_ENV) sh $(SCRIPT)
+
+menu-safe: build
+	@set -eu; \
+	SAFE_ROOT="$$(mktemp -d /tmp/tg-ws-proxy-menu-safe.XXXXXX)"; \
+	rm -f "$(SAFE_MENU_ROOT_FILE)"; \
+	printf '%s\n' "$$SAFE_ROOT" > "$(SAFE_MENU_ROOT_FILE)"; \
+	mkdir -p "$$SAFE_ROOT/manager"; \
+	cp "$(SCRIPT)" "$$SAFE_ROOT/manager/$(SCRIPT)"; \
+	cp -R lib "$$SAFE_ROOT/manager/lib"; \
+	printf '%s\n' "Safe menu root: $$SAFE_ROOT"; \
+	printf '%s\n' "Run 'make menu-safe-clean' after the check to remove it."; \
+	BIN_PATH="$$SAFE_ROOT/install/tg-ws-proxy" \
+	PERSIST_STATE_DIR="$$SAFE_ROOT/state" \
+	PERSIST_PATH_FILE="$$SAFE_ROOT/state/install_dir" \
+	PERSIST_VERSION_FILE="$$SAFE_ROOT/state/version" \
+	PERSIST_CONFIG_FILE="$$SAFE_ROOT/state/autostart.conf" \
+	PERSIST_RELEASE_TAG_FILE="$$SAFE_ROOT/state/release_tag" \
+	PERSIST_UPDATE_CHANNEL_FILE="$$SAFE_ROOT/state/update_channel" \
+	PERSIST_PREVIEW_BRANCH_FILE="$$SAFE_ROOT/state/preview_branch" \
+	LATEST_VERSION_CACHE_FILE="$$SAFE_ROOT/state/latest_version_cache" \
+	SOURCE_BIN="$$SAFE_ROOT/source/tg-ws-proxy" \
+	SOURCE_VERSION_FILE="$$SAFE_ROOT/source/tg-ws-proxy.version" \
+	SOURCE_MANAGER_SCRIPT="$$SAFE_ROOT/source/$(SCRIPT)" \
+	INSTALL_DIR="$$SAFE_ROOT/install" \
+	VERSION_FILE="$$SAFE_ROOT/install/version" \
+	LAUNCHER_PATH="$$SAFE_ROOT/bin/tgm" \
+	INIT_SCRIPT_PATH="$$SAFE_ROOT/init.d/tg-ws-proxy-go" \
+	PROXY_MODE="$(MODE)" \
+	LISTEN_PORT="$(PORT)" \
+	$(if $(HOST),LISTEN_HOST="$(HOST)",) \
+	$(if $(SECRET),MT_SECRET="$(SECRET)",) \
+	$(if $(IP),MT_LINK_IP="$(IP)",) \
+	$(if $(PPROF_ADDR),PPROF_ADDR="$(PPROF_ADDR)",) \
+	$(if $(DC_IPS),DC_IPS="$(DC_IPS)",) \
+	$(if $(POOL_SIZE),POOL_SIZE="$(POOL_SIZE)",) \
+	$(if $(USERNAME),SOCKS_USERNAME="$(USERNAME)",) \
+	$(if $(PASSWORD),SOCKS_PASSWORD="$(PASSWORD)",) \
+	$(if $(CF_PROXY),CF_PROXY="$(CF_PROXY)",) \
+	$(if $(CF_FIRST),CF_PROXY_FIRST="$(CF_FIRST)",) \
+	$(if $(CF_BALANCE),CF_BALANCE="$(CF_BALANCE)",) \
+	$(if $(CF_DOMAIN),CF_DOMAIN="$(CF_DOMAIN)",) \
+	$(if $(VERBOSE),VERBOSE="$(VERBOSE)",) \
+	sh "$$SAFE_ROOT/manager/$(SCRIPT)"
+
+menu-safe-clean:
+	@set -eu; \
+	if [ ! -f "$(SAFE_MENU_ROOT_FILE)" ]; then \
+		printf '%s\n' "No saved safe menu dir. Nothing to remove."; \
+		exit 0; \
+	fi; \
+	SAFE_ROOT="$$(sed -n '1p' "$(SAFE_MENU_ROOT_FILE)")"; \
+	if [ -z "$$SAFE_ROOT" ]; then \
+		rm -f "$(SAFE_MENU_ROOT_FILE)"; \
+		printf '%s\n' "Saved safe menu dir path was empty. State file removed."; \
+		exit 0; \
+	fi; \
+	rm -rf "$$SAFE_ROOT"; \
+	rm -f "$(SAFE_MENU_ROOT_FILE)"; \
+	printf '%s\n' "Removed safe menu dir: $$SAFE_ROOT"
 
 start: build
 	$(MANAGER_ENV) sh $(SCRIPT) start
