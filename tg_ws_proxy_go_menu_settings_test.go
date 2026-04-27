@@ -188,11 +188,13 @@ func TestManagerCheckCFDomainViaAdvancedMenu(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check cf domain failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Checking example.com") ||
-		!strings.Contains(out, "kws1.example.com") ||
-		!strings.Contains(out, "kws203.example.com") ||
+	if !strings.Contains(out, "Checking Cloudflare websocket endpoints") ||
+		!strings.Contains(out, "domain") ||
+		!strings.Contains(out, "kws203") ||
+		!strings.Contains(out, "example.com") ||
 		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") ||
-		!strings.Contains(out, "tcp ok | tls ok | ws upgrade ok") {
+		!strings.Contains(out, "tls/ws ok") ||
+		!strings.Contains(out, "6/6 ok") {
 		t.Fatalf("unexpected cf domain check output:\n%s", out)
 	}
 }
@@ -223,12 +225,33 @@ func TestManagerCheckCFDomainViaCurlFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("check cf domain (curl fallback) failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Checking example.com") ||
-		!strings.Contains(out, "kws1.example.com") ||
-		!strings.Contains(out, "kws203.example.com") ||
+	if !strings.Contains(out, "Checking Cloudflare websocket endpoints") ||
+		!strings.Contains(out, "domain") ||
+		!strings.Contains(out, "kws203") ||
+		!strings.Contains(out, "example.com") ||
 		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") ||
-		!strings.Contains(out, "tcp ok | tls ok | ws upgrade ok") {
+		!strings.Contains(out, "tls/ws ok") ||
+		!strings.Contains(out, "6/6 ok") {
 		t.Fatalf("unexpected cf domain check output (curl fallback):\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainSplitsCommaSeparatedDomains(t *testing.T) {
+	env := append(managerEnv(t), "CF_DOMAIN=one.example.com,two.example.com")
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
+
+	out, err := runManagerMenu(t, env, "4\n10\n\n\n\n")
+	if err != nil {
+		t.Fatalf("check cf domain with csv failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "one.example.com") ||
+		!strings.Contains(out, "two.example.com") ||
+		strings.Contains(out, "kws1.one.example.com,two.example.com") ||
+		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") {
+		t.Fatalf("unexpected csv cf domain check output:\n%s", out)
 	}
 }
 

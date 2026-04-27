@@ -1042,6 +1042,7 @@ configure_cf_domain() {
 
 check_cf_endpoint() {
     host="$1"
+    CHECK_CF_ENDPOINT_STATUS=""
 
     if command -v openssl >/dev/null 2>&1; then
         if command -v timeout >/dev/null 2>&1; then
@@ -1070,7 +1071,7 @@ check_cf_endpoint() {
             -D - -o /dev/null \
             "https://$host/apiws" 2>/dev/null || true)"
     else
-        printf "  %-24s failed            openssl or curl not found\n" "$host"
+        CHECK_CF_ENDPOINT_STATUS="no tool"
         return 1
     fi
 
@@ -1078,22 +1079,22 @@ check_cf_endpoint() {
     if [ -n "$status_line" ]; then
         case "$status_line" in
             *"101 Switching Protocols"*)
-                printf "  %-24s tcp ok | tls ok | ws upgrade ok\n" "$host"
+                CHECK_CF_ENDPOINT_STATUS="tls/ws ok"
                 return 0
                 ;;
             *)
-                printf "  %-24s tcp ok | tls ok | ws upgrade failed\n" "$host"
+                CHECK_CF_ENDPOINT_STATUS="tls/ws fail"
                 return 1
                 ;;
         esac
     fi
 
     if printf "%s" "$output" | grep -E "CONNECTED|Verification: OK|SSL handshake has read|depth=" >/dev/null 2>&1; then
-        printf "  %-24s failed            no HTTP response after tcp/tls connect\n" "$host"
+        CHECK_CF_ENDPOINT_STATUS="tls/no http"
         return 1
     fi
 
-    printf "  %-24s failed            connection error\n" "$host"
+    CHECK_CF_ENDPOINT_STATUS="conn err"
     return 1
 }
 
@@ -1118,49 +1119,164 @@ check_cf_domain() {
         return 1
     fi
 
-    printf "\nChecking %s\n\n" "$check_domain"
-    printf "Requests:\n"
-    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
-        printf "  WS GET https://%s.%s/apiws\n" "$prefix" "$check_domain"
-    done
-    printf "\nResults:\n"
+    printf "\nChecking Cloudflare websocket endpoints\n\n"
     ok_count=0
-    ok_hosts=""
+    total_hosts=0
     _cf_interrupted=0
-    trap '_cf_interrupted=1' INT
-    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
-        [ "$_cf_interrupted" = "0" ] || break
-        host="$prefix.$check_domain"
-        printf "  %-24s checking...\n" "$host"
-        if check_cf_endpoint "$host"; then
-            ok_count=$((ok_count + 1))
-            if [ -z "$ok_hosts" ]; then
-                ok_hosts="$host"
-            else
-                ok_hosts="$ok_hosts\\n$host"
-            fi
+    _cf_domains=""
+    _cf_old_ifs="$IFS"
+    IFS=','
+    for _cf_domain_raw in $check_domain; do
+        _cf_domain_trimmed="$(printf "%s" "$_cf_domain_raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -n "$_cf_domain_trimmed" ] || continue
+        if [ -z "$_cf_domains" ]; then
+            _cf_domains="$_cf_domain_trimmed"
+        else
+            _cf_domains="$_cf_domains
+$_cf_domain_trimmed"
         fi
     done
-    trap - INT
+    IFS="$_cf_old_ifs"
 
-    if [ "$_cf_interrupted" = "1" ]; then
-        printf "\nCancelled.\n"
+    if [ -z "$_cf_domains" ]; then
+        printf "%sNo valid Cloudflare domains provided%s\n" "$C_RED" "$C_RESET"
         pause
-        return 0
+        return 1
     fi
 
+    _cf_col_w=6
+    _cf_domain_count=0
+    _cf_old_ifs="$IFS"
+    IFS='
+'
+    for _cf_domain_line in $_cf_domains; do
+        [ -n "$_cf_domain_line" ] || continue
+        _cf_len=${#_cf_domain_line}
+        [ "$_cf_len" -gt "$_cf_col_w" ] && _cf_col_w="$_cf_len"
+        _cf_domain_count=$((_cf_domain_count + 1))
+    done
+    IFS="$_cf_old_ifs"
+    _cf_total_endpoints=$((_cf_domain_count * 6))
+
+    printf "Domains:\n"
+    _cf_old_ifs="$IFS"
+    IFS='
+'
+    for _cf_domain_line in $_cf_domains; do
+        [ -n "$_cf_domain_line" ] || continue
+        printf "  %s\n" "$_cf_domain_line"
+    done
     printf "\n"
-    if [ "$ok_count" -eq 6 ]; then
-        printf "%sCloudflare proxy: all tested hosts support websocket upgrade%s\n" "$C_GREEN" "$C_RESET"
-    elif [ "$ok_count" -eq 0 ]; then
-        printf "%sCloudflare proxy: none of the tested hosts support websocket upgrade%s\n" "$C_RED" "$C_RESET"
-    else
-        printf "%sCloudflare proxy: partially works (%s/%s hosts passed websocket upgrade)%s\n" "$C_YELLOW" "$ok_count" "6" "$C_RESET"
-    fi
-    if [ -n "$ok_hosts" ]; then
-        printf "Working hosts:\n"
-        printf "  %b\n" "$ok_hosts"
-    fi
+    printf "Testing %d endpoints in parallel..." "$_cf_total_endpoints"
+    printf "\n\n"
+
+    _cf_old_ifs="$IFS"
+    IFS='
+'
+    {
+        for _cf_domain_name in $_cf_domains; do
+            [ -n "$_cf_domain_name" ] || continue
+            for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+                (
+                    if check_cf_endpoint "$prefix.$_cf_domain_name"; then
+                        _cf_result="ok"
+                    else
+                        _cf_result="fail"
+                    fi
+                    printf '%s|%s|%s|%s\n' "$_cf_domain_name" "$prefix" "$_cf_result" "$CHECK_CF_ENDPOINT_STATUS"
+                ) &
+            done
+        done
+        wait
+    } | awk -F'|' \
+        -v colw="$_cf_col_w" \
+        -v cgreen="$C_GREEN" \
+        -v cyellow="$C_YELLOW" \
+        -v cred="$C_RED" \
+        -v creset="$C_RESET" \
+        -v total_hosts="$_cf_total_endpoints" '
+BEGIN {
+    split("kws1 kws2 kws3 kws4 kws5 kws203", prefixes, " ")
+    cellw = 12
+    domain_count = 0
+    ok_count = 0
+}
+{
+    key = $1 SUBSEP $2
+    result[key] = $3
+    status[key] = $4
+    if (!seen[$1]++) {
+        order[++domain_count] = $1
+    }
+    if ($3 == "ok") {
+        row_ok[$1]++
+        ok_count++
+    }
+}
+END {
+    sep = ""
+    for (i = 0; i < colw; i++) {
+        sep = sep "-"
+    }
+
+    printf "%-*s | %-12s | %-12s | %-12s | %-12s | %-12s | %-12s | %-9s\n", \
+        colw, "domain", "kws1", "kws2", "kws3", "kws4", "kws5", "kws203", "summary"
+    printf "%s-|-%s-|-%s-|-%s-|-%s-|-%s-|-%s-|-%s\n", \
+        sep, "------------", "------------", "------------", \
+        "------------", "------------", "------------", "---------"
+
+    domains_alive = 0
+    domains_dead = 0
+
+    for (i = 1; i <= domain_count; i++) {
+        d = order[i]
+        row = sprintf("%-*s ", colw, d)
+        row_pass = 0
+        for (j = 1; j <= 6; j++) {
+            p = prefixes[j]
+            key = d SUBSEP p
+            st = status[key]
+            if (st == "") {
+                st = "no data"
+            }
+            if (result[key] == "ok") {
+                color = cgreen
+                row_pass++
+            } else if (st == "tls/ws fail") {
+                color = cyellow
+            } else {
+                color = cred
+            }
+            row = row sprintf("| %s%-12s%s ", color, st, creset)
+        }
+        row = row sprintf("| %d/6 ok", row_pass)
+        print row
+        if (row_pass > 0) {
+            domains_alive++
+        } else {
+            domains_dead++
+        }
+    }
+
+    print ""
+    if (domain_count > 1) {
+        if (domains_dead == 0) {
+            printf "%sDomains: all %d alive%s\n", cgreen, domain_count, creset
+        } else if (domains_alive == 0) {
+            printf "%sDomains: all %d dead%s\n", cred, domain_count, creset
+        } else {
+            printf "%sDomains: %d/%d alive, %d dead%s\n", cyellow, domains_alive, domain_count, domains_dead, creset
+        }
+    }
+    if (ok_count == total_hosts) {
+        printf "%sCloudflare proxy: all tested hosts support websocket upgrade%s\n", cgreen, creset
+    } else if (ok_count == 0) {
+        printf "%sCloudflare proxy: none of the tested hosts support websocket upgrade%s\n", cred, creset
+    } else {
+        printf "%sCloudflare proxy: partially works (%d/%d hosts passed websocket upgrade)%s\n", cyellow, ok_count, total_hosts, creset
+    }
+}'
+    IFS="$_cf_old_ifs"
     pause
 }
 
