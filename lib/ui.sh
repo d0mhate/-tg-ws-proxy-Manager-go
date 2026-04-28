@@ -1,3 +1,4 @@
+#!/bin/sh
 # ui.sh
 
 show_dc_ip_mapping_settings() {

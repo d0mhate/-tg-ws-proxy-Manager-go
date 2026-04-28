@@ -1,3 +1,4 @@
+#!/bin/sh
 # process.sh
 
 runtime_bin_path() {

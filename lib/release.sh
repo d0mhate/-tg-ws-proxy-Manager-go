@@ -1,3 +1,4 @@
+#!/bin/sh
 # release.sh
 
 resolved_binary_name() {

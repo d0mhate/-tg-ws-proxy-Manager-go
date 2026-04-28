@@ -1,3 +1,4 @@
+#!/bin/sh
 # autostart.sh
 
 autostart_enabled() {

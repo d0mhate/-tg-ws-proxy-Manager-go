@@ -1,3 +1,4 @@
+#!/bin/sh
 # platform.sh
 
 lan_ip() {

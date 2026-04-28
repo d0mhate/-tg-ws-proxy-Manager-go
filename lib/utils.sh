@@ -1,3 +1,4 @@
+#!/bin/sh
 # utils.sh
 
 tmp_available_kb() {

@@ -1,3 +1,4 @@
+#!/bin/sh
 # config.sh
 
 read_config_value() {

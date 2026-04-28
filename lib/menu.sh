@@ -1,3 +1,4 @@
+#!/bin/sh
 # menu.sh
 
 can_use_arrow_update_source_picker() {

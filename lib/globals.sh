@@ -1,3 +1,4 @@
+#!/bin/sh
 # globals.sh
 
 APP_NAME="tg-ws-proxy"

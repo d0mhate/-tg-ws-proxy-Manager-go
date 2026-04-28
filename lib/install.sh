@@ -1,3 +1,4 @@
+#!/bin/sh
 # install.sh
 
 select_persistent_dir() {
