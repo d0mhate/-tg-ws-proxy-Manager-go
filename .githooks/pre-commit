@@ -8,6 +8,7 @@ staged=$(git diff --cached --name-only)
 
 has_go=0
 has_shell=0
+has_readme=0
 
 for f in $staged; do
     case "$f" in
@@ -15,8 +16,16 @@ for f in $staged; do
             has_go=1 ;;
         *.sh|*.bats|test/*|scripts/*)
             has_shell=1 ;;
+        README.md)
+            has_readme=1 ;;
     esac
 done
+
+if [ "$has_readme" -eq 1 ]; then
+    printf '%s\n' 'pre-commit: README.md changes detected, running make fmt-md'
+    make fmt-md
+    git add README.md
+fi
 
 if [ "$has_go" -eq 0 ] && [ "$has_shell" -eq 0 ]; then
     printf '%s\n' 'pre-commit: no .go/.sh/test changes, skipping tests'

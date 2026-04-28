@@ -31,7 +31,7 @@ Telegram app / Telegram Desktop
 > берет на себя ответственность за состояние роутера или сети.
 
 | | Python manager | This port |
-|---|---|---|
+| --- | --- | --- |
 | Runtime | нужен Python | один статический бинарник |
 | Размер | зависит от Python-пакетов | OpenWrt binary около `5 MB` |
 | OpenWrt | больше места и зависимостей | скачать и запустить |
@@ -108,7 +108,7 @@ sh /tmp/tg-ws-proxy-go.sh start-background
 Если прокси запущен на роутере, в Telegram укажите:
 
 | Field | Value |
-|---|---|
+| --- | --- |
 | Type | `SOCKS5` |
 | Host | IP роутера |
 | Port | `1080` |
@@ -140,7 +140,7 @@ Telegram или вывести QR-код через `15) Show QR code`.
 ```
 
 | Flag | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `--mode <socks5\|mtproto>` | `socks5` | Режим работы прокси |
 | `--host <IP>` | `127.0.0.1` | Адрес, на котором слушает сервер |
 | `--port <PORT>` | `1080` | Порт, на котором слушает сервер |
@@ -282,7 +282,7 @@ Cloudflare route нужен, если прямой путь до Telegram нес
 Порядок маршрутов:
 
 | Order | Meaning |
-|---|---|
+| --- | --- |
 | `fallback` | сначала direct route, потом Cloudflare |
 | `first` | сначала Cloudflare, потом direct route |
 

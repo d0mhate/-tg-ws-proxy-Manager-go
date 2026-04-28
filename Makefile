@@ -9,6 +9,7 @@ comma := ,
 BATS ?= bats
 BATS_FLAGS ?= --print-output-on-failure
 BATS_VERBOSE_FLAGS ?= --print-output-on-failure --show-output-of-passing-tests
+MARKDOWNLINT ?= npx --yes markdownlint-cli
 SAFE_MENU_ROOT_FILE := $(CURDIR)/.safe-menu-root
 
 -include .env
@@ -69,7 +70,7 @@ BIN_FLAGS = \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
 	$(if $(VERBOSE),--verbose,)
 
-.PHONY: help build bundle menu menu-safe menu-safe-clean start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file fmt-shell lint-shell clean install-git-hooks \
+.PHONY: help build bundle menu menu-safe menu-safe-clean start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file fmt-shell lint-shell lint-md fmt-md clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
 	socks5-auth-menu socks5-auth-cf-menu socks5-noauth-menu socks5-auth-nocf-menu socks5-noauth-nocf-menu \
 	socks5-menu-auth-cf menu-socks5-auth-cf link-socks5-auth link-socks5-noauth \
@@ -136,6 +137,8 @@ help:
 		'make test         - run Go and bats tests' \
 		'make fmt-shell    - format all shell scripts with shfmt (writes in place)' \
 		'make lint-shell   - check shell formatting with shfmt (diff, non-zero exit if unformatted)' \
+		'make lint-md      - check README.md with markdownlint (MARKDOWNLINT=markdownlint to use global install)' \
+		'make fmt-md       - auto-fix README.md with markdownlint --fix' \
 		'make install-git-hooks - enable local pre-commit hook that runs make test' \
 		'' \
 		'You can override vars inline, for example:' \
@@ -449,6 +452,12 @@ fmt-shell:
 
 lint-shell:
 	shfmt -d -i 4 tg-ws-proxy-go.sh lib scripts test
+
+lint-md:
+	$(MARKDOWNLINT) README.md
+
+fmt-md:
+	$(MARKDOWNLINT) --fix README.md
 
 # if need to uninstall (git config --local --unset core.hooksPath))
 install-git-hooks:
