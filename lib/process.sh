@@ -252,10 +252,6 @@ _run_proxy_cmd() {
 
     set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --pool-size "$POOL_SIZE"
 
-    if [ -n "$PPROF_ADDR" ]; then
-        set -- "$@" --pprof-addr "$PPROF_ADDR"
-    fi
-
     if [ "$PROXY_MODE" = "mtproto" ]; then
         set -- "$@" --mode mtproto --secret "$MT_SECRET"
         if [ -n "$MT_LINK_IP" ]; then

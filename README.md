@@ -144,7 +144,6 @@ Telegram или вывести QR-код через `15) Show QR code`.
 | `--mode <socks5\|mtproto>` | `socks5` | Режим работы прокси |
 | `--host <IP>` | `127.0.0.1` | Адрес, на котором слушает сервер |
 | `--port <PORT>` | `1080` | Порт, на котором слушает сервер |
-| `--pprof-addr <ADDR>` | пусто | Включить `pprof` HTTP endpoint, например `127.0.0.1:6060` |
 | `--username <NAME>` | пусто | Логин для SOCKS5 auth |
 | `--password <PASS>` | пусто | Пароль для SOCKS5 auth |
 | `--verbose` | `off` | Подробные логи |
@@ -177,9 +176,6 @@ Telegram или вывести QR-код через `15) Show QR code`.
 
 # SOCKS5 с Cloudflare route
 ./tg-ws-proxy --mode socks5 --cf-proxy --cf-domain yourdomain.com
-
-# Включить pprof на localhost:6060
-./tg-ws-proxy --mode socks5 --pprof-addr 127.0.0.1:6060
 
 # MTProto
 ./tg-ws-proxy --mode mtproto --secret dda1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4 --port 1080 --link-ip 1.2.3.4
