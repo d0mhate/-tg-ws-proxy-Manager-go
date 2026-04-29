@@ -95,6 +95,55 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsNumberedSelection(t 
 	}
 }
 
+func TestManagerUpdateRestartPreservesUpdateSourcePrompts(t *testing.T) {
+	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	managerScript := envValue(env, "MANAGER_SCRIPT_PATH")
+	if managerScript == "" {
+		t.Fatal("missing manager script path in env")
+	}
+	if err := os.Chmod(managerScript, 0o555); err != nil {
+		t.Fatalf("chmod manager script read-only: %v", err)
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.9\"}\n"))
+		case "/binary":
+			_, _ = w.Write([]byte("#!/bin/sh\nexit 0\n"))
+		case "/v9.9.9/tg-ws-proxy-go.sh":
+			managerScript, err := os.ReadFile("tg-ws-proxy-go.sh")
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(managerScript)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	env = append(env,
+		"RELEASE_API_URL="+server.URL+"/release.json",
+		"RELEASE_URL="+server.URL+"/binary",
+		"SCRIPT_RELEASE_BASE_URL="+server.URL,
+	)
+
+	out, err := runManagerMenu(t, env, "1\ny\n4\n17\n\n1\n\n\n")
+	if err != nil {
+		t.Fatalf("menu update and restart flow failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Restarting menu...") {
+		t.Fatalf("expected menu restart message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Mode:") || !strings.Contains(out, "Select mode [1-2]") {
+		t.Fatalf("expected update source prompts to stay visible after restart, got:\n%s", out)
+	}
+}
+
 func TestManagerConfigureUpdateSourcePreviewBranchSelectionCanReuseSavedBranch(t *testing.T) {
 	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
 	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
