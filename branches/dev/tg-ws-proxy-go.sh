@@ -36,7 +36,6 @@ DEFAULT_BINARY_NAME="${DEFAULT_BINARY_NAME:-tg-ws-proxy-openwrt}"
 BINARY_NAME="${BINARY_NAME:-}"
 LISTEN_HOST_FROM_ENV="${LISTEN_HOST+x}"
 LISTEN_PORT_FROM_ENV="${LISTEN_PORT+x}"
-PPROF_ADDR_FROM_ENV="${PPROF_ADDR+x}"
 VERBOSE_FROM_ENV="${VERBOSE+x}"
 POOL_SIZE_FROM_ENV="${POOL_SIZE+x}"
 SOCKS_USERNAME_FROM_ENV="${SOCKS_USERNAME+x}"
@@ -89,7 +88,6 @@ PROC_ROOT="${PROC_ROOT:-/proc}"
 LAUNCHER_PATH="${LAUNCHER_PATH:-/usr/bin/$LAUNCHER_NAME}"
 LISTEN_HOST="${LISTEN_HOST:-0.0.0.0}"
 LISTEN_PORT="${LISTEN_PORT:-1080}"
-PPROF_ADDR="${PPROF_ADDR:-}"
 VERBOSE="${VERBOSE:-0}"
 POOL_SIZE="${POOL_SIZE:-4}"
 SOCKS_USERNAME="${SOCKS_USERNAME:-}"
@@ -351,7 +349,6 @@ write_settings_config() {
         fi
         printf "HOST='%s'\n" "$LISTEN_HOST"
         printf "PORT='%s'\n" "$LISTEN_PORT"
-        printf "PPROF_ADDR='%s'\n" "$PPROF_ADDR"
         printf "VERBOSE='%s'\n" "$VERBOSE"
         printf "POOL_SIZE='%s'\n" "$POOL_SIZE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
@@ -379,10 +376,6 @@ load_saved_settings() {
     if [ -z "$LISTEN_PORT_FROM_ENV" ]; then
         port="$(read_config_value PORT 2>/dev/null || true)"
         [ -n "$port" ] && LISTEN_PORT="$port"
-    fi
-
-    if [ -z "$PPROF_ADDR_FROM_ENV" ]; then
-        PPROF_ADDR="$(read_config_value PPROF_ADDR 2>/dev/null || true)"
     fi
 
     if [ -z "$VERBOSE_FROM_ENV" ]; then
@@ -1477,10 +1470,6 @@ _run_proxy_cmd() {
     [ -n "$_rpc_bin" ] || return 1
 
     set -- "$_rpc_bin" --host "$LISTEN_HOST" --port "$LISTEN_PORT" --pool-size "$POOL_SIZE"
-
-    if [ -n "$PPROF_ADDR" ]; then
-        set -- "$@" --pprof-addr "$PPROF_ADDR"
-    fi
 
     if [ "$PROXY_MODE" = "mtproto" ]; then
         set -- "$@" --mode mtproto --secret "$MT_SECRET"
