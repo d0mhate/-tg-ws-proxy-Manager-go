@@ -1277,37 +1277,70 @@ $_cf_domain_trimmed"
         printf "  %s\n" "$_cf_domain_line"
     done
     printf "\n"
-    printf "Testing %d endpoints in parallel..." "$_cf_total_endpoints"
-    printf "\n\n"
+    printf "Testing %d endpoints sequentially...\n\n" "$_cf_total_endpoints"
 
+    _cf_results_dir="$INSTALL_DIR"
+    [ -n "$_cf_results_dir" ] || _cf_results_dir="/tmp"
+    mkdir -p "$_cf_results_dir" 2>/dev/null || true
+    _cf_results_file="${_cf_results_dir%/}/.cf-check-results.$$"
+    if ! : > "$_cf_results_file" 2>/dev/null; then
+        printf "%sCould not create a temporary file for results%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    trap '_cf_interrupted=1' INT
+    _cf_checked=0
     _cf_old_ifs="$IFS"
     IFS='
 '
-    {
-        for _cf_domain_name in $_cf_domains; do
-            [ -n "$_cf_domain_name" ] || continue
-            for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
-                (
-                    if check_cf_endpoint "$prefix.$_cf_domain_name"; then
-                        _cf_result="ok"
-                    else
-                        _cf_result="fail"
-                    fi
-                    printf '%s|%s|%s|%s\n' "$_cf_domain_name" "$prefix" "$_cf_result" "$CHECK_CF_ENDPOINT_STATUS"
-                ) &
-            done
+    for _cf_domain_name in $_cf_domains; do
+        [ -n "$_cf_domain_name" ] || continue
+        for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+            if [ "$_cf_interrupted" = "1" ]; then
+                break
+            fi
+            _cf_host="$prefix.$_cf_domain_name"
+            _cf_checked=$((_cf_checked + 1))
+            printf "  [%d/%d] %-32s checking...\r" "$_cf_checked" "$_cf_total_endpoints" "$_cf_host"
+            if check_cf_endpoint "$_cf_host"; then
+                _cf_result="ok"
+            else
+                _cf_result="fail"
+            fi
+            printf "  [%d/%d] %-32s %s\n" "$_cf_checked" "$_cf_total_endpoints" "$_cf_host" "$CHECK_CF_ENDPOINT_STATUS"
+            printf '%s|%s|%s|%s\n' "$_cf_domain_name" "$prefix" "$_cf_result" "$CHECK_CF_ENDPOINT_STATUS" >> "$_cf_results_file"
         done
-        wait
-    } | awk -F'|' \
+        [ "$_cf_interrupted" = "0" ] || break
+    done
+    trap - INT
+    IFS="$_cf_old_ifs"
+
+    if [ "$_cf_interrupted" = "1" ]; then
+        rm -f "$_cf_results_file"
+        printf "\nCancelled.\n"
+        pause
+        return 0
+    fi
+
+    printf "\n"
+    awk -F'|' \
         -v colw="$_cf_col_w" \
         -v cgreen="$C_GREEN" \
         -v cyellow="$C_YELLOW" \
         -v cred="$C_RED" \
         -v creset="$C_RESET" \
         -v total_hosts="$_cf_total_endpoints" '
+function rpad(value, width,    out, need, i) {
+    out = value
+    need = width - length(value)
+    for (i = 0; i < need; i++) {
+        out = out " "
+    }
+    return out
+}
 BEGIN {
     split("kws1 kws2 kws3 kws4 kws5 kws203", prefixes, " ")
-    cellw = 12
     domain_count = 0
     ok_count = 0
 }
@@ -1329,8 +1362,8 @@ END {
         sep = sep "-"
     }
 
-    printf "%-*s | %-12s | %-12s | %-12s | %-12s | %-12s | %-12s | %-9s\n", \
-        colw, "domain", "kws1", "kws2", "kws3", "kws4", "kws5", "kws203", "summary"
+    printf "%s | %-12s | %-12s | %-12s | %-12s | %-12s | %-12s | %-9s\n", \
+        rpad("domain", colw), "kws1", "kws2", "kws3", "kws4", "kws5", "kws203", "summary"
     printf "%s-|-%s-|-%s-|-%s-|-%s-|-%s-|-%s-|-%s\n", \
         sep, "------------", "------------", "------------", \
         "------------", "------------", "------------", "---------"
@@ -1340,7 +1373,7 @@ END {
 
     for (i = 1; i <= domain_count; i++) {
         d = order[i]
-        row = sprintf("%-*s ", colw, d)
+        row = rpad(d, colw) " "
         row_pass = 0
         for (j = 1; j <= 6; j++) {
             p = prefixes[j]
@@ -1385,8 +1418,8 @@ END {
     } else {
         printf "%sCloudflare proxy: partially works (%d/%d hosts passed websocket upgrade)%s\n", cyellow, ok_count, total_hosts, creset
     }
-}'
-    IFS="$_cf_old_ifs"
+}' "$_cf_results_file"
+    rm -f "$_cf_results_file"
     pause
 }
 
