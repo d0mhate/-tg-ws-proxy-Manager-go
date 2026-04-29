@@ -1279,10 +1279,7 @@ $_cf_domain_trimmed"
     printf "\n"
     printf "Testing %d endpoints sequentially...\n\n" "$_cf_total_endpoints"
 
-    _cf_results_dir="$INSTALL_DIR"
-    [ -n "$_cf_results_dir" ] || _cf_results_dir="/tmp"
-    mkdir -p "$_cf_results_dir" 2>/dev/null || true
-    _cf_results_file="${_cf_results_dir%/}/.cf-check-results.$$"
+    _cf_results_file="/tmp/tg-ws-proxy-cf-check.$$"
     if ! : > "$_cf_results_file" 2>/dev/null; then
         printf "%sCould not create a temporary file for results%s\n" "$C_RED" "$C_RESET"
         pause
