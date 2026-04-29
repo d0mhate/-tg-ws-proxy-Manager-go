@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -214,6 +215,12 @@ func TestDialCloudflareWSReturnsErrorWhenAllDomainsFail(t *testing.T) {
 	_, err := srv.dialCloudflareWS(context.Background(), 2)
 	if err == nil {
 		t.Fatal("expected error when all CF domains fail")
+	}
+	if !strings.Contains(err.Error(), "kws2.a.example.com") || !strings.Contains(err.Error(), "kws2.b.example.com") {
+		t.Fatalf("expected error to list attempted CF hosts, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "dial failed") {
+		t.Fatalf("expected error to include dial failure details, got %v", err)
 	}
 }
 

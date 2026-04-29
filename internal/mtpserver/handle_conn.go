@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -348,6 +349,8 @@ func (s *MTServer) webSocketDialOrder(hasDirect, hasCloudflare bool) []websocket
 }
 
 func (s *MTServer) dialCloudflareWS(ctx context.Context, dc int) (*wsbridge.Client, error) {
+	attempts := make([]string, 0, len(s.cfg.CFDomains))
+	var lastErr error
 	for _, cfDomain := range s.cfDomainsForConn() {
 		cfHost := cfWSHost(cfDomain, dc)
 		if s.cfg.Verbose {
@@ -360,9 +363,17 @@ func (s *MTServer) dialCloudflareWS(ctx context.Context, dc int) (*wsbridge.Clie
 			}
 			return ws, nil
 		}
+		lastErr = err
+		attempts = append(attempts, fmt.Sprintf("%s (%v)", cfHost, err))
 		if s.cfg.Verbose {
 			s.agg.Printf("mtproto: CF dial failed dc=%d → %s: %v", dc, cfHost, err)
 		}
 	}
-	return nil, fmt.Errorf("all CF domains failed for dc=%d", dc)
+	if len(attempts) == 0 {
+		return nil, fmt.Errorf("all CF domains failed for dc=%d", dc)
+	}
+	if len(attempts) == 1 {
+		return nil, fmt.Errorf("all CF domains failed for dc=%d: %s", dc, attempts[0])
+	}
+	return nil, fmt.Errorf("all CF domains failed for dc=%d: tried %s; last error: %v", dc, strings.Join(attempts, ", "), lastErr)
 }
