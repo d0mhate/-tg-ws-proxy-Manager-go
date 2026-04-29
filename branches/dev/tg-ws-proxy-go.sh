@@ -2370,7 +2370,7 @@ update_binary() {
     if [ "$COMMAND_MODE" = "0" ]; then
         printf "\n%sRestarting menu...%s\n" "$C_GREEN" "$C_RESET"
         sleep 1
-        exec "$0" 2>/dev/null || {
+        exec "$0" || {
             printf "%sPlease restart the menu manually.%s\n" "$C_YELLOW" "$C_RESET"
             pause
         }
