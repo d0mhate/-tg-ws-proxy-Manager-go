@@ -215,6 +215,14 @@ validate_upstream_proxy_entry() {
     esac
 }
 
+upstream_secret_kind() {
+    case "$1" in
+        [eE][eE]*) printf "ee-faketls" ;;
+        [dD][dD]*) printf "dd-intermediate" ;;
+        *) printf "plain" ;;
+    esac
+}
+
 show_telegram_settings_compact() { :; }
 show_menu_summary() { :; }
 menu_proxy_action_label() {
