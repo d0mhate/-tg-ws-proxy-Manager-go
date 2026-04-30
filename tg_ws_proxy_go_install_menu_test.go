@@ -95,8 +95,9 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsNumberedSelection(t 
 	}
 }
 
-func TestManagerUpdateRestartPreservesUpdateSourcePrompts(t *testing.T) {
+func TestManagerUpdatePromptsForManualMenuRestart(t *testing.T) {
 	env := setEnvValue(managerEnv(t), "FORCE_NUMBERED_UPDATE_SOURCE_PICKER", "1")
+	env = setEnvValue(env, "MENU_RESTART_WARNING_DELAY_SEC", "0")
 	managerScript := envValue(env, "MANAGER_SCRIPT_PATH")
 	if managerScript == "" {
 		t.Fatal("missing manager script path in env")
@@ -132,15 +133,18 @@ func TestManagerUpdateRestartPreservesUpdateSourcePrompts(t *testing.T) {
 		"SCRIPT_RELEASE_BASE_URL="+server.URL,
 	)
 
-	out, err := runManagerMenu(t, env, "1\ny\n4\n17\n\n1\n\n\n")
+	out, err := runManagerMenu(t, env, "1\ny\n\n")
 	if err != nil {
-		t.Fatalf("menu update and restart flow failed: %v\n%s", err, out)
+		t.Fatalf("menu update flow failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Restarting menu...") {
-		t.Fatalf("expected menu restart message, got:\n%s", out)
+	if !strings.Contains(out, "WARNING:") {
+		t.Fatalf("expected warning prefix, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Mode:") || !strings.Contains(out, "Select mode [1-2]") {
-		t.Fatalf("expected update source prompts to stay visible after restart, got:\n%s", out)
+	if !strings.Contains(out, "exit this menu and run tgm again to load the updated manager.") {
+		t.Fatalf("expected manual restart message, got:\n%s", out)
+	}
+	if !strings.Contains(out, "The current menu session is still using the old script state.") {
+		t.Fatalf("expected stale-session warning after update, got:\n%s", out)
 	}
 }
 

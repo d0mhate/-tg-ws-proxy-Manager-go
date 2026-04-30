@@ -381,13 +381,25 @@ update_binary() {
         printf "\nLauncher:\n  %s\n" "$launcher_path"
     fi
     if [ "$COMMAND_MODE" = "0" ]; then
-        printf "\n%sRestarting menu...%s\n" "$C_GREEN" "$C_RESET"
-        sleep 1
-        restart_target="$(current_launcher_path 2>/dev/null || current_script_path 2>/dev/null || printf "%s" "$0")"
-        exec "$restart_target" || {
-            printf "%sPlease restart the menu manually.%s\n" "$C_YELLOW" "$C_RESET"
-            pause
-        }
+        printf "\n%sWARNING:%s exit this menu and run %s again to load the updated manager.\n" \
+            "$C_RED" "$C_RESET" "$LAUNCHER_NAME"
+        printf "%sThe current menu session is still using the old script state.%s\n" \
+            "$C_RED" "$C_RESET"
+        _restart_wait="${MENU_RESTART_WARNING_DELAY_SEC:-5}"
+        case "$_restart_wait" in
+            ''|*[!0-9]*)
+                _restart_wait=5
+                ;;
+        esac
+        if [ "$_restart_wait" -gt 0 ] 2>/dev/null; then
+            while [ "$_restart_wait" -gt 0 ]; do
+                printf "\rPress Enter will be available in %s second(s)... " "$_restart_wait"
+                sleep 1
+                _restart_wait=$((_restart_wait - 1))
+            done
+            printf "\rPress Enter is now available.                    \n"
+        fi
+        pause
     else
         pause
     fi
