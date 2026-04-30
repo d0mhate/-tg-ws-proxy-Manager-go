@@ -118,10 +118,11 @@ enable_autostart() {
 
     bin_path="$(persistent_bin_path 2>/dev/null || true)"
     if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        if ! check_tmp_space; then
+        need_kb="$(required_tmp_download_kb)"
+        if ! check_tmp_space "$need_kb"; then
             free_kb="$(tmp_available_kb)"
             printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-            printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+            printf "Required: %s KB\n" "$need_kb"
             printf "Available: %s KB\n" "${free_kb:-unknown}"
             pause
             return 1

@@ -48,8 +48,151 @@ source_binary_size_kb() {
     printf "%s" $(( (bytes + 1023) / 1024 ))
 }
 
+remote_url_size_bytes() {
+    url="$1"
+    [ -n "$url" ] || return 1
+
+    case "$url" in
+        file://*)
+            local_path="${url#file://}"
+            [ -f "$local_path" ] || return 1
+            bytes="$(wc -c < "$local_path" 2>/dev/null | tr -d ' ')"
+            [ -n "$bytes" ] || return 1
+            printf "%s" "$bytes"
+            return 0
+            ;;
+    esac
+
+    if command -v curl >/dev/null 2>&1; then
+        bytes="$(curl -fsSLI "$url" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
+        case "$bytes" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                printf "%s" "$bytes"
+                return 0
+                ;;
+        esac
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        bytes="$(wget --server-response --spider "$url" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
+        case "$bytes" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                printf "%s" "$bytes"
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
+remote_url_size_kb() {
+    bytes="$(remote_url_size_bytes "$1" 2>/dev/null || true)"
+    [ -n "$bytes" ] || return 1
+    printf "%s" $(( (bytes + 1023) / 1024 ))
+}
+
+resolved_source_binary_size_kb() {
+    url="$(resolved_release_url 2>/dev/null || true)"
+    if [ -n "$url" ]; then
+        size_kb="$(remote_url_size_kb "$url" 2>/dev/null || true)"
+        if [ -n "$size_kb" ]; then
+            printf "%s" "$size_kb"
+            return 0
+        fi
+    fi
+
+    source_binary_size_kb
+}
+
+manager_bundle_size_kb() {
+    if [ ! -f "$SOURCE_MANAGER_SCRIPT" ]; then
+        return 1
+    fi
+
+    script_bytes="$(wc -c < "$SOURCE_MANAGER_SCRIPT" 2>/dev/null | tr -d ' ')"
+    [ -n "$script_bytes" ] || return 1
+    total_kb=$(( (script_bytes + 1023) / 1024 ))
+
+    lib_dir="$(dirname "$SOURCE_MANAGER_SCRIPT")/lib"
+    if [ -d "$lib_dir" ]; then
+        lib_bytes="$(find "$lib_dir" -type f -exec wc -c {} + 2>/dev/null | awk '{sum += $1} END {print sum+0}')"
+        [ -n "$lib_bytes" ] || return 1
+        total_kb=$((total_kb + (lib_bytes + 1023) / 1024))
+    fi
+
+    printf "%s" "$total_kb"
+}
+
+resolved_manager_bundle_size_kb() {
+    ref="$(resolved_release_ref 2>/dev/null || true)"
+    if [ -n "$ref" ]; then
+        script_url="$(script_release_url "$ref" 2>/dev/null || true)"
+        if [ -n "$script_url" ]; then
+            size_kb="$(remote_url_size_kb "$script_url" 2>/dev/null || true)"
+            if [ -n "$size_kb" ]; then
+                printf "%s" "$size_kb"
+                return 0
+            fi
+        fi
+    fi
+
+    manager_bundle_size_kb
+}
+
+source_payload_size_kb() {
+    total_kb=0
+    have_size="0"
+
+    if size_kb="$(resolved_source_binary_size_kb 2>/dev/null)"; then
+        total_kb=$((total_kb + size_kb))
+        have_size="1"
+    fi
+
+    if bundle_kb="$(resolved_manager_bundle_size_kb 2>/dev/null)"; then
+        total_kb=$((total_kb + bundle_kb))
+        have_size="1"
+    fi
+
+    [ "$have_size" = "1" ] || return 1
+    printf "%s" "$total_kb"
+}
+
+required_tmp_download_kb() {
+    payload_kb="$(source_payload_size_kb 2>/dev/null || true)"
+    if [ -z "$payload_kb" ]; then
+        printf "%s" "$REQUIRED_TMP_KB"
+        return 0
+    fi
+
+    need_kb=$((payload_kb + TMP_SPACE_HEADROOM_KB))
+    if [ "$need_kb" -lt "$REQUIRED_TMP_KB" ]; then
+        need_kb="$REQUIRED_TMP_KB"
+    fi
+    printf "%s" "$need_kb"
+}
+
+required_tmp_runtime_install_kb() {
+    payload_kb="$(source_payload_size_kb 2>/dev/null || true)"
+    if [ -z "$payload_kb" ]; then
+        printf "%s" $((REQUIRED_TMP_KB * 2))
+        return 0
+    fi
+
+    need_kb=$((payload_kb * 2 + TMP_SPACE_HEADROOM_KB))
+    minimum_kb=$((REQUIRED_TMP_KB * 2))
+    if [ "$need_kb" -lt "$minimum_kb" ]; then
+        need_kb="$minimum_kb"
+    fi
+    printf "%s" "$need_kb"
+}
+
 required_persistent_kb() {
-    size_kb="$(source_binary_size_kb 2>/dev/null || true)"
+    size_kb="$(source_payload_size_kb 2>/dev/null || true)"
     if [ -z "$size_kb" ]; then
         printf "%s" "$REQUIRED_TMP_KB"
         return 0

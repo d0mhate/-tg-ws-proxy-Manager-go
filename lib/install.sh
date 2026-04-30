@@ -216,9 +216,10 @@ ensure_source_binary_current() {
 }
 
 check_tmp_space() {
+    required_kb="${1:-$REQUIRED_TMP_KB}"
     free_kb="$(tmp_available_kb)"
     [ -n "$free_kb" ] || return 0
-    [ "$free_kb" -ge "$REQUIRED_TMP_KB" ]
+    [ "$free_kb" -ge "$required_kb" ]
 }
 
 install_binary() {
@@ -226,10 +227,11 @@ install_binary() {
     show_environment_checks
     printf "\n"
 
-    if ! check_tmp_space; then
+    need_kb="$(required_tmp_runtime_install_kb)"
+    if ! check_tmp_space "$need_kb"; then
         free_kb="$(tmp_available_kb)"
         printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Required: %s KB\n" "$need_kb"
         printf "Available: %s KB\n" "${free_kb:-unknown}"
         pause
         return 1
@@ -290,10 +292,11 @@ update_binary() {
     show_environment_checks
     printf "\n"
 
-    if ! check_tmp_space; then
+    need_kb="$(required_tmp_runtime_install_kb)"
+    if ! check_tmp_space "$need_kb"; then
         free_kb="$(tmp_available_kb)"
         printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Required: %s KB\n" "$need_kb"
         printf "Available: %s KB\n" "${free_kb:-unknown}"
         pause
         return 1

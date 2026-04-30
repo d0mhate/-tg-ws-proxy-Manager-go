@@ -7,6 +7,7 @@ setup() {
 
     export SOURCE_BIN="$TEST_DIR/bin"
     export SOURCE_VERSION_FILE="$TEST_DIR/version"
+    export SOURCE_MANAGER_SCRIPT="$TEST_DIR/source/tg-ws-proxy-go.sh"
     export VERSION_FILE="$TEST_DIR/installed"
     export PERSIST_VERSION_FILE="$TEST_DIR/persist_version"
     export PERSIST_RELEASE_TAG_FILE="$TEST_DIR/persist_tag"
@@ -18,6 +19,7 @@ setup() {
 
     export REQUIRED_TMP_KB=100
     export PERSISTENT_SPACE_HEADROOM_KB=50
+    export TMP_SPACE_HEADROOM_KB=10
     export MIN_PINNED_RELEASE_TAG="v1.0.0"
 
     source "$BATS_TEST_DIRNAME/../lib/release.sh"
@@ -106,11 +108,74 @@ setup() {
 # ---- source_binary_size_kb ----
 
 @test "source_binary_size_kb calculates size" {
-    printf "123456" > "$SOURCE_BIN"
+    head -c 123456 /dev/zero > "$SOURCE_BIN"
 
     run source_binary_size_kb
 
     [ "$status" -eq 0 ]
+}
+
+@test "manager_bundle_size_kb includes script and adjacent lib dir" {
+    mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib"
+    head -c 1234 /dev/zero > "$SOURCE_MANAGER_SCRIPT"
+    head -c 123456 /dev/zero > "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib/helper.sh"
+
+    run manager_bundle_size_kb
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "123" ]
+}
+
+@test "source_payload_size_kb combines binary and manager bundle" {
+    mkdir -p "$(dirname "$SOURCE_BIN")" "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib"
+    head -c 123456 /dev/zero > "$SOURCE_BIN"
+    head -c 1234 /dev/zero > "$SOURCE_MANAGER_SCRIPT"
+    head -c 123456 /dev/zero > "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib/helper.sh"
+
+    run source_payload_size_kb
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "244" ]
+}
+
+@test "source_payload_size_kb prefers remote sizes for selected asset and manager script" {
+    remote_bin="$TEST_DIR/remote-bin"
+    remote_script="$TEST_DIR/remote-manager.sh"
+    head -c 4097 /dev/zero > "$remote_bin"
+    head -c 2049 /dev/zero > "$remote_script"
+
+    resolved_release_url() { printf "file://%s" "$remote_bin"; }
+    resolved_release_ref() { printf "v1.2.3"; }
+    script_release_url() { printf "file://%s" "$remote_script"; }
+
+    run source_payload_size_kb
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "8" ]
+}
+
+@test "required_tmp_download_kb uses payload plus headroom" {
+    mkdir -p "$(dirname "$SOURCE_BIN")" "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib"
+    head -c 123456 /dev/zero > "$SOURCE_BIN"
+    head -c 1234 /dev/zero > "$SOURCE_MANAGER_SCRIPT"
+    head -c 123456 /dev/zero > "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib/helper.sh"
+
+    run required_tmp_download_kb
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "254" ]
+}
+
+@test "required_tmp_runtime_install_kb reserves room for cache and installed copy" {
+    mkdir -p "$(dirname "$SOURCE_BIN")" "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib"
+    head -c 123456 /dev/zero > "$SOURCE_BIN"
+    head -c 1234 /dev/zero > "$SOURCE_MANAGER_SCRIPT"
+    head -c 123456 /dev/zero > "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib/helper.sh"
+
+    run required_tmp_runtime_install_kb
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "498" ]
 }
 
 # ---- required_persistent_kb ----
@@ -119,6 +184,18 @@ setup() {
     run required_persistent_kb
 
     [ "$output" = "100" ]
+}
+
+@test "required_persistent_kb includes binary and manager bundle" {
+    mkdir -p "$(dirname "$SOURCE_BIN")" "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib"
+    head -c 123456 /dev/zero > "$SOURCE_BIN"
+    head -c 1234 /dev/zero > "$SOURCE_MANAGER_SCRIPT"
+    head -c 123456 /dev/zero > "$(dirname "$SOURCE_MANAGER_SCRIPT")/lib/helper.sh"
+
+    run required_persistent_kb
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "294" ]
 }
 
 # ---- installed_version ----
