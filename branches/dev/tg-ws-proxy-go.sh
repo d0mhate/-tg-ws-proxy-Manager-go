@@ -108,6 +108,9 @@ REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
 PERSISTENT_SPACE_HEADROOM_KB="${PERSISTENT_SPACE_HEADROOM_KB:-2048}"
 TMP_SPACE_HEADROOM_KB="${TMP_SPACE_HEADROOM_KB:-512}"
 PID_FILE="${PID_FILE:-$INSTALL_DIR/pid}"
+NETWORK_CONNECT_TIMEOUT_SEC="${NETWORK_CONNECT_TIMEOUT_SEC:-5}"
+NETWORK_TIMEOUT_SEC="${NETWORK_TIMEOUT_SEC:-12}"
+DOWNLOAD_TIMEOUT_SEC="${DOWNLOAD_TIMEOUT_SEC:-90}"
 COMMAND_MODE="0"
 
 if [ "$#" -gt 0 ]; then
@@ -748,6 +751,71 @@ sync_autostart_config_if_enabled() {
 #!/bin/sh
 # release.sh
 
+network_fetch() {
+    url="$1"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -q -T "$NETWORK_TIMEOUT_SEC" -O - "$url" 2>/dev/null
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL --connect-timeout "$NETWORK_CONNECT_TIMEOUT_SEC" --max-time "$NETWORK_TIMEOUT_SEC" "$url" 2>/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
+network_head() {
+    url="$1"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -q --server-response --spider -T "$NETWORK_TIMEOUT_SEC" "$url" 2>&1
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSLI --connect-timeout "$NETWORK_CONNECT_TIMEOUT_SEC" --max-time "$NETWORK_TIMEOUT_SEC" "$url" 2>/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
+network_probe() {
+    url="$1"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -q --spider -T "$NETWORK_TIMEOUT_SEC" "$url" >/dev/null 2>&1
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -I -L --fail --connect-timeout "$NETWORK_CONNECT_TIMEOUT_SEC" --max-time "$NETWORK_TIMEOUT_SEC" "$url" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
+}
+
+network_download() {
+    url="$1"
+    dest="$2"
+
+    if command -v wget >/dev/null 2>&1; then
+        wget -T "$DOWNLOAD_TIMEOUT_SEC" -O "$dest" "$url"
+        return $?
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail --connect-timeout "$NETWORK_CONNECT_TIMEOUT_SEC" --max-time "$DOWNLOAD_TIMEOUT_SEC" -o "$dest" "$url"
+        return $?
+    fi
+
+    return 1
+}
+
 resolved_binary_name() {
     if [ -n "$BINARY_NAME" ]; then
         printf "%s" "$BINARY_NAME"
@@ -810,20 +878,18 @@ remote_url_size_bytes() {
             ;;
     esac
 
-    if command -v curl >/dev/null 2>&1; then
-        bytes="$(curl -fsSLI "$url" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
-        case "$bytes" in
-            ''|*[!0-9]*)
-                ;;
-            *)
-                printf "%s" "$bytes"
-                return 0
-                ;;
-        esac
-    fi
+    bytes="$(network_head "$url" | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
+    case "$bytes" in
+        ''|*[!0-9]*)
+            ;;
+        *)
+            printf "%s" "$bytes"
+            return 0
+            ;;
+    esac
 
     if command -v wget >/dev/null 2>&1; then
-        bytes="$(wget --server-response --spider "$url" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
+        bytes="$(wget --server-response --spider -T "$NETWORK_TIMEOUT_SEC" "$url" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
         case "$bytes" in
             ''|*[!0-9]*)
                 ;;
@@ -1068,13 +1134,8 @@ latest_release_tag() {
 \"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | sed -n '1p')"
             ;;
         *)
-            if command -v wget >/dev/null 2>&1; then
-                _lrt_tag="$(wget -qO - "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
-\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | sed -n '1p')"
-            elif command -v curl >/dev/null 2>&1; then
-                _lrt_tag="$(curl -fsSL "$RELEASE_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
-\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | sed -n '1p')"
-            else
+            if ! _lrt_tag="$(network_fetch "$RELEASE_API_URL" | tr -d '\n' | sed 's/\"tag_name\"/\
+\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | sed -n '1p')"; then
                 return 1
             fi
             ;;
@@ -1102,25 +1163,13 @@ recent_release_tags() {
             ;;
     esac
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
+    if network_fetch "$RELEASES_API_URL" | tr -d '\n' | sed 's/\"tag_name\"/\
 \"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | while IFS= read -r raw_tag; do
-            normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
-            [ -n "$normalized_tag" ] || continue
-            release_tag_meets_minimum "$normalized_tag" || continue
-            printf "%s\n" "$normalized_tag"
-        done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
-        return 0
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RELEASES_API_URL" 2>/dev/null | tr -d '\n' | sed 's/\"tag_name\"/\
-\"tag_name\"/g' | sed -n 's/.*\"tag_name\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p' | while IFS= read -r raw_tag; do
-            normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
-            [ -n "$normalized_tag" ] || continue
-            release_tag_meets_minimum "$normalized_tag" || continue
-            printf "%s\n" "$normalized_tag"
-        done | awk '!seen[$0]++' | sed -n "1,${max_items}p"
+        normalized_tag="$(normalize_version "$raw_tag" 2>/dev/null || true)"
+        [ -n "$normalized_tag" ] || continue
+        release_tag_meets_minimum "$normalized_tag" || continue
+        printf "%s\n" "$normalized_tag"
+    done | awk '!seen[$0]++' | sed -n "1,${max_items}p"; then
         return 0
     fi
 
@@ -1150,13 +1199,7 @@ list_preview_branches() {
             ;;
     esac
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$PREVIEW_BRANCHES_API_URL" 2>/dev/null | _parse_preview_branch_names | sed -n "1,${_lpb_max}p"
-        return 0
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$PREVIEW_BRANCHES_API_URL" 2>/dev/null | _parse_preview_branch_names | sed -n "1,${_lpb_max}p"
+    if network_fetch "$PREVIEW_BRANCHES_API_URL" | _parse_preview_branch_names | sed -n "1,${_lpb_max}p"; then
         return 0
     fi
 
@@ -1165,17 +1208,7 @@ list_preview_branches() {
 
 release_url_reachable() {
     url="$(resolved_release_url)"
-    if command -v wget >/dev/null 2>&1; then
-        wget --spider "$url" >/dev/null 2>&1
-        return $?
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -I -L --fail "$url" >/dev/null 2>&1
-        return $?
-    fi
-
-    return 1
+    network_probe "$url"
 }
 
 script_release_url() {
@@ -1197,15 +1230,7 @@ release_api_payload() {
             ;;
     esac
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -qO - "$RELEASE_API_URL" 2>/dev/null && return 0
-    fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$RELEASE_API_URL" 2>/dev/null && return 0
-    fi
-
-    return 1
+    network_fetch "$RELEASE_API_URL"
 }
 
 release_asset_digest() {
@@ -1299,11 +1324,7 @@ download_binary() {
     mkdir -p "$(dirname "$SOURCE_BIN")" || return 1
     url="$(resolved_release_url)"
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -O "$SOURCE_BIN" "$url" || return 1
-    elif command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "$SOURCE_BIN" "$url" || return 1
-    else
+    if ! network_download "$url" "$SOURCE_BIN"; then
         return 1
     fi
 
@@ -1323,19 +1344,11 @@ download_manager_script() {
 
     mkdir -p "$(dirname "$SOURCE_MANAGER_SCRIPT")" || return 1
 
-    if command -v wget >/dev/null 2>&1; then
-        wget -O "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
-        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
-        return 0
+    if ! network_download "$url" "$SOURCE_MANAGER_SCRIPT" >/dev/null 2>&1; then
+        return 1
     fi
-
-    if command -v curl >/dev/null 2>&1; then
-        curl -L --fail -o "$SOURCE_MANAGER_SCRIPT" "$url" >/dev/null 2>&1 || return 1
-        chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
-        return 0
-    fi
-
-    return 1
+    chmod +x "$SOURCE_MANAGER_SCRIPT" || return 1
+    return 0
 }
 
 write_source_version_file() {
@@ -2512,7 +2525,8 @@ update_binary() {
     if [ "$COMMAND_MODE" = "0" ]; then
         printf "\n%sRestarting menu...%s\n" "$C_GREEN" "$C_RESET"
         sleep 1
-        exec "$0" || {
+        restart_target="$(current_launcher_path 2>/dev/null || current_script_path 2>/dev/null || printf "%s" "$0")"
+        exec "$restart_target" || {
             printf "%sPlease restart the menu manually.%s\n" "$C_YELLOW" "$C_RESET"
             pause
         }
@@ -2542,6 +2556,10 @@ remove_all() {
 
     show_header
     printf "%sBinary launcher autostart and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
+    if [ "$COMMAND_MODE" = "0" ]; then
+        printf "Menu session closed because manager files were removed.\n"
+        return 20
+    fi
     pause
 }
 
@@ -3014,6 +3032,23 @@ can_use_numbered_update_source_picker() {
     [ "${TERM:-}" != "dumb" ] || return 1
 }
 
+MENU_TTY_RESTORE_STATE=""
+
+arm_tty_restore_trap() {
+    MENU_TTY_RESTORE_STATE="$1"
+    [ -n "$MENU_TTY_RESTORE_STATE" ] || return 0
+    [ "$MENU_TTY_RESTORE_STATE" = "forced" ] && return 0
+    trap 'if [ -n "${MENU_TTY_RESTORE_STATE:-}" ]; then stty "$MENU_TTY_RESTORE_STATE" 2>/dev/null || true; fi' INT TERM EXIT
+}
+
+disarm_tty_restore_trap() {
+    if [ -n "${MENU_TTY_RESTORE_STATE:-}" ] && [ "$MENU_TTY_RESTORE_STATE" != "forced" ]; then
+        stty "$MENU_TTY_RESTORE_STATE" 2>/dev/null || true
+    fi
+    MENU_TTY_RESTORE_STATE=""
+    trap - INT TERM EXIT
+}
+
 confirm_yn() {
     # $1 = prompt text
     # Returns 0 if confirmed (y/Y), 1 otherwise
@@ -3245,6 +3280,7 @@ choose_update_source_mode() {
             return 0
         fi
         stty -echo -icanon min 1 time 0 2>/dev/null || true
+        arm_tty_restore_trap "$restore_stty"
     fi
 
     redraw="0"
@@ -3276,7 +3312,7 @@ choose_update_source_mode() {
     done
 
     if [ -n "$restore_stty" ]; then
-        stty "$restore_stty" 2>/dev/null || true
+        disarm_tty_restore_trap
     fi
 
     printf "\n" >&2
@@ -3353,6 +3389,7 @@ configure_mt_secret() {
             restore_stty="$(stty -g 2>/dev/null || true)"
             if [ -n "$restore_stty" ]; then
                 stty -echo -icanon min 1 time 0 2>/dev/null || true
+                arm_tty_restore_trap "$restore_stty"
             fi
         else
             restore_stty="forced"
@@ -3394,7 +3431,7 @@ configure_mt_secret() {
                 esac
             done
             if [ "$restore_stty" != "forced" ]; then
-                stty "$restore_stty" 2>/dev/null || true
+                disarm_tty_restore_trap
             fi
             printf "\n" >&2
         fi
@@ -4736,6 +4773,10 @@ advanced_menu() {
                 ;;
             18)
                 remove_all
+                _rm_rc=$?
+                if [ "$_rm_rc" -eq 20 ]; then
+                    return 20
+                fi
                 ;;
             19)
                 configure_proxy_mode
@@ -4806,7 +4847,13 @@ menu() {
                 enable_autostart
             fi
             ;;
-        4) advanced_menu ;;
+        4)
+            advanced_menu
+            _adv_rc=$?
+            if [ "$_adv_rc" -eq 20 ]; then
+                exit 0
+            fi
+            ;;
         *) exit 0 ;;
     esac
 }
