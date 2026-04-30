@@ -43,7 +43,7 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenu(t *testing.T) {
 	}
 }
 
-func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsArrowSelection(t *testing.T) {
+func TestManagerConfigureUpdateSourceViaAdvancedMenuIgnoresArrowPickerOverride(t *testing.T) {
 	env := setEnvValue(managerEnv(t), "FORCE_ARROW_UPDATE_SOURCE_PICKER", "1")
 	updateChannelPath := envValue(env, "PERSIST_UPDATE_CHANNEL_FILE")
 	previewBranchPath := envValue(env, "PERSIST_PREVIEW_BRANCH_FILE")
@@ -51,12 +51,12 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsArrowSelection(t *te
 		t.Fatal("missing update source state files in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n17\n\033[B\nfeature/auth-flow\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n17\npreview\nfeature/auth-flow\n\n\n")
 	if err != nil {
-		t.Fatalf("configure update source with arrows failed: %v\n%s", err, out)
+		t.Fatalf("configure update source with forced arrow override failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Mode (use arrows, Enter to confirm):") {
-		t.Fatalf("expected arrow selection prompt, got:\n%s", out)
+	if !strings.Contains(out, "Mode [release/preview] (Enter for release):") {
+		t.Fatalf("expected plain text selection prompt, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
 		t.Fatalf("expected preview update source saved message, got:\n%s", out)
