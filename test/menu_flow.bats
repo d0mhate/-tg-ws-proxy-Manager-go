@@ -45,6 +45,17 @@ setup() {
     [ -f "$BATS_TEST_TMPDIR/remove_all_called" ]
 }
 
+@test "advanced_menu returns session-close code after full remove" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        TEST_REMOVE_ALL_STATUS="20"
+        advanced_menu >/dev/null <<< "18"
+    '
+
+    [ "$status" -eq 20 ]
+    [ -f "$BATS_TEST_TMPDIR/remove_all_called" ]
+}
+
 @test "menu runs update when setup selected and confirmed" {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
@@ -124,4 +135,14 @@ setup() {
 
     [ "$status" -eq 0 ]
     [ -f "$BATS_TEST_TMPDIR/advanced_menu_called" ]
+}
+
+@test "menu exits cleanly after full remove" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        advanced_menu() { return 20; }
+        menu >/dev/null <<< "4"
+    '
+
+    [ "$status" -eq 0 ]
 }

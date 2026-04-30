@@ -383,7 +383,8 @@ update_binary() {
     if [ "$COMMAND_MODE" = "0" ]; then
         printf "\n%sRestarting menu...%s\n" "$C_GREEN" "$C_RESET"
         sleep 1
-        exec "$0" || {
+        restart_target="$(current_launcher_path 2>/dev/null || current_script_path 2>/dev/null || printf "%s" "$0")"
+        exec "$restart_target" || {
             printf "%sPlease restart the menu manually.%s\n" "$C_YELLOW" "$C_RESET"
             pause
         }
@@ -413,5 +414,9 @@ remove_all() {
 
     show_header
     printf "%sBinary launcher autostart and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
+    if [ "$COMMAND_MODE" = "0" ]; then
+        printf "Menu session closed because manager files were removed.\n"
+        return 20
+    fi
     pause
 }

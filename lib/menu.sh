@@ -22,6 +22,23 @@ can_use_numbered_update_source_picker() {
     [ "${TERM:-}" != "dumb" ] || return 1
 }
 
+MENU_TTY_RESTORE_STATE=""
+
+arm_tty_restore_trap() {
+    MENU_TTY_RESTORE_STATE="$1"
+    [ -n "$MENU_TTY_RESTORE_STATE" ] || return 0
+    [ "$MENU_TTY_RESTORE_STATE" = "forced" ] && return 0
+    trap 'if [ -n "${MENU_TTY_RESTORE_STATE:-}" ]; then stty "$MENU_TTY_RESTORE_STATE" 2>/dev/null || true; fi' INT TERM EXIT
+}
+
+disarm_tty_restore_trap() {
+    if [ -n "${MENU_TTY_RESTORE_STATE:-}" ] && [ "$MENU_TTY_RESTORE_STATE" != "forced" ]; then
+        stty "$MENU_TTY_RESTORE_STATE" 2>/dev/null || true
+    fi
+    MENU_TTY_RESTORE_STATE=""
+    trap - INT TERM EXIT
+}
+
 confirm_yn() {
     # $1 = prompt text
     # Returns 0 if confirmed (y/Y), 1 otherwise
@@ -253,6 +270,7 @@ choose_update_source_mode() {
             return 0
         fi
         stty -echo -icanon min 1 time 0 2>/dev/null || true
+        arm_tty_restore_trap "$restore_stty"
     fi
 
     redraw="0"
@@ -284,7 +302,7 @@ choose_update_source_mode() {
     done
 
     if [ -n "$restore_stty" ]; then
-        stty "$restore_stty" 2>/dev/null || true
+        disarm_tty_restore_trap
     fi
 
     printf "\n" >&2
@@ -361,6 +379,7 @@ configure_mt_secret() {
             restore_stty="$(stty -g 2>/dev/null || true)"
             if [ -n "$restore_stty" ]; then
                 stty -echo -icanon min 1 time 0 2>/dev/null || true
+                arm_tty_restore_trap "$restore_stty"
             fi
         else
             restore_stty="forced"
@@ -402,7 +421,7 @@ configure_mt_secret() {
                 esac
             done
             if [ "$restore_stty" != "forced" ]; then
-                stty "$restore_stty" 2>/dev/null || true
+                disarm_tty_restore_trap
             fi
             printf "\n" >&2
         fi
@@ -1744,6 +1763,10 @@ advanced_menu() {
                 ;;
             18)
                 remove_all
+                _rm_rc=$?
+                if [ "$_rm_rc" -eq 20 ]; then
+                    return 20
+                fi
                 ;;
             19)
                 configure_proxy_mode
@@ -1814,7 +1837,13 @@ menu() {
                 enable_autostart
             fi
             ;;
-        4) advanced_menu ;;
+        4)
+            advanced_menu
+            _adv_rc=$?
+            if [ "$_adv_rc" -eq 20 ]; then
+                exit 0
+            fi
+            ;;
         *) exit 0 ;;
     esac
 }

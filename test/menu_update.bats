@@ -97,6 +97,28 @@ setup() {
     [ "$output" = "preview" ]
 }
 
+@test "choose_update_source_mode restores tty state after arrow picker" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        can_use_arrow_update_source_picker() { return 0; }
+        can_use_numbered_update_source_picker() { return 1; }
+        stty() {
+            printf "%s\n" "$*" >> "$MENU_FIXTURE_TMPDIR/stty.log"
+            case "$1" in
+                -g) printf "saved-state" ;;
+            esac
+        }
+        read_picker_hex_byte() { printf "0d"; }
+        choose_update_source_mode release 2>/dev/null
+        cat "$MENU_FIXTURE_TMPDIR/stty.log"
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"-g"* ]]
+    [[ "$output" == *"-echo -icanon min 1 time 0"* ]]
+    [[ "$output" == *"saved-state"* ]]
+}
+
 @test "configure_update_source saves pinned release tag" {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh

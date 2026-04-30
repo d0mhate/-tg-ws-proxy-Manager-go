@@ -54,6 +54,7 @@ export TEST_DISABLE_AUTOSTART_CALLED=""
 export TEST_ADVANCED_MENU_CALLED=""
 export TEST_RESTART_PROXY_CALLED=""
 export TEST_REMOVE_ALL_CALLED=""
+export TEST_REMOVE_ALL_STATUS="0"
 export TEST_RESTART_PROMPT_CALLED=""
 export TEST_SYNC_AUTOSTART_CALLED=""
 
@@ -249,6 +250,10 @@ show_status() { TEST_SHOW_STATUS_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_T
 show_telegram_only() { TEST_SHOW_TELEGRAM_ONLY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/show_telegram_only_called"; }
 show_quick_only() { TEST_SHOW_QUICK_ONLY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/show_quick_only_called"; }
 restart_proxy() { TEST_RESTART_PROXY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/restart_proxy_called"; }
-remove_all() { TEST_REMOVE_ALL_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/remove_all_called"; }
+remove_all() {
+    TEST_REMOVE_ALL_CALLED="1"
+    : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/remove_all_called"
+    return "${TEST_REMOVE_ALL_STATUS:-0}"
+}
 
 . "$MENU_LIB_DIR/menu.sh"

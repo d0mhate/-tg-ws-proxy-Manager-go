@@ -81,6 +81,40 @@ setup() {
     [[ "$output" == *"v1.2.3/bin" ]]
 }
 
+@test "network_fetch uses curl timeouts" {
+    source "$BATS_TEST_DIRNAME/../lib/globals.sh"
+    source "$BATS_TEST_DIRNAME/../lib/release.sh"
+    command() {
+        [ "$1" = "-v" ] || return 1
+        [ "$2" = "wget" ] && return 1
+        [ "$2" = "curl" ] && return 0
+        return 1
+    }
+    curl() {
+        printf "%s\n" "$*" > "$TEST_DIR/curl.args"
+        printf '{"tag_name":"v1.2.3"}'
+    }
+
+    run network_fetch "https://example.com/api"
+
+    [ "$status" -eq 0 ]
+    [[ "$(cat "$TEST_DIR/curl.args")" == *"--connect-timeout 5"* ]]
+    [[ "$(cat "$TEST_DIR/curl.args")" == *"--max-time 12"* ]]
+}
+
+@test "network_probe uses wget timeout" {
+    source "$BATS_TEST_DIRNAME/../lib/globals.sh"
+    source "$BATS_TEST_DIRNAME/../lib/release.sh"
+    wget() {
+        printf "%s\n" "$*" > "$TEST_DIR/wget.args"
+    }
+
+    run network_probe "https://example.com/bin"
+
+    [ "$status" -eq 0 ]
+    [[ "$(cat "$TEST_DIR/wget.args")" == *"--spider -T 12 https://example.com/bin"* ]]
+}
+
 # ---- version_ge ----
 
 @test "version_ge true when greater" {
