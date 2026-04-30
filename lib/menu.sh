@@ -1709,10 +1709,12 @@ advanced_menu() {
                 configure_update_source
                 ;;
             18)
-                remove_all
-                _rm_rc=$?
-                if [ "$_rm_rc" -eq 20 ]; then
-                    return 20
+                if confirm_yn "  Remove binary launcher autostart and downloaded files?"; then
+                    remove_all
+                    _rm_rc=$?
+                    if [ "$_rm_rc" -eq 20 ]; then
+                        return 20
+                    fi
                 fi
                 ;;
             19)

@@ -87,17 +87,18 @@ func TestManagerAdvancedRemoveResetsMenuState(t *testing.T) {
 		t.Fatalf("enable-autostart failed: %v\n%s", err, out)
 	}
 
-	removeOut, err := runManagerMenu(t, env, "4\n18\n\n\n\n")
+	removeOut, err := runManagerMenu(t, env, "4\n18\ny\n")
 	if err != nil {
 		t.Fatalf("advanced remove failed: %v\n%s", err, removeOut)
+	}
+	if !strings.Contains(removeOut, "Remove binary launcher autostart and downloaded files? [y/N]:") {
+		t.Fatalf("expected remove confirmation prompt, got:\n%s", removeOut)
 	}
 	if !strings.Contains(removeOut, "Binary launcher autostart and downloaded files removed") {
 		t.Fatalf("expected remove confirmation, got:\n%s", removeOut)
 	}
-
-	out := waitForMenuText(t, env, "2) Start proxy")
-	if !strings.Contains(out, "3) Enable autostart") {
-		t.Fatalf("expected clean top-level menu after remove, got:\n%s", out)
+	if !strings.Contains(removeOut, "Menu session closed because manager files were removed.") {
+		t.Fatalf("expected menu session close message after remove, got:\n%s", removeOut)
 	}
 
 	statusOut, err := runManager(t, env, "status")
