@@ -242,9 +242,7 @@ choose_release_ref() {
 choose_update_source_mode() {
     current="${1:-release}"
 
-    if can_use_arrow_update_source_picker; then
-        :
-    elif can_use_numbered_update_source_picker; then
+    if can_use_numbered_update_source_picker; then
         choose_update_source_mode_numbered "$current"
         return 0
     else
@@ -256,57 +254,6 @@ choose_update_source_mode() {
         printf "%s" "$selected_mode"
         return 0
     fi
-
-    restore_stty=""
-    if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
-        restore_stty="$(stty -g 2>/dev/null || true)"
-        if [ -z "$restore_stty" ]; then
-            printf "Mode [release/preview] (Enter for %s): " "$current" >&2
-            IFS= read -r selected_mode
-            if [ -z "$selected_mode" ]; then
-                selected_mode="$current"
-            fi
-            printf "%s" "$selected_mode"
-            return 0
-        fi
-        stty -echo -icanon min 1 time 0 2>/dev/null || true
-        arm_tty_restore_trap "$restore_stty"
-    fi
-
-    redraw="0"
-    while true; do
-        if [ "$redraw" = "1" ]; then
-            printf '\033[3A\033[J' >&2
-        fi
-        draw_update_source_picker "$current"
-        redraw="1"
-
-        first_hex="$(read_picker_hex_byte)"
-        case "$first_hex" in
-            0a|0d)
-                break
-                ;;
-            1b)
-                second_hex="$(read_picker_hex_byte)"
-                third_hex="$(read_picker_hex_byte)"
-                case "$second_hex$third_hex" in
-                    5b41|5b44)
-                        current="release"
-                        ;;
-                    5b42|5b43)
-                        current="preview"
-                        ;;
-                esac
-                ;;
-        esac
-    done
-
-    if [ -n "$restore_stty" ]; then
-        disarm_tty_restore_trap
-    fi
-
-    printf "\n" >&2
-    printf "%s" "$current"
 }
 
 configure_proxy_mode() {
