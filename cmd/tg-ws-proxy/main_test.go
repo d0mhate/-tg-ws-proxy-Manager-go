@@ -12,10 +12,10 @@ import (
 func TestDCIPFlagsSetAndString(t *testing.T) {
 	var flags dcIPFlags
 
-	if err := flags.Set("2:149.154.167.220"); err != nil {
+	if err := flags.Set("2:" + testIPv4DC2); err != nil {
 		t.Fatalf("Set returned error: %v", err)
 	}
-	if err := flags.Set("4:149.154.167.220"); err != nil {
+	if err := flags.Set("4:" + testIPv4DC2); err != nil {
 		t.Fatalf("Set returned error: %v", err)
 	}
 
@@ -23,7 +23,7 @@ func TestDCIPFlagsSetAndString(t *testing.T) {
 		t.Fatalf("unexpected number of flag values: got %d want %d", got, want)
 	}
 
-	if got := flags.String(); got != "[2:149.154.167.220 4:149.154.167.220]" {
+	if got := flags.String(); got != "[2:"+testIPv4DC2+" 4:"+testIPv4DC2+"]" {
 		t.Fatalf("unexpected String output: %q", got)
 	}
 }

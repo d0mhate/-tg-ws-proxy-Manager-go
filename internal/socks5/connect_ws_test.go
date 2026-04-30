@@ -24,7 +24,7 @@ func TestConnectWSBlacklistsAllRedirects(t *testing.T) {
 		}
 	}
 
-	_, err := srv.connectWS(context.Background(), "149.154.167.220", 2, false)
+	_, err := srv.connectWS(context.Background(), testIPv4DC2, 2, false)
 	if !errors.Is(err, errWSBlacklisted) {
 		t.Fatalf("expected blacklist error, got %v", err)
 	}
@@ -46,7 +46,7 @@ func TestConnectWSFailureSetsCooldownAndSuccessClearsIt(t *testing.T) {
 		return wsbridge.NewClient(clientConn), nil
 	}
 
-	_, err := srv.connectWS(context.Background(), "149.154.167.220", 2, false)
+	_, err := srv.connectWS(context.Background(), testIPv4DC2, 2, false)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected initial dial error, got %v", err)
 	}
@@ -57,7 +57,7 @@ func TestConnectWSFailureSetsCooldownAndSuccessClearsIt(t *testing.T) {
 	}
 
 	fail = false
-	ws, err := srv.connectWS(context.Background(), "149.154.167.220", 2, false)
+	ws, err := srv.connectWS(context.Background(), testIPv4DC2, 2, false)
 	if err != nil {
 		t.Fatalf("expected successful dial after cooldown test, got %v", err)
 	}
@@ -80,7 +80,7 @@ func TestConnectWSUsesFailFastDialTimeoutForAllDCs(t *testing.T) {
 		return nil, io.EOF
 	}
 
-	_, err := srv.connectWS(context.Background(), "149.154.175.205", 1, true)
+	_, err := srv.connectWS(context.Background(), testIPv4DC1Alt, 1, true)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected dial error, got %v", err)
 	}
@@ -103,7 +103,7 @@ func TestConnectWSUsesNormalizedDomainsForExplicitDC203(t *testing.T) {
 		return nil, io.EOF
 	}
 
-	_, err := srv.connectWS(context.Background(), "91.105.192.100", 203, false)
+	_, err := srv.connectWS(context.Background(), testIPv4DC203, 203, false)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected dial error, got %v", err)
 	}

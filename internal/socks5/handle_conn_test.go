@@ -88,13 +88,13 @@ func TestHandleConnTelegramFallbackWithoutOverride(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 5)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.171.5", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC5Alt, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if got.host != "149.154.171.5" || got.port != 443 {
+	if got.host != testIPv4DC5Alt || got.port != 443 {
 		t.Fatalf("unexpected tcp fallback target: %s:%d", got.host, got.port)
 	}
 	if !bytes.Equal(got.init, init) {
@@ -121,13 +121,13 @@ func TestHandleConnTelegramFallbackAfterWSFailure(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.41", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC2AltHTTP, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if got.host != "149.154.167.41" || got.port != 443 {
+	if got.host != testIPv4DC2AltHTTP || got.port != 443 {
 		t.Fatalf("unexpected fallback target after ws failure: %s:%d", got.host, got.port)
 	}
 	if !bytes.Equal(got.init, init) {
@@ -160,7 +160,7 @@ func TestHandleConnUnknownIPWithMTProtoInitRoutesAsTelegram(t *testing.T) {
 		}
 	})
 
-	if got.host != "149.154.167.220" || got.port != 443 {
+	if got.host != testIPv4DC2 || got.port != 443 {
 		t.Fatalf("unexpected tcp fallback target for mtproto probe route: %s:%d", got.host, got.port)
 	}
 	if !bytes.Equal(got.init, init) {
@@ -184,13 +184,13 @@ func TestHandleConnFallsBackForTelegramHTTPTransport(t *testing.T) {
 	}
 
 	init := append([]byte("GET / HTTP/1.1"), bytes.Repeat([]byte{0}, 64-len("GET / HTTP/1.1"))...)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.41", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC2AltHTTP, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if got.host != "149.154.167.41" || got.port != 443 {
+	if got.host != testIPv4DC2AltHTTP || got.port != 443 {
 		t.Fatalf("unexpected tcp fallback target for telegram http transport: %s:%d", got.host, got.port)
 	}
 	if !bytes.Equal(got.init, init) {
@@ -277,7 +277,7 @@ func TestHandleConnTelegramIPv6FallbackUsesIPv4DCTarget(t *testing.T) {
 		}
 	})
 
-	if got.host != "149.154.167.220" || got.port != 443 {
+	if got.host != testIPv4DC2 || got.port != 443 {
 		t.Fatalf("unexpected tcp fallback target for telegram ipv6: %s:%d", got.host, got.port)
 	}
 	if !bytes.Equal(got.init, init) {
@@ -305,13 +305,13 @@ func TestHandleConnSkipsWSForDisabledDCAndUsesTCPFallback(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, -1)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.175.211", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC1Call, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if got.host != "149.154.175.211" || got.port != 443 {
+	if got.host != testIPv4DC1Call || got.port != 443 {
 		t.Fatalf("unexpected tcp fallback target for disabled dc: %s:%d", got.host, got.port)
 	}
 	if !bytes.Equal(got.init, init) {
@@ -338,13 +338,13 @@ func TestHandleConnDC203UsesDC2OverrideTargetAndPatchedInit(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 203)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("91.105.192.100", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC203, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if got.host != "149.154.167.220" || got.port != 443 {
+	if got.host != testIPv4DC2 || got.port != 443 {
 		t.Fatalf("unexpected tcp fallback target for dc203: %s:%d", got.host, got.port)
 	}
 
@@ -365,7 +365,7 @@ func TestHandleConnDC203UsesExplicitTargetAndKeepsPatchedDCWhenConfigured(t *tes
 	}
 
 	cfg := config.Default()
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 
 	srv := NewServer(cfg, log.New(io.Discard, "", 0))
 	srv.connectWSFunc = func(ctx context.Context, targetIP string, dc int, isMedia bool) (*wsbridge.Client, error) {
@@ -379,13 +379,13 @@ func TestHandleConnDC203UsesExplicitTargetAndKeepsPatchedDCWhenConfigured(t *tes
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 203)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("91.105.192.100", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC203, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if got.host != "91.105.192.100" || got.port != 443 {
+	if got.host != testIPv4DC203 || got.port != 443 {
 		t.Fatalf("unexpected tcp fallback target for explicit dc203: %s:%d", got.host, got.port)
 	}
 
@@ -406,7 +406,7 @@ func TestHandleConnDC203UsesExplicitTargetForWebSocketRoute(t *testing.T) {
 	}
 
 	cfg := config.Default()
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 
 	srv := NewServer(cfg, log.New(io.Discard, "", 0))
 	srv.proxyTCPWithInitFunc = func(ctx context.Context, conn net.Conn, host string, port int, init []byte) error {
@@ -423,13 +423,13 @@ func TestHandleConnDC203UsesExplicitTargetForWebSocketRoute(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 203)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("91.105.192.100", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC203, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
 	})
 
-	if got.targetIP != "91.105.192.100" || got.dc != 203 || got.isMedia {
+	if got.targetIP != testIPv4DC203 || got.dc != 203 || got.isMedia {
 		t.Fatalf("unexpected websocket route for explicit dc203: %+v", got)
 	}
 }
@@ -453,13 +453,13 @@ func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 		}
 
 		init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 0)
-		runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.255", 443), init, func(reply []byte) {
+		runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC2Call, 443), init, func(reply []byte) {
 			if reply[1] != 0x00 {
 				t.Fatalf("unexpected socks reply status: %d", reply[1])
 			}
 		})
 
-		if got.targetIP != "149.154.167.220" || got.dc != 2 || got.isMedia {
+		if got.targetIP != testIPv4DC2 || got.dc != 2 || got.isMedia {
 			t.Fatalf("unexpected websocket route: %+v", got)
 		}
 	})
@@ -484,13 +484,13 @@ func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 		}
 
 		init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 0)
-		runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.175.211", 443), init, func(reply []byte) {
+		runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC1Call, 443), init, func(reply []byte) {
 			if reply[1] != 0x00 {
 				t.Fatalf("unexpected socks reply status: %d", reply[1])
 			}
 		})
 
-		if got.host != "149.154.175.211" || got.port != 443 {
+		if got.host != testIPv4DC1Call || got.port != 443 {
 			t.Fatalf("unexpected tcp fallback target: %s:%d", got.host, got.port)
 		}
 		info, err := mtproto.ParseInit(got.init)
@@ -530,7 +530,7 @@ func TestHandleConnAdditionalTelegramCallHostsUseKnownDCMappings(t *testing.T) {
 		}
 
 		init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 0)
-		runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.175.211", 443), init, func(reply []byte) {
+		runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC1Call, 443), init, func(reply []byte) {
 			if reply[1] != 0x00 {
 				t.Fatalf("unexpected socks reply status: %d", reply[1])
 			}
@@ -563,7 +563,7 @@ func TestHandleConnCFFallbackTriedBeforeTCP(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.220", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC2, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
@@ -595,7 +595,7 @@ func TestHandleConnTCPFallbackWhenCFDisabled(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.220", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC2, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}
@@ -618,29 +618,29 @@ func TestHandleConnCFRouteForNonWhitelistDCs(t *testing.T) {
 		{
 			name:       "dc1 raw init routes through cloudflare websocket",
 			initDC:     1,
-			dst:        "149.154.175.50",
+			dst:        testIPv4DC1,
 			dcIPs:      nil,
 			wantCFHost: "kws1.example.com",
 		},
 		{
 			name:       "dc5 raw init routes through cloudflare websocket",
 			initDC:     5,
-			dst:        "91.108.56.100",
+			dst:        testIPv4DC5,
 			dcIPs:      nil,
 			wantCFHost: "kws5.example.com",
 		},
 		{
 			name:       "dc1 with DCIPs mapping still uses cloudflare websocket",
 			initDC:     1,
-			dst:        "149.154.175.50",
-			dcIPs:      map[int]string{1: "149.154.175.50"},
+			dst:        testIPv4DC1,
+			dcIPs:      map[int]string{1: testIPv4DC1},
 			wantCFHost: "kws1.example.com",
 		},
 		{
 			name:       "dc5 with DCIPs mapping still uses cloudflare websocket",
 			initDC:     5,
-			dst:        "91.108.56.100",
-			dcIPs:      map[int]string{5: "91.108.56.100"},
+			dst:        testIPv4DC5,
+			dcIPs:      map[int]string{5: testIPv4DC5},
 			wantCFHost: "kws5.example.com",
 		},
 	}
@@ -703,16 +703,16 @@ func TestHandleConnCFFallbackUsesDCIPMappingTargetForTCPWhenCFFails(t *testing.T
 		{
 			name:        "dc1 raw init falls back to dst host when cf fails",
 			initDC:      1,
-			dst:         "149.154.175.50",
+			dst:         testIPv4DC1,
 			dcIPs:       nil,
-			wantTCPHost: "149.154.175.50",
+			wantTCPHost: testIPv4DC1,
 		},
 		{
 			name:        "dc5 raw init falls back to dst host when cf fails",
 			initDC:      5,
-			dst:         "91.108.56.100",
+			dst:         testIPv4DC5,
 			dcIPs:       nil,
-			wantTCPHost: "91.108.56.100",
+			wantTCPHost: testIPv4DC5,
 		},
 	}
 
@@ -787,7 +787,7 @@ func TestHandleConnCFPreferredBeforeTelegramWS(t *testing.T) {
 	}
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
-	runHandleConnFlow(t, srv, ipv4ConnectRequest("149.154.167.220", 443), init, func(reply []byte) {
+	runHandleConnFlow(t, srv, ipv4ConnectRequest(testIPv4DC2, 443), init, func(reply []byte) {
 		if reply[1] != 0x00 {
 			t.Fatalf("unexpected socks reply status: %d", reply[1])
 		}

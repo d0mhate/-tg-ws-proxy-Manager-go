@@ -1,0 +1,17 @@
+package telegram
+
+const (
+	IPv4DC1     = "149.154.175.50"
+	IPv4DC1Call = "149.154.175.211"
+	IPv4DC1Alt  = "149.154.175.205"
+
+	IPv4DC2         = "149.154.167.220"
+	IPv4DC2Alt      = "149.154.167.35"
+	IPv4DC2AltRoute = "149.154.167.40"
+	IPv4DC2AltHTTP  = "149.154.167.41"
+	IPv4DC2Call     = "149.154.167.255"
+
+	IPv4DC5    = "91.108.56.100"
+	IPv4DC5Alt = "149.154.171.5"
+	IPv4DC203  = "91.105.192.100"
+)

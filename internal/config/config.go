@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"tg-ws-proxy/internal/telegram"
 )
 
 // upstream proxy for fallback when websocket to tg fails.
@@ -58,8 +60,8 @@ func Default() Config {
 		ConnectWSPath:   "/apiws",
 		CFDomains:       nil,
 		DCIPs: map[int]string{
-			2: "149.154.167.220",
-			4: "149.154.167.220",
+			2: telegram.IPv4DC2,
+			4: telegram.IPv4DC2,
 		},
 	}
 }

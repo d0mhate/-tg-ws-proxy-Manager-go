@@ -279,7 +279,7 @@ func TestManagerStartBackgroundPassesOptionalAuthFlags(t *testing.T) {
 }
 
 func TestManagerStartBackgroundPassesCustomDCIPFlags(t *testing.T) {
-	env := append(managerEnv(t), "DC_IPS=203:91.105.192.100, 2:149.154.167.220")
+	env := append(managerEnv(t), "DC_IPS=203:"+testIPv4DC203+", 2:"+testIPv4DC2)
 	binPath := envValue(env, "BIN_PATH")
 	if binPath == "" {
 		t.Fatal("BIN_PATH not found in env")
@@ -297,8 +297,8 @@ func TestManagerStartBackgroundPassesCustomDCIPFlags(t *testing.T) {
 	waitForFile(t, argsFile)
 	args := readTrimmed(t, argsFile)
 	if !strings.Contains(args, "--dc-ip") ||
-		!strings.Contains(args, "203:91.105.192.100") ||
-		!strings.Contains(args, "2:149.154.167.220") {
+		!strings.Contains(args, "203:"+testIPv4DC203) ||
+		!strings.Contains(args, "2:"+testIPv4DC2) {
 		t.Fatalf("expected background start to pass dc-ip flags, got args:\n%s", args)
 	}
 

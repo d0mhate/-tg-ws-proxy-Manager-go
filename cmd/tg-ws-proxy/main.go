@@ -21,6 +21,7 @@ import (
 	"tg-ws-proxy/internal/mtpserver"
 	"tg-ws-proxy/internal/release"
 	"tg-ws-proxy/internal/socks5"
+	"tg-ws-proxy/internal/telegram"
 )
 
 type dcIPFlags []string
@@ -85,7 +86,7 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs.DurationVar(&cfg.PoolRefillDelay, "pool-refill-delay", cfg.PoolRefillDelay, "delay between opening pooled WebSocket connections while refilling a bucket")
 	fs.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP dial timeout")
 	fs.DurationVar(&cfg.InitTimeout, "init-timeout", cfg.InitTimeout, "client MTProto init timeout")
-	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:149.154.167.220")
+	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:"+telegram.IPv4DC2)
 	var cfDomainFlag string
 	fs.BoolVar(&cfg.UseCFProxy, "cf-proxy", cfg.UseCFProxy, "enable Cloudflare proxy mode for websocket routing")
 	fs.BoolVar(&cfg.UseCFProxyFirst, "cf-proxy-first", cfg.UseCFProxyFirst, "try Cloudflare websocket routing before direct Telegram websocket routing")

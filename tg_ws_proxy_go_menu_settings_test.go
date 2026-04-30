@@ -15,7 +15,7 @@ func TestManagerConfigureDCIPMappingViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n12\n203:91.105.192.100, 2:149.154.167.220\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n12\n203:"+testIPv4DC203+", 2:"+testIPv4DC2+"\n\n\n")
 	if err != nil {
 		t.Fatalf("configure dc mapping failed: %v\n%s", err, out)
 	}
@@ -24,13 +24,13 @@ func TestManagerConfigureDCIPMappingViaAdvancedMenu(t *testing.T) {
 	}
 
 	config := readTrimmed(t, configPath)
-	if !strings.Contains(config, "DC_IPS='203:91.105.192.100, 2:149.154.167.220'") {
+	if !strings.Contains(config, "DC_IPS='203:"+testIPv4DC203+", 2:"+testIPv4DC2+"'") {
 		t.Fatalf("expected dc mapping to be persisted, got:\n%s", config)
 	}
 }
 
 func TestManagerConfigureDCIPMappingCanResetToDefaults(t *testing.T) {
-	env := append(managerEnv(t), "DC_IPS=203:91.105.192.100")
+	env := append(managerEnv(t), "DC_IPS=203:"+testIPv4DC203)
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 	if configPath == "" {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")

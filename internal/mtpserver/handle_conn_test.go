@@ -70,7 +70,7 @@ func TestHasCloudflareRoutesRequiresFlagAndDomains(t *testing.T) {
 
 func TestPrepareClientSessionBuildsSessionFromHandshake(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs[5] = "149.154.171.5"
+	cfg.DCIPs[5] = testIPv4DC5Alt
 	srv := newTestServer(t, cfg)
 
 	handshake, _, _, err := mtproto.GenerateClientHandshake(srv.secretKey(), 5, mtproto.ProtoIntermediate)
@@ -98,7 +98,7 @@ func TestPrepareClientSessionBuildsSessionFromHandshake(t *testing.T) {
 	if len(session.directRoutes) != 1 || session.directRoutes[0].targetDC != 5 {
 		t.Fatalf("unexpected direct routes: %+v", session.directRoutes)
 	}
-	if session.tcpFallbackTarget != "149.154.171.5" {
+	if session.tcpFallbackTarget != testIPv4DC5Alt {
 		t.Fatalf("unexpected tcp fallback target: %q", session.tcpFallbackTarget)
 	}
 	if session.clientDec == nil || session.clientEnc == nil || session.relayEnc == nil || session.relayDec == nil {
@@ -130,7 +130,7 @@ func TestPrepareClientSessionDefaultsUnknownDCTo2(t *testing.T) {
 	if session.dc != 2 {
 		t.Fatalf("expected session dc fallback to 2, got %d", session.dc)
 	}
-	if session.tcpFallbackTarget != "149.154.167.220" {
+	if session.tcpFallbackTarget != testIPv4DC2 {
 		t.Fatalf("unexpected tcp fallback target: %q", session.tcpFallbackTarget)
 	}
 }

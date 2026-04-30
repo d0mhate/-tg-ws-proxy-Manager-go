@@ -19,18 +19,18 @@ var ipRanges = [][2]uint32{
 }
 
 var IPToDC = map[string]Endpoint{
-	"149.154.175.50":  {DC: 1, IsMedia: false},
+	IPv4DC1:           {DC: 1, IsMedia: false},
 	"149.154.175.51":  {DC: 1, IsMedia: false},
 	"149.154.175.53":  {DC: 1, IsMedia: false},
 	"149.154.175.54":  {DC: 1, IsMedia: false},
-	"149.154.175.211": {DC: 1, IsMedia: false},
+	IPv4DC1Call:       {DC: 1, IsMedia: false},
 	"149.154.175.52":  {DC: 1, IsMedia: true},
-	"149.154.167.35":  {DC: 2, IsMedia: false},
-	"149.154.167.41":  {DC: 2, IsMedia: false},
+	IPv4DC2Alt:        {DC: 2, IsMedia: false},
+	IPv4DC2AltHTTP:    {DC: 2, IsMedia: false},
 	"149.154.167.50":  {DC: 2, IsMedia: false},
 	"149.154.167.51":  {DC: 2, IsMedia: false},
-	"149.154.167.255": {DC: 2, IsMedia: false},
-	"149.154.167.220": {DC: 2, IsMedia: false},
+	IPv4DC2Call:       {DC: 2, IsMedia: false},
+	IPv4DC2:           {DC: 2, IsMedia: false},
 	"95.161.76.100":   {DC: 2, IsMedia: false},
 	"149.154.167.151": {DC: 2, IsMedia: true},
 	"149.154.167.222": {DC: 2, IsMedia: true},
@@ -46,15 +46,15 @@ var IPToDC = map[string]Endpoint{
 	"149.154.166.121": {DC: 4, IsMedia: true},
 	"149.154.167.118": {DC: 4, IsMedia: true},
 	"149.154.165.111": {DC: 4, IsMedia: true},
-	"91.108.56.100":   {DC: 5, IsMedia: false},
+	IPv4DC5:           {DC: 5, IsMedia: false},
 	"91.108.56.101":   {DC: 5, IsMedia: false},
 	"91.108.56.116":   {DC: 5, IsMedia: false},
 	"91.108.56.126":   {DC: 5, IsMedia: false},
-	"149.154.171.5":   {DC: 5, IsMedia: false},
+	IPv4DC5Alt:        {DC: 5, IsMedia: false},
 	"91.108.56.102":   {DC: 5, IsMedia: true},
 	"91.108.56.128":   {DC: 5, IsMedia: true},
 	"91.108.56.151":   {DC: 5, IsMedia: true},
-	"91.105.192.100":  {DC: 203, IsMedia: false},
+	IPv4DC203:         {DC: 203, IsMedia: false},
 }
 
 var DCOverrides = map[int]int{

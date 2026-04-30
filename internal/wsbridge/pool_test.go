@@ -28,13 +28,13 @@ func TestPoolRefillAfterMissThenHit(t *testing.T) {
 	}
 	defer pool.Close()
 
-	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil || hit {
+	if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws != nil || hit {
 		t.Fatal("expected first get to miss and trigger background refill")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil && hit {
+		if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws != nil && hit {
 			if dialCalls == 0 {
 				t.Fatal("expected dial to be called during refill")
 			}
@@ -54,7 +54,7 @@ func TestPoolCloseClosesIdleClients(t *testing.T) {
 
 	client := newReusableClient()
 	conn := client.conn.(*mockConn)
-	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	key := poolKey{dc: 2, isMedia: false, targetIP: testIPv4DC2}
 	pool.idle[key] = []pooledClient{{
 		client:  client,
 		created: time.Now(),
@@ -80,11 +80,11 @@ func TestPoolWarmupPreloadsBuckets(t *testing.T) {
 	}
 	defer pool.Close()
 
-	pool.Warmup(map[int]string{2: "149.154.167.220"})
+	pool.Warmup(map[int]string{2: testIPv4DC2})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil && hit {
+		if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws != nil && hit {
 			if dialCalls == 0 {
 				t.Fatal("expected warmup to dial at least once")
 			}
@@ -109,11 +109,11 @@ func TestPoolWarmupPreloadsVariantMediaBucket(t *testing.T) {
 	}
 	defer pool.Close()
 
-	pool.Warmup(map[int]string{2: "149.154.167.220"})
+	pool.Warmup(map[int]string{2: testIPv4DC2})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if ws, hit := pool.Get(2, true, "149.154.167.220", []string{"kws2-1.web.telegram.org", "kws2.web.telegram.org"}); ws != nil && hit {
+		if ws, hit := pool.Get(2, true, testIPv4DC2, []string{"kws2-1.web.telegram.org", "kws2.web.telegram.org"}); ws != nil && hit {
 			if dialCalls == 0 {
 				t.Fatal("expected warmup to dial at least once")
 			}
@@ -137,13 +137,13 @@ func TestPoolDiscardsExpiredClient(t *testing.T) {
 		return nil, errors.New("test dial blocked")
 	}
 	conn := newMockConn(nil)
-	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	key := poolKey{dc: 2, isMedia: false, targetIP: testIPv4DC2}
 	pool.idle[key] = []pooledClient{{
 		client:  &Client{conn: conn},
 		created: base,
 	}}
 
-	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil || hit {
+	if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws != nil || hit {
 		t.Fatal("expected expired pooled client to miss")
 	}
 
@@ -178,7 +178,7 @@ func TestPoolSeparatesBucketsByTargetIP(t *testing.T) {
 	}
 
 	client := newReusableClient()
-	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	key := poolKey{dc: 2, isMedia: false, targetIP: testIPv4DC2}
 	pool.idle[key] = []pooledClient{{
 		client:  client,
 		created: time.Now(),
@@ -188,10 +188,10 @@ func TestPoolSeparatesBucketsByTargetIP(t *testing.T) {
 	}
 	defer pool.Close()
 
-	if ws, hit := pool.Get(2, false, "91.105.192.100", []string{"kws2.web.telegram.org"}); ws != nil || hit {
+	if ws, hit := pool.Get(2, false, testIPv4DC203, []string{"kws2.web.telegram.org"}); ws != nil || hit {
 		t.Fatal("expected different target IP to use a separate pool bucket")
 	}
-	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws == nil || !hit {
+	if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws == nil || !hit {
 		t.Fatal("expected original target IP bucket to remain reusable")
 	}
 }
@@ -203,7 +203,7 @@ func TestPoolDiscardsClosedClientBeforeHit(t *testing.T) {
 	}
 
 	client := newReusableClient()
-	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	key := poolKey{dc: 2, isMedia: false, targetIP: testIPv4DC2}
 	pool.idle[key] = []pooledClient{{
 		client:  client,
 		created: time.Now(),
@@ -211,7 +211,7 @@ func TestPoolDiscardsClosedClientBeforeHit(t *testing.T) {
 	client.conn.(*mockConn).closed = true
 	defer pool.Close()
 
-	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil || hit {
+	if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws != nil || hit {
 		t.Fatal("expected closed pooled client to be discarded")
 	}
 }
@@ -229,14 +229,14 @@ func TestPoolGetDoesNotBlockOnStaleClose(t *testing.T) {
 
 	conn := newBlockingWriteConn()
 	client := NewClient(conn)
-	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	key := poolKey{dc: 2, isMedia: false, targetIP: testIPv4DC2}
 	pool.idle[key] = []pooledClient{{
 		client:  client,
 		created: time.Now(),
 	}}
 
 	start := time.Now()
-	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil || hit {
+	if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws != nil || hit {
 		t.Fatal("expected stale pooled client to miss")
 	}
 	if elapsed := time.Since(start); elapsed >= closeWriteTimeout/2 {
@@ -271,7 +271,7 @@ func TestPoolRefillDelayAppliedBetweenConnections(t *testing.T) {
 		return newReusableClient(), nil
 	}
 
-	if ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"}); ws != nil || hit {
+	if ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"}); ws != nil || hit {
 		t.Fatal("expected initial get to miss and trigger refill")
 	}
 
@@ -297,22 +297,22 @@ func TestPoolGetReturnsFreshestClientFirst(t *testing.T) {
 	c2 := newReusableClient()
 	c3 := newReusableClient()
 	base := time.Now()
-	key := poolKey{dc: 2, isMedia: false, targetIP: "149.154.167.220"}
+	key := poolKey{dc: 2, isMedia: false, targetIP: testIPv4DC2}
 	pool.idle[key] = []pooledClient{
 		{client: c1, created: base.Add(-3 * time.Second)},
 		{client: c2, created: base.Add(-2 * time.Second)},
 		{client: c3, created: base.Add(-1 * time.Second)},
 	}
 
-	ws, hit := pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"})
+	ws, hit := pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"})
 	if !hit || ws != c3 {
 		t.Fatalf("expected freshest client first, got hit=%v client=%p", hit, ws)
 	}
-	ws, hit = pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"})
+	ws, hit = pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"})
 	if !hit || ws != c2 {
 		t.Fatalf("expected second freshest client next, got hit=%v client=%p", hit, ws)
 	}
-	ws, hit = pool.Get(2, false, "149.154.167.220", []string{"kws2.web.telegram.org"})
+	ws, hit = pool.Get(2, false, testIPv4DC2, []string{"kws2.web.telegram.org"})
 	if !hit || ws != c1 {
 		t.Fatalf("expected oldest client last, got hit=%v client=%p", hit, ws)
 	}
