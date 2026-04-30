@@ -43,7 +43,7 @@ func TestHandshakeIPv4Connect(t *testing.T) {
 		t.Fatalf("handshake returned error: %v", err)
 	}
 
-	if req.DstHost != "149.154.167.220" {
+	if req.DstHost != testIPv4DC2 {
 		t.Fatalf("unexpected destination host: %q", req.DstHost)
 	}
 	if req.DstPort != 443 {
@@ -91,12 +91,12 @@ func TestHandshakeUsernamePasswordConnect(t *testing.T) {
 	req, err := runHandshakeClientWithConfig(t, cfg,
 		[]byte{0x05, 0x02, socksAuthNoAuth, socksAuthUserPass},
 		buildUserPassAuthPayload("alice", "secret"),
-		ipv4ConnectRequest("149.154.167.220", 443),
+		ipv4ConnectRequest(testIPv4DC2, 443),
 	)
 	if err != nil {
 		t.Fatalf("handshake returned error: %v", err)
 	}
-	if req.DstHost != "149.154.167.220" || req.DstPort != 443 {
+	if req.DstHost != testIPv4DC2 || req.DstPort != 443 {
 		t.Fatalf("unexpected request parsed after auth: %s:%d", req.DstHost, req.DstPort)
 	}
 }
@@ -105,12 +105,12 @@ func TestHandshakeAcceptsNoAuthWhenServerDoesNotRequireCredentials(t *testing.T)
 	req, err := runHandshakeClientWithConfig(t, config.Default(),
 		[]byte{0x05, 0x02, socksAuthNoAuth, socksAuthUserPass},
 		nil,
-		ipv4ConnectRequest("149.154.167.220", 443),
+		ipv4ConnectRequest(testIPv4DC2, 443),
 	)
 	if err != nil {
 		t.Fatalf("handshake returned error: %v", err)
 	}
-	if req.DstHost != "149.154.167.220" || req.DstPort != 443 {
+	if req.DstHost != testIPv4DC2 || req.DstPort != 443 {
 		t.Fatalf("unexpected request parsed without auth: %s:%d", req.DstHost, req.DstPort)
 	}
 }
