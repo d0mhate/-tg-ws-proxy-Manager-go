@@ -106,6 +106,7 @@ UPDATE_CHANNEL="${UPDATE_CHANNEL:-}"
 PREVIEW_BRANCH="${PREVIEW_BRANCH:-}"
 REQUIRED_TMP_KB="${REQUIRED_TMP_KB:-8192}"
 PERSISTENT_SPACE_HEADROOM_KB="${PERSISTENT_SPACE_HEADROOM_KB:-2048}"
+TMP_SPACE_HEADROOM_KB="${TMP_SPACE_HEADROOM_KB:-512}"
 PID_FILE="${PID_FILE:-$INSTALL_DIR/pid}"
 COMMAND_MODE="0"
 
@@ -281,6 +282,11 @@ show_environment_checks() {
     fi
 
     printf "Release asset: %s\n" "$(resolved_binary_name)"
+
+    need_kb="$(required_tmp_runtime_install_kb 2>/dev/null || true)"
+    if [ -n "$need_kb" ]; then
+        printf "tmp need: %s KB\n" "$need_kb"
+    fi
 
     free_kb="$(tmp_available_kb)"
     if [ -n "$free_kb" ]; then
@@ -789,8 +795,151 @@ source_binary_size_kb() {
     printf "%s" $(( (bytes + 1023) / 1024 ))
 }
 
+remote_url_size_bytes() {
+    url="$1"
+    [ -n "$url" ] || return 1
+
+    case "$url" in
+        file://*)
+            local_path="${url#file://}"
+            [ -f "$local_path" ] || return 1
+            bytes="$(wc -c < "$local_path" 2>/dev/null | tr -d ' ')"
+            [ -n "$bytes" ] || return 1
+            printf "%s" "$bytes"
+            return 0
+            ;;
+    esac
+
+    if command -v curl >/dev/null 2>&1; then
+        bytes="$(curl -fsSLI "$url" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
+        case "$bytes" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                printf "%s" "$bytes"
+                return 0
+                ;;
+        esac
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        bytes="$(wget --server-response --spider "$url" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" {print $2}' | tail -n 1)"
+        case "$bytes" in
+            ''|*[!0-9]*)
+                ;;
+            *)
+                printf "%s" "$bytes"
+                return 0
+                ;;
+        esac
+    fi
+
+    return 1
+}
+
+remote_url_size_kb() {
+    bytes="$(remote_url_size_bytes "$1" 2>/dev/null || true)"
+    [ -n "$bytes" ] || return 1
+    printf "%s" $(( (bytes + 1023) / 1024 ))
+}
+
+resolved_source_binary_size_kb() {
+    url="$(resolved_release_url 2>/dev/null || true)"
+    if [ -n "$url" ]; then
+        size_kb="$(remote_url_size_kb "$url" 2>/dev/null || true)"
+        if [ -n "$size_kb" ]; then
+            printf "%s" "$size_kb"
+            return 0
+        fi
+    fi
+
+    source_binary_size_kb
+}
+
+manager_bundle_size_kb() {
+    if [ ! -f "$SOURCE_MANAGER_SCRIPT" ]; then
+        return 1
+    fi
+
+    script_bytes="$(wc -c < "$SOURCE_MANAGER_SCRIPT" 2>/dev/null | tr -d ' ')"
+    [ -n "$script_bytes" ] || return 1
+    total_kb=$(( (script_bytes + 1023) / 1024 ))
+
+    lib_dir="$(dirname "$SOURCE_MANAGER_SCRIPT")/lib"
+    if [ -d "$lib_dir" ]; then
+        lib_bytes="$(find "$lib_dir" -type f -exec wc -c {} + 2>/dev/null | awk '{sum += $1} END {print sum+0}')"
+        [ -n "$lib_bytes" ] || return 1
+        total_kb=$((total_kb + (lib_bytes + 1023) / 1024))
+    fi
+
+    printf "%s" "$total_kb"
+}
+
+resolved_manager_bundle_size_kb() {
+    ref="$(resolved_release_ref 2>/dev/null || true)"
+    if [ -n "$ref" ]; then
+        script_url="$(script_release_url "$ref" 2>/dev/null || true)"
+        if [ -n "$script_url" ]; then
+            size_kb="$(remote_url_size_kb "$script_url" 2>/dev/null || true)"
+            if [ -n "$size_kb" ]; then
+                printf "%s" "$size_kb"
+                return 0
+            fi
+        fi
+    fi
+
+    manager_bundle_size_kb
+}
+
+source_payload_size_kb() {
+    total_kb=0
+    have_size="0"
+
+    if size_kb="$(resolved_source_binary_size_kb 2>/dev/null)"; then
+        total_kb=$((total_kb + size_kb))
+        have_size="1"
+    fi
+
+    if bundle_kb="$(resolved_manager_bundle_size_kb 2>/dev/null)"; then
+        total_kb=$((total_kb + bundle_kb))
+        have_size="1"
+    fi
+
+    [ "$have_size" = "1" ] || return 1
+    printf "%s" "$total_kb"
+}
+
+required_tmp_download_kb() {
+    payload_kb="$(source_payload_size_kb 2>/dev/null || true)"
+    if [ -z "$payload_kb" ]; then
+        printf "%s" "$REQUIRED_TMP_KB"
+        return 0
+    fi
+
+    need_kb=$((payload_kb + TMP_SPACE_HEADROOM_KB))
+    if [ "$need_kb" -lt "$REQUIRED_TMP_KB" ]; then
+        need_kb="$REQUIRED_TMP_KB"
+    fi
+    printf "%s" "$need_kb"
+}
+
+required_tmp_runtime_install_kb() {
+    payload_kb="$(source_payload_size_kb 2>/dev/null || true)"
+    if [ -z "$payload_kb" ]; then
+        printf "%s" $((REQUIRED_TMP_KB * 2))
+        return 0
+    fi
+
+    need_kb=$((payload_kb * 2 + TMP_SPACE_HEADROOM_KB))
+    minimum_kb=$((REQUIRED_TMP_KB * 2))
+    if [ "$need_kb" -lt "$minimum_kb" ]; then
+        need_kb="$minimum_kb"
+    fi
+    printf "%s" "$need_kb"
+}
+
 required_persistent_kb() {
-    size_kb="$(source_binary_size_kb 2>/dev/null || true)"
+    size_kb="$(source_payload_size_kb 2>/dev/null || true)"
     if [ -z "$size_kb" ]; then
         printf "%s" "$REQUIRED_TMP_KB"
         return 0
@@ -1881,10 +2030,11 @@ enable_autostart() {
 
     bin_path="$(persistent_bin_path 2>/dev/null || true)"
     if [ -z "$bin_path" ] || [ ! -x "$bin_path" ]; then
-        if ! check_tmp_space; then
+        need_kb="$(required_tmp_download_kb)"
+        if ! check_tmp_space "$need_kb"; then
             free_kb="$(tmp_available_kb)"
             printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-            printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+            printf "Required: %s KB\n" "$need_kb"
             printf "Available: %s KB\n" "${free_kb:-unknown}"
             pause
             return 1
@@ -2195,9 +2345,10 @@ ensure_source_binary_current() {
 }
 
 check_tmp_space() {
+    required_kb="${1:-$REQUIRED_TMP_KB}"
     free_kb="$(tmp_available_kb)"
     [ -n "$free_kb" ] || return 0
-    [ "$free_kb" -ge "$REQUIRED_TMP_KB" ]
+    [ "$free_kb" -ge "$required_kb" ]
 }
 
 install_binary() {
@@ -2205,10 +2356,11 @@ install_binary() {
     show_environment_checks
     printf "\n"
 
-    if ! check_tmp_space; then
+    need_kb="$(required_tmp_runtime_install_kb)"
+    if ! check_tmp_space "$need_kb"; then
         free_kb="$(tmp_available_kb)"
         printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Required: %s KB\n" "$need_kb"
         printf "Available: %s KB\n" "${free_kb:-unknown}"
         pause
         return 1
@@ -2269,10 +2421,11 @@ update_binary() {
     show_environment_checks
     printf "\n"
 
-    if ! check_tmp_space; then
+    need_kb="$(required_tmp_runtime_install_kb)"
+    if ! check_tmp_space "$need_kb"; then
         free_kb="$(tmp_available_kb)"
         printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Required: %s KB\n" "$need_kb"
         printf "Available: %s KB\n" "${free_kb:-unknown}"
         pause
         return 1
