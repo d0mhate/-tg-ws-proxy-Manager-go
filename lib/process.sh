@@ -29,18 +29,39 @@ binary_supports_flag() {
     [ -x "$bin_path" ] || return 1
     [ -n "$flag_name" ] || return 1
 
-    help_output_file="${TMPDIR:-/tmp}/tg-ws-proxy-help.$$.$RANDOM"
+    if command -v mktemp >/dev/null 2>&1; then
+        help_output_file="$(mktemp "${TMPDIR:-/tmp}/tg-ws-proxy-help.XXXXXX" 2>/dev/null || true)"
+    else
+        help_output_file=""
+    fi
+    if [ -z "$help_output_file" ]; then
+        help_output_file="${TMPDIR:-/tmp}/tg-ws-proxy-help.$$"
+    fi
     : > "$help_output_file" 2>/dev/null || return 1
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 2 "$bin_path" --help </dev/null >"$help_output_file" 2>&1
+        help_run_rc="$?"
+        case "$help_run_rc" in
+            124|137)
+                rm -f "$help_output_file"
+                return 1
+                ;;
+        esac
+        grep -F -- "  ${flag_name}" "$help_output_file" >/dev/null 2>&1
+        help_rc="$?"
+        rm -f "$help_output_file"
+        return "$help_rc"
+    fi
 
     "$bin_path" --help </dev/null >"$help_output_file" 2>&1 &
     help_pid="$!"
     help_wait_i=0
     help_wait_max=20
-    help_sleep_mode="sleep"
+    help_sleep_mode="usleep"
 
-    if command -v usleep >/dev/null 2>&1; then
-        help_sleep_mode="usleep"
-    else
+    if ! command -v usleep >/dev/null 2>&1; then
+        help_sleep_mode="sleep"
         help_wait_max=2
     fi
 
@@ -58,8 +79,11 @@ binary_supports_flag() {
 
     if kill -0 "$help_pid" 2>/dev/null; then
         kill "$help_pid" 2>/dev/null || true
-        sleep 1
-        kill -9 "$help_pid" 2>/dev/null || true
+        wait "$help_pid" 2>/dev/null || true
+        if kill -0 "$help_pid" 2>/dev/null; then
+            kill -9 "$help_pid" 2>/dev/null || true
+            wait "$help_pid" 2>/dev/null || true
+        fi
         rm -f "$help_output_file"
         return 1
     fi
