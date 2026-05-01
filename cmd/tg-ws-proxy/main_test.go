@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tg-ws-proxy/internal/config"
 )
 
 func TestDCIPFlagsSetAndString(t *testing.T) {
@@ -119,6 +121,9 @@ func TestParseArgsCFProxyWithDomain(t *testing.T) {
 	if !pa.cfg.UseCFProxy {
 		t.Fatal("expected UseCFProxy to be true")
 	}
+	if pa.cfg.CFDomainSource != config.CFDomainSourceCustom {
+		t.Fatalf("expected custom CF domain source, got %q", pa.cfg.CFDomainSource)
+	}
 	if pa.cfg.CFDomain != "example.com" {
 		t.Fatalf("unexpected CFDomain: %q", pa.cfg.CFDomain)
 	}
@@ -153,6 +158,31 @@ func TestParseArgsCFBalance(t *testing.T) {
 	}
 }
 
+func TestParseArgsCFProxyUsesBuiltinDomainsWhenFlagOmitted(t *testing.T) {
+	pa, err := parseArgs([]string{"--cf-proxy"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if !pa.cfg.UseCFProxy {
+		t.Fatal("expected UseCFProxy to be true")
+	}
+	if pa.cfg.CFDomainSource != config.CFDomainSourceBuiltin {
+		t.Fatalf("expected built-in CF domain source, got %q", pa.cfg.CFDomainSource)
+	}
+	want := config.BuiltinCFDomains()
+	if got := pa.cfg.CFDomains; len(got) != len(want) {
+		t.Fatalf("unexpected CFDomains length: got %d want %d", len(got), len(want))
+	}
+	for i := range want {
+		if pa.cfg.CFDomains[i] != want[i] {
+			t.Fatalf("unexpected built-in CF domain at %d: got %q want %q", i, pa.cfg.CFDomains[i], want[i])
+		}
+	}
+	if pa.cfg.CFDomain != want[0] {
+		t.Fatalf("unexpected primary CFDomain: got %q want %q", pa.cfg.CFDomain, want[0])
+	}
+}
+
 func TestParseArgsCFProxyDefaultsDisabled(t *testing.T) {
 	pa, err := parseArgs(nil)
 	if err != nil {
@@ -160,6 +190,9 @@ func TestParseArgsCFProxyDefaultsDisabled(t *testing.T) {
 	}
 	if pa.cfg.UseCFProxy {
 		t.Fatal("expected CF proxy to be disabled by default")
+	}
+	if pa.cfg.CFDomainSource != "" {
+		t.Fatalf("expected empty CFDomainSource by default, got %q", pa.cfg.CFDomainSource)
 	}
 	if pa.cfg.CFDomain != "" {
 		t.Fatalf("expected empty CFDomain when no --cf-domain given, got %q", pa.cfg.CFDomain)
@@ -255,8 +288,26 @@ func TestStartupSummaryIncludesCFBalanceForSocks5(t *testing.T) {
 }
 
 func TestStartupSummaryMasksBuiltinCFDomainsInLogs(t *testing.T) {
-	t.Setenv("TG_WS_PROXY_CF_DOMAIN_SOURCE", "built-in")
+	pa, err := parseArgs([]string{
+		"--cf-proxy",
+		"--cf-balance",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
 
+	got := startupSummary(pa)
+	if !strings.Contains(got, "cf_domains=8") || !strings.Contains(got, "cf_domain_list=built-in") {
+		t.Fatalf("expected built-in CF domains to be masked in startup summary, got: %s", got)
+	}
+	for _, domain := range config.BuiltinCFDomains() {
+		if strings.Contains(got, domain) {
+			t.Fatalf("did not expect built-in CF domains to be exposed in startup summary: %s", got)
+		}
+	}
+}
+
+func TestStartupSummaryShowsCustomCFDomainsInLogs(t *testing.T) {
 	pa, err := parseArgs([]string{
 		"--cf-proxy",
 		"--cf-balance",
@@ -267,10 +318,10 @@ func TestStartupSummaryMasksBuiltinCFDomainsInLogs(t *testing.T) {
 	}
 
 	got := startupSummary(pa)
-	if !strings.Contains(got, "cf_domains=2") || !strings.Contains(got, "cf_domain_list=built-in") {
-		t.Fatalf("expected built-in CF domains to be masked in startup summary, got: %s", got)
+	if !strings.Contains(got, "cf_domains=2") || !strings.Contains(got, "cf_domain_list=a.example.com,b.example.com") {
+		t.Fatalf("expected custom CF domains in startup summary, got: %s", got)
 	}
-	if strings.Contains(got, "a.example.com") || strings.Contains(got, "b.example.com") {
+	if strings.Contains(got, "cf_domain_list=built-in") {
 		t.Fatalf("did not expect built-in CF domains to be exposed in startup summary: %s", got)
 	}
 }

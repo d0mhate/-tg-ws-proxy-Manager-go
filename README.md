@@ -318,7 +318,7 @@ WebSocket.
 Через переменные окружения:
 
 ```bash
-CF_PROXY=1 CF_DOMAIN='' tgm start
+CF_PROXY=1 CF_BALANCE=1 CF_DOMAIN='' tgm start
 CF_PROXY=1 CF_DOMAIN=yourdomain.com tgm start
 CF_PROXY=1 CF_PROXY_FIRST=1 CF_DOMAIN=yourdomain.com tgm start
 ```
@@ -328,10 +328,13 @@ CF_PROXY=1 CF_PROXY_FIRST=1 CF_DOMAIN=yourdomain.com tgm start
 Прямой запуск бинарника:
 
 ```bash
+./tg-ws-proxy --cf-proxy --cf-balance
+./tg-ws-proxy --cf-proxy --cf-proxy-first --cf-balance
 ./tg-ws-proxy --cf-proxy --cf-domain yourdomain.com
 ./tg-ws-proxy --cf-proxy --cf-proxy-first --cf-domain yourdomain.com
 ```
 
+Если `--cf-domain` не указан, бинарь использует built-in пул доменов.
 `--cf-domain` сам по себе не включает Cloudflare route. Нужен `--cf-proxy`.
 
 ## MTProto Proxy

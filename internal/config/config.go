@@ -41,10 +41,18 @@ type Config struct {
 	UseCFProxy      bool
 	UseCFProxyFirst bool
 	UseCFBalance    bool
+	CFDomainSource  string
 	CFDomain        string
 	CFDomains       []string
 	UpstreamProxies []UpstreamProxy
 }
+
+const (
+	CFDomainSourceBuiltin = "built-in"
+	CFDomainSourceCustom  = "custom"
+)
+
+const builtinCFDomainsObf = `\160\143\154\145\141\144\056\143\157\056\165\153\054\157\146\146\163\150\157\162\056\143\157\056\165\153\054\143\141\153\145\151\163\141\154\151\145\056\143\157\056\165\153\054\156\157\163\153\157\155\156\141\144\172\157\162\056\143\157\056\165\153\054\154\157\166\145\164\162\165\145\056\143\157\056\165\153\054\163\157\162\157\153\144\166\141\056\143\157\056\165\153\054\160\171\141\164\144\145\163\171\141\164\144\166\141\056\143\157\056\165\153\054\153\141\162\164\157\163\150\153\141\056\143\157\056\165\153`
 
 func Default() Config {
 	return Config{
@@ -65,6 +73,22 @@ func Default() Config {
 			4: telegram.IPv4DC2,
 		},
 	}
+}
+
+func BuiltinCFDomains() []string {
+	decoded := make([]byte, 0, len(builtinCFDomainsObf))
+	for i := 0; i < len(builtinCFDomainsObf); {
+		if builtinCFDomainsObf[i] != '\\' || i+3 >= len(builtinCFDomainsObf) {
+			return nil
+		}
+		v, err := strconv.ParseUint(builtinCFDomainsObf[i+1:i+4], 8, 8)
+		if err != nil {
+			return nil
+		}
+		decoded = append(decoded, byte(v))
+		i += 4
+	}
+	return strings.Split(string(decoded), ",")
 }
 
 func ParseDCIPList(values []string) (map[int]string, error) {
@@ -128,16 +152,16 @@ func FormatDCIPMap(dcIPs map[int]string) string {
 func CFDomainSource() string {
 	switch strings.TrimSpace(os.Getenv("TG_WS_PROXY_CF_DOMAIN_SOURCE")) {
 	case "builtin", "built-in":
-		return "built-in"
+		return CFDomainSourceBuiltin
 	case "custom":
-		return "custom"
+		return CFDomainSourceCustom
 	default:
 		return ""
 	}
 }
 
 func BuiltinCFDomainsInUse() bool {
-	return CFDomainSource() == "built-in"
+	return CFDomainSource() == CFDomainSourceBuiltin
 }
 
 func MaskCFDomainForLog(domain string) string {

@@ -145,8 +145,15 @@ func parseArgs(args []string) (parsedArgs, error) {
 		if len(domains) == 0 {
 			return parsedArgs{}, fmt.Errorf("--cf-domain: no valid domains provided")
 		}
+		cfg.CFDomainSource = config.CFDomainSourceCustom
 		cfg.CFDomain = domains[0]
 		cfg.CFDomains = domains
+	} else if cfg.UseCFProxy {
+		cfg.CFDomainSource = config.CFDomainSourceBuiltin
+		cfg.CFDomains = config.BuiltinCFDomains()
+		if len(cfg.CFDomains) > 0 {
+			cfg.CFDomain = cfg.CFDomains[0]
+		}
 	}
 
 	if mode != "socks5" && mode != "mtproto" {
@@ -272,7 +279,11 @@ func startupSummary(pa parsedArgs) string {
 		pa.cfg.UseCFProxy, cfOrder, cfMode, len(pa.cfg.CFDomains),
 	)
 	if len(pa.cfg.CFDomains) > 0 {
-		fmt.Fprintf(&b, " cf_domain_list=%s", config.MaskCFDomainsForLog(pa.cfg.CFDomains))
+		cfDomainList := strings.Join(pa.cfg.CFDomains, ",")
+		if pa.cfg.CFDomainSource == config.CFDomainSourceBuiltin {
+			cfDomainList = config.CFDomainSourceBuiltin
+		}
+		fmt.Fprintf(&b, " cf_domain_list=%s", cfDomainList)
 	}
 
 	fmt.Fprintf(&b, " dc_overrides=%d upstream_mtproto=%d", len(pa.cfg.DCIPs), len(pa.cfg.UpstreamProxies))

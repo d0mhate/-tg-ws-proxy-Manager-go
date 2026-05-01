@@ -96,6 +96,10 @@ help:
 		'make profile-pprof PPROF_ADDR=127.0.0.1:6060 STEPS=5 LABELS=baseline,load,cooldown,restart,after_restart_cooldown STRICT_EXIT=1 - fail on likely leak candidate' \
 		'make profile-pprof-leakcheck PPROF_ADDR=127.0.0.1:6060 - run the standard 5-step leak check scenario' \
 		'make socks5-auth  - start SOCKS5 with auth from .env' \
+		'make socks5-auth-cf - start SOCKS5 with auth from .env, CF on' \
+		'make socks5-auth-cf-first - start SOCKS5 with auth from .env, CF first and balance on' \
+		'make socks5-auth-cf-bin - run binary directly with SOCKS5 auth from .env, CF on' \
+		'make socks5-auth-cf-first-bin - run binary directly with SOCKS5 auth from .env, CF first and balance on' \
 		'make socks5-auth-menu - open menu with SOCKS5 auth preset' \
 		'make socks5-auth-cf-menu - open menu with SOCKS5 auth preset, CF on' \
 		'make socks5-menu-auth-cf - open menu with SOCKS5 auth preset, CF first and balance on' \
@@ -239,6 +243,28 @@ profile-pprof-leakcheck:
 socks5-auth: MODE := socks5
 socks5-auth: SECRET :=
 socks5-auth: start
+
+socks5-auth-cf: MODE := socks5
+socks5-auth-cf: SECRET :=
+socks5-auth-cf: CF_PROXY := 1
+socks5-auth-cf: CF_FIRST := 0
+socks5-auth-cf: CF_BALANCE := 1
+socks5-auth-cf: CF_DOMAIN :=
+socks5-auth-cf: run
+
+socks5-auth-cf-first: MODE := socks5
+socks5-auth-cf-first: SECRET :=
+socks5-auth-cf-first: CF_PROXY := 1
+socks5-auth-cf-first: CF_FIRST := 1
+socks5-auth-cf-first: CF_BALANCE := 1
+socks5-auth-cf-first: CF_DOMAIN :=
+socks5-auth-cf-first: run
+
+socks5-auth-cf-bin: socks5-auth-cf
+socks5-auth-cf-bin: POOL_SIZE := 16
+
+socks5-auth-cf-first-bin: socks5-auth-cf-first
+socks5-auth-cf-first-bin: POOL_SIZE := 16
 
 socks5-auth-menu: MODE := socks5
 socks5-auth-menu: SECRET :=
