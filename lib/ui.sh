@@ -10,6 +10,22 @@ show_dc_ip_mapping_settings() {
     fi
 }
 
+_cf_domain_count() {
+    value="$1"
+    [ -n "$value" ] || return 1
+    _cf_count_old_ifs="$IFS"
+    _cf_count=0
+    IFS=','
+    for _cf_part in $value; do
+        _cf_part="$(printf "%s" "$_cf_part" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -n "$_cf_part" ] || continue
+        _cf_count=$((_cf_count + 1))
+    done
+    IFS="$_cf_count_old_ifs"
+    [ "$_cf_count" -gt 0 ] || return 1
+    printf "%s" "$_cf_count"
+}
+
 telegram_host() {
     case "$LISTEN_HOST" in
         0.0.0.0|"")
@@ -154,15 +170,18 @@ show_telegram_settings() {
     else
         printf "  cf mode  : ordered\n"
     fi
-    if [ -z "$CF_DOMAIN" ]; then
+    _cf_domains="$(resolved_cf_domains 2>/dev/null || true)"
+    _cf_source="$(resolved_cf_domain_source 2>/dev/null || printf builtin)"
+    if [ -z "$_cf_domains" ]; then
         printf "  cf domain: not set\n"
     else
-        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
-        if [ "$_cf_commas" -eq 0 ]; then
-            printf "  cf domain: %s\n" "$CF_DOMAIN"
+        _cf_count="$(_cf_domain_count "$_cf_domains" 2>/dev/null || true)"
+        if [ "$_cf_source" = "custom" ] && [ "$_cf_count" = "1" ]; then
+            printf "  cf domain: %s\n" "$_cf_domains"
+        elif [ "$_cf_source" = "custom" ]; then
+            printf "  cf domain: %s custom domains\n" "$_cf_count"
         else
-            _cf_count=$((_cf_commas + 1))
-            printf "  cf domain: %d domains\n" "$_cf_count"
+            printf "  cf domain: built-in\n"
         fi
     fi
 }
@@ -235,15 +254,18 @@ show_telegram_settings_compact() {
     else
         cf_mode="ordered"
     fi
-    if [ -z "$CF_DOMAIN" ]; then
+    _cf_domains="$(resolved_cf_domains 2>/dev/null || true)"
+    _cf_source="$(resolved_cf_domain_source 2>/dev/null || printf builtin)"
+    if [ -z "$_cf_domains" ]; then
         cf_domain_part="domain:none"
     else
-        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
-        if [ "$_cf_commas" -eq 0 ]; then
-            cf_domain_part="domain:$CF_DOMAIN"
+        _cf_count="$(_cf_domain_count "$_cf_domains" 2>/dev/null || true)"
+        if [ "$_cf_source" = "custom" ] && [ "$_cf_count" = "1" ]; then
+            cf_domain_part="domain:$_cf_domains"
+        elif [ "$_cf_source" = "custom" ]; then
+            cf_domain_part="domain:${_cf_count} custom"
         else
-            _cf_count=$((_cf_commas + 1))
-            cf_domain_part="domain:${_cf_count} set"
+            cf_domain_part="domain:${_cf_count} built-in"
         fi
     fi
     printf "  CF      %s / %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_mode" "$cf_domain_part"

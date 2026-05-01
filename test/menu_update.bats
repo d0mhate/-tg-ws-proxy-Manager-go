@@ -5,14 +5,14 @@ setup() {
     source "$BATS_TEST_DIRNAME/helpers/menu_fixture.sh"
 }
 
-@test "choose_update_source_mode_numbered keeps current on enter" {
+@test "choose_update_source_mode_numbered returns back on enter" {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
         choose_update_source_mode_numbered preview 2>/dev/null <<< ""
     '
 
     [ "$status" -eq 0 ]
-    [ "$output" = "preview" ]
+    [ "$output" = "back" ]
 }
 
 @test "choose_update_source_mode_numbered maps numeric choice" {
@@ -97,6 +97,18 @@ setup() {
     [ "$output" = "preview" ]
 }
 
+@test "choose_update_source_mode plain text returns back on enter" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        can_use_arrow_update_source_picker() { return 1; }
+        can_use_numbered_update_source_picker() { return 1; }
+        choose_update_source_mode release 2>/dev/null <<< ""
+    '
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "back" ]
+}
+
 @test "configure_update_source saves pinned release tag" {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
@@ -141,4 +153,15 @@ setup() {
 
     [ "$status" -ne 0 ]
     [[ "$output" == *"Preview branch cannot be empty"* ]]
+}
+
+@test "configure_update_source returns on back" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        choose_update_source_mode() { printf "back"; }
+        configure_update_source
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"Update source saved:"* ]]
 }

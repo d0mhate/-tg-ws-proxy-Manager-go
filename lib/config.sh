@@ -7,6 +7,62 @@ read_config_value() {
     sed -n "s/^${key}='\(.*\)'$/\1/p" "$PERSIST_CONFIG_FILE" 2>/dev/null | head -n 1
 }
 
+cf_builtin_domains() {
+    if [ -n "${CF_BUILTIN_DOMAINS:-}" ]; then
+        printf "%s" "$CF_BUILTIN_DOMAINS"
+        return 0
+    fi
+    printf '%b' "${CF_BUILTIN_DOMAINS_OBF:-}"
+}
+
+normalize_cf_domain_list() {
+    value="$1"
+    [ -n "$value" ] || return 1
+
+    awk -v input="$value" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        BEGIN {
+            count = split(input, parts, ",")
+            out = ""
+            for (i = 1; i <= count; i++) {
+                part = trim(parts[i])
+                if (part == "" || seen[part]++) {
+                    continue
+                }
+                out = (out == "" ? part : out "," part)
+            }
+            if (out == "") {
+                exit 1
+            }
+            print out
+        }
+    '
+}
+
+custom_cf_domains() {
+    normalize_cf_domain_list "${CF_DOMAIN:-}" 2>/dev/null
+}
+
+resolved_cf_domains() {
+    custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$custom_domains" ]; then
+        printf "%s" "$custom_domains"
+        return 0
+    fi
+    cf_builtin_domains
+}
+
+resolved_cf_domain_source() {
+    if [ -n "$(custom_cf_domains 2>/dev/null || true)" ]; then
+        printf "custom"
+        return 0
+    fi
+    printf "builtin"
+}
+
 normalize_dc_ip_list() {
     value="$(printf "%s" "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     [ -n "$value" ] || return 1

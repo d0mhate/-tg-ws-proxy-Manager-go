@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -122,4 +123,33 @@ func FormatDCIPMap(dcIPs map[int]string) string {
 		parts = append(parts, fmt.Sprintf("%d:%s", dc, dcIPs[dc]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func CFDomainSource() string {
+	switch strings.TrimSpace(os.Getenv("TG_WS_PROXY_CF_DOMAIN_SOURCE")) {
+	case "builtin", "built-in":
+		return "built-in"
+	case "custom":
+		return "custom"
+	default:
+		return ""
+	}
+}
+
+func BuiltinCFDomainsInUse() bool {
+	return CFDomainSource() == "built-in"
+}
+
+func MaskCFDomainForLog(domain string) string {
+	if BuiltinCFDomainsInUse() {
+		return "built-in"
+	}
+	return domain
+}
+
+func MaskCFDomainsForLog(domains []string) string {
+	if BuiltinCFDomainsInUse() {
+		return "built-in"
+	}
+	return strings.Join(domains, ",")
 }

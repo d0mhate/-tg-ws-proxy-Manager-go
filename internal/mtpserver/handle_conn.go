@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/faketls"
 	"tg-ws-proxy/internal/mtproto"
 	"tg-ws-proxy/internal/wsbridge"
@@ -354,19 +355,19 @@ func (s *MTServer) dialCloudflareWS(ctx context.Context, dc int) (*wsbridge.Clie
 	for _, cfDomain := range s.cfDomainsForConn() {
 		cfHost := cfWSHost(cfDomain, dc)
 		if s.cfg.Verbose {
-			s.agg.Printf("mtproto: CF dial dc=%d → %s", dc, cfHost)
+			s.agg.Printf("mtproto: CF dial dc=%d → %s", dc, config.MaskCFDomainForLog(cfHost))
 		}
 		ws, err := s.wsDialFunc(ctx, s.cfg, cfHost, cfHost)
 		if err == nil {
 			if s.cfg.Verbose {
-				s.agg.Printf("mtproto: CF connected dc=%d → %s", dc, cfHost)
+				s.agg.Printf("mtproto: CF connected dc=%d → %s", dc, config.MaskCFDomainForLog(cfHost))
 			}
 			return ws, nil
 		}
 		lastErr = err
-		attempts = append(attempts, fmt.Sprintf("%s (%v)", cfHost, err))
+		attempts = append(attempts, fmt.Sprintf("%s (%v)", config.MaskCFDomainForLog(cfHost), err))
 		if s.cfg.Verbose {
-			s.agg.Printf("mtproto: CF dial failed dc=%d → %s: %v", dc, cfHost, err)
+			s.agg.Printf("mtproto: CF dial failed dc=%d → %s: %v", dc, config.MaskCFDomainForLog(cfHost), err)
 		}
 	}
 	if len(attempts) == 0 {

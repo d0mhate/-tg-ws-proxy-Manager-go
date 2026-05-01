@@ -31,7 +31,9 @@ export DC_IPS=""
 export VERBOSE="0"
 export CF_PROXY="0"
 export CF_PROXY_FIRST="0"
+export CF_BALANCE="1"
 export CF_DOMAIN=""
+export CF_BUILTIN_DOMAINS="pclead.co.uk,offshor.co.uk,cakeisalie.co.uk,noskomnadzor.co.uk,lovetrue.co.uk,sorokdva.co.uk,pyatdesyatdva.co.uk,kartoshka.co.uk"
 export UPDATE_CHANNEL="release"
 export PREVIEW_BRANCH=""
 export PREVIEW_BRANCH_FROM_ENV=""
@@ -96,6 +98,53 @@ write_update_source_state() {
 
 write_settings_config() {
     printf "ok" > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/write_settings_called"
+}
+
+cf_builtin_domains() {
+    printf "%s" "$CF_BUILTIN_DOMAINS"
+}
+
+normalize_cf_domain_list() {
+    value="$1"
+    [ -n "$value" ] || return 1
+    awk -v input="$value" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        BEGIN {
+            count = split(input, parts, ",")
+            out = ""
+            for (i = 1; i <= count; i++) {
+                part = trim(parts[i])
+                if (part == "" || seen[part]++) continue
+                out = (out == "" ? part : out "," part)
+            }
+            if (out == "") exit 1
+            print out
+        }
+    '
+}
+
+custom_cf_domains() {
+    normalize_cf_domain_list "${CF_DOMAIN:-}" 2>/dev/null
+}
+
+resolved_cf_domains() {
+    custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$custom_domains" ]; then
+        printf "%s" "$custom_domains"
+        return 0
+    fi
+    cf_builtin_domains
+}
+
+resolved_cf_domain_source() {
+    if [ -n "$(custom_cf_domains 2>/dev/null || true)" ]; then
+        printf "custom"
+    else
+        printf "builtin"
+    fi
 }
 
 normalize_dc_ip_list() {

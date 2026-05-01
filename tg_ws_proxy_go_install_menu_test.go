@@ -55,7 +55,7 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuIgnoresArrowPickerOverride(t
 	if err != nil {
 		t.Fatalf("configure update source with forced arrow override failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Mode [release/preview] (Enter for release):") {
+	if !strings.Contains(out, "Mode [release/preview/back] (Enter for back):") {
 		t.Fatalf("expected plain text selection prompt, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
@@ -81,7 +81,7 @@ func TestManagerConfigureUpdateSourceViaAdvancedMenuSupportsNumberedSelection(t 
 	if err != nil {
 		t.Fatalf("configure update source with numbered picker failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Select mode [1-2] (Enter for release):") {
+	if !strings.Contains(out, "Select mode [1-3] (Enter for back):") {
 		t.Fatalf("expected numbered selection prompt, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Update source saved: preview feature/auth-flow") {
@@ -345,7 +345,7 @@ func TestManagerConfigureUpdateSourceCanSelectPinnedReleaseTagFromNumberedMenu(t
 	if err != nil {
 		t.Fatalf("configure release tag from numbered menu failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Select mode [1-2] (Enter for release):") {
+	if !strings.Contains(out, "Select mode [1-3] (Enter for back):") {
 		t.Fatalf("expected numbered mode picker, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Select release ref [1-") {

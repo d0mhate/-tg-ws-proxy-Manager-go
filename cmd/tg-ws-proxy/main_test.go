@@ -254,6 +254,27 @@ func TestStartupSummaryIncludesCFBalanceForSocks5(t *testing.T) {
 	}
 }
 
+func TestStartupSummaryMasksBuiltinCFDomainsInLogs(t *testing.T) {
+	t.Setenv("TG_WS_PROXY_CF_DOMAIN_SOURCE", "built-in")
+
+	pa, err := parseArgs([]string{
+		"--cf-proxy",
+		"--cf-balance",
+		"--cf-domain", "a.example.com,b.example.com",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	got := startupSummary(pa)
+	if !strings.Contains(got, "cf_domains=2") || !strings.Contains(got, "cf_domain_list=built-in") {
+		t.Fatalf("expected built-in CF domains to be masked in startup summary, got: %s", got)
+	}
+	if strings.Contains(got, "a.example.com") || strings.Contains(got, "b.example.com") {
+		t.Fatalf("did not expect built-in CF domains to be exposed in startup summary: %s", got)
+	}
+}
+
 func TestStartupSummaryIncludesMTProtoSecretKind(t *testing.T) {
 	pa, err := parseArgs([]string{
 		"--mode", "mtproto",

@@ -236,7 +236,7 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 	var lastErr error
 
 	tryBridgeCF := func() (*wsbridge.Client, error) {
-		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%v", clientAddr, dc, effectiveDC, isMedia, cfDomains)
+		s.debugf("[%s] cloudflare websocket attempt: dc=%d effective_dc=%d media=%v domains=%s", clientAddr, dc, effectiveDC, isMedia, config.MaskCFDomainsForLog(cfDomains))
 		cfWS, cfErr := s.connectWSCF(ctx, dc, isMedia, cfDomains)
 		if cfErr != nil {
 			s.stats.recordError("ws_cf_connect", cfErr)

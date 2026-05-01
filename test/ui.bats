@@ -28,7 +28,9 @@ setup() {
     export POOL_SIZE="16"
     export CF_PROXY="0"
     export CF_PROXY_FIRST="0"
+    export CF_BALANCE="1"
     export CF_DOMAIN=""
+    export CF_BUILTIN_DOMAINS="pclead.co.uk,offshor.co.uk,cakeisalie.co.uk,noskomnadzor.co.uk,lovetrue.co.uk,sorokdva.co.uk,pyatdesyatdva.co.uk,kartoshka.co.uk"
 
     export BIN_PATH="$TEST_DIR/tg-ws-proxy"
     export SOURCE_BIN="$TEST_DIR/source-bin"
@@ -99,6 +101,53 @@ mt_proxy_link() {
 socks5_proxy_link() {
     [ "${TEST_SOCKS5_PROXY_LINK_SET:-0}" = "1" ] || return 1
     printf "%s" "$TEST_SOCKS5_PROXY_LINK"
+}
+
+cf_builtin_domains() {
+    printf "%s" "$CF_BUILTIN_DOMAINS"
+}
+
+normalize_cf_domain_list() {
+    value="$1"
+    [ -n "$value" ] || return 1
+    awk -v input="$value" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        BEGIN {
+            count = split(input, parts, ",")
+            out = ""
+            for (i = 1; i <= count; i++) {
+                part = trim(parts[i])
+                if (part == "" || seen[part]++) continue
+                out = (out == "" ? part : out "," part)
+            }
+            if (out == "") exit 1
+            print out
+        }
+    '
+}
+
+custom_cf_domains() {
+    normalize_cf_domain_list "${CF_DOMAIN:-}" 2>/dev/null
+}
+
+resolved_cf_domains() {
+    custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$custom_domains" ]; then
+        printf "%s" "$custom_domains"
+        return 0
+    fi
+    cf_builtin_domains
+}
+
+resolved_cf_domain_source() {
+    if [ -n "$(custom_cf_domains 2>/dev/null || true)" ]; then
+        printf "custom"
+    else
+        printf "builtin"
+    fi
 }
 
 password_display() {
@@ -400,7 +449,8 @@ pause() {
     [[ "$output" == *"pool size: 16"* ]]
     [[ "$output" == *"cf proxy : off"* ]]
     [[ "$output" == *"cf order : fallback"* ]]
-    [[ "$output" == *"cf domain: not set"* ]]
+    [[ "$output" == *"cf mode  : balance"* ]]
+    [[ "$output" == *"cf domain: built-in"* ]]
 }
 
 @test "show_telegram_settings socks5 with auth link dc and cf domains count" {
@@ -425,7 +475,8 @@ pause() {
     [[ "$output" == *"dc map   : 1:1.1.1.1"* ]]
     [[ "$output" == *"cf proxy : on"* ]]
     [[ "$output" == *"cf order : first"* ]]
-    [[ "$output" == *"cf domain: 3 domains"* ]]
+    [[ "$output" == *"cf mode  : balance"* ]]
+    [[ "$output" == *"cf domain: 3 custom domains"* ]]
 }
 
 @test "show_telegram_settings socks5 with single cf domain" {
@@ -436,6 +487,7 @@ pause() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"cf domain: cf.example.com"* ]]
+    [[ "$output" == *"cf mode  : balance"* ]]
 }
 
 @test "show_telegram_settings mtproto with missing secret" {
@@ -520,7 +572,7 @@ pause() {
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"SOCKS5  127.0.0.1:1080  no auth  dc:default  pool:8"* ]]
-    [[ "$output" == *"CF      off / fallback / ordered / domain:none"* ]]
+    [[ "$output" == *"CF      off / fallback / balance / domain:8 built-in"* ]]
 }
 
 @test "show_telegram_settings_compact socks5 with username and password" {
@@ -540,7 +592,7 @@ pause() {
     [ "$status" -eq 0 ]
     [[ "$output" == *"SOCKS5  127.0.0.1:1080  user:user/<set>  dc:custom  pool:16"* ]]
     [[ "$output" == *"tg://socks?server=8.8.8.8"* ]]
-    [[ "$output" == *"CF      on / first / ordered / domain:2 set"* ]]
+    [[ "$output" == *"CF      on / first / balance / domain:2 custom"* ]]
 }
 
 @test "show_telegram_settings_compact socks5 with username only" {

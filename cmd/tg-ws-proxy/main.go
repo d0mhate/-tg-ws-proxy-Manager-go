@@ -272,7 +272,7 @@ func startupSummary(pa parsedArgs) string {
 		pa.cfg.UseCFProxy, cfOrder, cfMode, len(pa.cfg.CFDomains),
 	)
 	if len(pa.cfg.CFDomains) > 0 {
-		fmt.Fprintf(&b, " cf_domain_list=%s", strings.Join(pa.cfg.CFDomains, ","))
+		fmt.Fprintf(&b, " cf_domain_list=%s", config.MaskCFDomainsForLog(pa.cfg.CFDomains))
 	}
 
 	fmt.Fprintf(&b, " dc_overrides=%d upstream_mtproto=%d", len(pa.cfg.DCIPs), len(pa.cfg.UpstreamProxies))
