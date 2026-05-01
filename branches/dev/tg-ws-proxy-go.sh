@@ -95,8 +95,9 @@ SOCKS_PASSWORD="${SOCKS_PASSWORD:-}"
 DC_IPS="${DC_IPS:-}"
 CF_PROXY="${CF_PROXY:-0}"
 CF_PROXY_FIRST="${CF_PROXY_FIRST:-0}"
-CF_BALANCE="${CF_BALANCE:-0}"
+CF_BALANCE="${CF_BALANCE:-1}"
 CF_DOMAIN="${CF_DOMAIN:-}"
+CF_BUILTIN_DOMAINS_OBF="${CF_BUILTIN_DOMAINS_OBF:-\160\143\154\145\141\144\056\143\157\056\165\153\054\157\146\146\163\150\157\162\056\143\157\056\165\153\054\143\141\153\145\151\163\141\154\151\145\056\143\157\056\165\153\054\156\157\163\153\157\155\156\141\144\172\157\162\056\143\157\056\165\153\054\154\157\166\145\164\162\165\145\056\143\157\056\165\153\054\163\157\162\157\153\144\166\141\056\143\157\056\165\153\054\160\171\141\164\144\145\163\171\141\164\144\166\141\056\143\157\056\165\153\054\153\141\162\164\157\163\150\153\141\056\143\157\056\165\153}"
 PROXY_MODE="${PROXY_MODE:-socks5}"
 MT_SECRET="${MT_SECRET:-}"
 MT_LINK_IP="${MT_LINK_IP:-}"
@@ -305,6 +306,62 @@ read_config_value() {
     key="$1"
     [ -f "$PERSIST_CONFIG_FILE" ] || return 1
     sed -n "s/^${key}='\(.*\)'$/\1/p" "$PERSIST_CONFIG_FILE" 2>/dev/null | head -n 1
+}
+
+cf_builtin_domains() {
+    if [ -n "${CF_BUILTIN_DOMAINS:-}" ]; then
+        printf "%s" "$CF_BUILTIN_DOMAINS"
+        return 0
+    fi
+    printf '%b' "${CF_BUILTIN_DOMAINS_OBF:-}"
+}
+
+normalize_cf_domain_list() {
+    value="$1"
+    [ -n "$value" ] || return 1
+
+    awk -v input="$value" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        BEGIN {
+            count = split(input, parts, ",")
+            out = ""
+            for (i = 1; i <= count; i++) {
+                part = trim(parts[i])
+                if (part == "" || seen[part]++) {
+                    continue
+                }
+                out = (out == "" ? part : out "," part)
+            }
+            if (out == "") {
+                exit 1
+            }
+            print out
+        }
+    '
+}
+
+custom_cf_domains() {
+    normalize_cf_domain_list "${CF_DOMAIN:-}" 2>/dev/null
+}
+
+resolved_cf_domains() {
+    custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$custom_domains" ]; then
+        printf "%s" "$custom_domains"
+        return 0
+    fi
+    cf_builtin_domains
+}
+
+resolved_cf_domain_source() {
+    if [ -n "$(custom_cf_domains 2>/dev/null || true)" ]; then
+        printf "custom"
+        return 0
+    fi
+    printf "builtin"
 }
 
 normalize_dc_ip_list() {
@@ -1411,7 +1468,70 @@ binary_supports_flag() {
     [ -x "$bin_path" ] || return 1
     [ -n "$flag_name" ] || return 1
 
-    "$bin_path" --help 2>&1 | grep -F -- "  ${flag_name}" >/dev/null 2>&1
+    if command -v mktemp >/dev/null 2>&1; then
+        help_output_file="$(mktemp "${TMPDIR:-/tmp}/tg-ws-proxy-help.XXXXXX" 2>/dev/null || true)"
+    else
+        help_output_file=""
+    fi
+    if [ -z "$help_output_file" ]; then
+        help_output_file="${TMPDIR:-/tmp}/tg-ws-proxy-help.$$"
+    fi
+    : > "$help_output_file" 2>/dev/null || return 1
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 2 "$bin_path" --help </dev/null >"$help_output_file" 2>&1
+        help_run_rc="$?"
+        case "$help_run_rc" in
+            124|137)
+                rm -f "$help_output_file"
+                return 1
+                ;;
+        esac
+        grep -F -- "  ${flag_name}" "$help_output_file" >/dev/null 2>&1
+        help_rc="$?"
+        rm -f "$help_output_file"
+        return "$help_rc"
+    fi
+
+    "$bin_path" --help </dev/null >"$help_output_file" 2>&1 &
+    help_pid="$!"
+    help_wait_i=0
+    help_wait_max=20
+    help_sleep_mode="usleep"
+
+    if ! command -v usleep >/dev/null 2>&1; then
+        help_sleep_mode="sleep"
+        help_wait_max=2
+    fi
+
+    while [ "$help_wait_i" -lt "$help_wait_max" ]; do
+        if ! kill -0 "$help_pid" 2>/dev/null; then
+            break
+        fi
+        help_wait_i=$((help_wait_i + 1))
+        if [ "$help_sleep_mode" = "usleep" ]; then
+            usleep 100000
+        else
+            sleep 1
+        fi
+    done
+
+    if kill -0 "$help_pid" 2>/dev/null; then
+        kill "$help_pid" 2>/dev/null || true
+        wait "$help_pid" 2>/dev/null || true
+        if kill -0 "$help_pid" 2>/dev/null; then
+            kill -9 "$help_pid" 2>/dev/null || true
+            wait "$help_pid" 2>/dev/null || true
+        fi
+        rm -f "$help_output_file"
+        return 1
+    fi
+
+    wait "$help_pid" 2>/dev/null || true
+    grep -F -- "  ${flag_name}" "$help_output_file" >/dev/null 2>&1
+    help_rc="$?"
+    rm -f "$help_output_file"
+    return "$help_rc"
 }
 
 pid_matches_binary() {
@@ -1435,8 +1555,11 @@ pid_matches_binary() {
     fi
 
     if command -v ps >/dev/null 2>&1; then
-        ps -p "$pid" -o command= 2>/dev/null | grep -F -- "$path" >/dev/null 2>&1
-        return $?
+        proc_cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        if [ -n "$proc_cmd" ]; then
+            printf "%s\n" "$proc_cmd" | grep -F -- "$path" >/dev/null 2>&1 && return 0
+            printf "%s\n" "$proc_cmd" | grep -F -- "$(basename "$path")" >/dev/null 2>&1 && return 0
+        fi
     fi
 
     kill -0 "$pid" 2>/dev/null
@@ -1626,7 +1749,8 @@ stop_running() {
 
 # _run_proxy_cmd fg|bg
 # Builds the full proxy command from current settings and executes it.
-# fg: runs directly (blocking). bg: runs in background, prints PID to stdout.
+# fg: runs directly (blocking). bg: runs in background and stores PID in
+# RUN_PROXY_BACKGROUND_PID.
 _run_proxy_cmd() {
     _rpc_mode="$1"
     _rpc_bin="$(runtime_bin_path 2>/dev/null || true)"
@@ -1660,8 +1784,11 @@ _run_proxy_cmd() {
         IFS="$_rpc_old_ifs"
     fi
 
-    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
-        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
+    _rpc_cf_domains="$(resolved_cf_domains 2>/dev/null || true)"
+    _rpc_cf_source=""
+    if [ "$CF_PROXY" = "1" ] && [ -n "$_rpc_cf_domains" ]; then
+        _rpc_cf_source="$(resolved_cf_domain_source 2>/dev/null || true)"
+        set -- "$@" --cf-proxy --cf-domain "$_rpc_cf_domains"
         if [ "$CF_PROXY_FIRST" = "1" ]; then
             set -- "$@" --cf-proxy-first
         fi
@@ -1684,14 +1811,14 @@ _run_proxy_cmd() {
     case "$_rpc_mode" in
         bg)
             if command -v nohup >/dev/null 2>&1; then
-                nohup "$@" >/dev/null 2>&1 &
+                TG_WS_PROXY_CF_DOMAIN_SOURCE="$_rpc_cf_source" nohup "$@" </dev/null >/dev/null 2>&1 &
             else
-                "$@" >/dev/null 2>&1 &
+                TG_WS_PROXY_CF_DOMAIN_SOURCE="$_rpc_cf_source" "$@" </dev/null >/dev/null 2>&1 &
             fi
-            printf "%s" "$!"
+            RUN_PROXY_BACKGROUND_PID="$!"
             ;;
         *)
-            "$@"
+            env TG_WS_PROXY_CF_DOMAIN_SOURCE="$_rpc_cf_source" "$@"
             ;;
     esac
 }
@@ -1701,6 +1828,7 @@ run_binary() {
 }
 
 run_binary_background() {
+    RUN_PROXY_BACKGROUND_PID=""
     _run_proxy_cmd bg
 }
 
@@ -1787,13 +1915,18 @@ start_proxy_background() {
     printf "Logs will not be printed in this session.\n"
     printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
 
-    child_pid="$(run_binary_background)" || return 1
+    run_binary_background || return 1
+    child_pid="$RUN_PROXY_BACKGROUND_PID"
+    [ -n "$child_pid" ] || return 1
     mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
     printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
     sleep 1
 
     if kill -0 "$child_pid" 2>/dev/null; then
         printf "Background process pid:\n  %s\n" "$child_pid"
+        if [ "$COMMAND_MODE" = "1" ]; then
+            return 0
+        fi
         pause
         return 0
     fi
@@ -1872,7 +2005,9 @@ restart_running_proxy_for_updated_settings() {
     fi
 
     stop_running >/dev/null 2>&1 || true
-    child_pid="$(run_binary_background)" || return 1
+    run_binary_background || return 1
+    child_pid="$RUN_PROXY_BACKGROUND_PID"
+    [ -n "$child_pid" ] || return 1
     mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
     printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
 
@@ -1957,12 +2092,49 @@ write_init_script() {
         printf '%s\n' '    DC_IPS="${DC_IPS:-}"'
         printf '%s\n' '    CF_PROXY="${CF_PROXY:-0}"'
         printf '%s\n' '    CF_PROXY_FIRST="${CF_PROXY_FIRST:-0}"'
-        printf '%s\n' '    CF_BALANCE="${CF_BALANCE:-0}"'
+        printf '%s\n' '    CF_BALANCE="${CF_BALANCE:-1}"'
         printf '%s\n' '    CF_DOMAIN="${CF_DOMAIN:-}"'
+        printf '%s\n' "    CF_BUILTIN_DOMAINS_OBF='${CF_BUILTIN_DOMAINS_OBF}'"
         printf '%s\n' '    PROXY_MODE="${PROXY_MODE:-socks5}"'
         printf '%s\n' '    MT_SECRET="${MT_SECRET:-}"'
         printf '%s\n' '    MT_LINK_IP="${MT_LINK_IP:-}"'
         printf '%s\n' '    MT_UPSTREAM_PROXIES="${MT_UPSTREAM_PROXIES:-}"'
+        printf '%s\n' '    cf_builtin_domains() {'
+        printf '%s\n' '        if [ -n "${CF_BUILTIN_DOMAINS:-}" ]; then'
+        printf '%s\n' '            printf "%s" "$CF_BUILTIN_DOMAINS"'
+        printf '%s\n' '            return 0'
+        printf '%s\n' '        fi'
+        printf '%s\n' "        printf '%b' \"\${CF_BUILTIN_DOMAINS_OBF:-}\""
+        printf '%s\n' '    }'
+        printf '%s\n' '    normalize_cf_domain_list() {'
+        printf '%s\n' '        value="$1"'
+        printf '%s\n' '        [ -n "$value" ] || return 1'
+        printf '%s\n' "        awk -v input=\"\$value\" '"
+        printf '%s\n' '            function trim(s) {'
+        printf '%s\n' '                gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)'
+        printf '%s\n' '                return s'
+        printf '%s\n' '            }'
+        printf '%s\n' '            BEGIN {'
+        printf '%s\n' '                count = split(input, parts, ",")'
+        printf '%s\n' '                out = ""'
+        printf '%s\n' '                for (i = 1; i <= count; i++) {'
+        printf '%s\n' '                    part = trim(parts[i])'
+        printf '%s\n' '                    if (part == "" || seen[part]++) continue'
+        printf '%s\n' '                    out = (out == "" ? part : out "," part)'
+        printf '%s\n' '                }'
+        printf '%s\n' '                if (out == "") exit 1'
+        printf '%s\n' '                print out'
+        printf '%s\n' '            }'
+        printf '%s\n' "        '"
+        printf '%s\n' '    }'
+        printf '%s\n' '    custom_cf_domains="$(normalize_cf_domain_list "${CF_DOMAIN:-}" 2>/dev/null || true)"'
+        printf '%s\n' '    if [ -n "$custom_cf_domains" ]; then'
+        printf '%s\n' '        resolved_cf_domains="$custom_cf_domains"'
+        printf '%s\n' '        resolved_cf_domain_source="custom"'
+        printf '%s\n' '    else'
+        printf '%s\n' '        resolved_cf_domains="$(cf_builtin_domains)"'
+        printf '%s\n' '        resolved_cf_domain_source="built-in"'
+        printf '%s\n' '    fi'
         printf '%s\n' '    if [ "$PROXY_MODE" = "mtproto" ]; then'
         printf '%s\n' '        [ -n "$MT_SECRET" ] || return 1'
         printf '%s\n' '    else'
@@ -1994,8 +2166,8 @@ write_init_script() {
         printf '%s\n' '        done'
         printf '%s\n' '        IFS="$old_ifs"'
         printf '%s\n' '    fi'
-        printf '%s\n' '    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then'
-        printf '%s\n' '        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"'
+        printf '%s\n' '    if [ "$CF_PROXY" = "1" ] && [ -n "$resolved_cf_domains" ]; then'
+        printf '%s\n' '        set -- "$@" --cf-proxy --cf-domain "$resolved_cf_domains"'
         printf '%s\n' '        if [ "$CF_PROXY_FIRST" = "1" ]; then'
         printf '%s\n' '            set -- "$@" --cf-proxy-first'
         printf '%s\n' '        fi'
@@ -2015,6 +2187,7 @@ write_init_script() {
         printf '%s\n' '    fi'
         printf '%s\n' '    procd_open_instance'
         printf '%s\n' '    procd_set_param command "$@"'
+        printf '%s\n' '    procd_set_param env TG_WS_PROXY_CF_DOMAIN_SOURCE="$resolved_cf_domain_source"'
         printf '%s\n' '    procd_set_param respawn'
         printf '%s\n' '    procd_set_param stdout 1'
         printf '%s\n' '    procd_set_param stderr 1'
@@ -2588,6 +2761,22 @@ show_dc_ip_mapping_settings() {
     fi
 }
 
+_cf_domain_count() {
+    value="$1"
+    [ -n "$value" ] || return 1
+    _cf_count_old_ifs="$IFS"
+    _cf_count=0
+    IFS=','
+    for _cf_part in $value; do
+        _cf_part="$(printf "%s" "$_cf_part" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -n "$_cf_part" ] || continue
+        _cf_count=$((_cf_count + 1))
+    done
+    IFS="$_cf_count_old_ifs"
+    [ "$_cf_count" -gt 0 ] || return 1
+    printf "%s" "$_cf_count"
+}
+
 telegram_host() {
     case "$LISTEN_HOST" in
         0.0.0.0|"")
@@ -2732,15 +2921,18 @@ show_telegram_settings() {
     else
         printf "  cf mode  : ordered\n"
     fi
-    if [ -z "$CF_DOMAIN" ]; then
+    _cf_domains="$(resolved_cf_domains 2>/dev/null || true)"
+    _cf_source="$(resolved_cf_domain_source 2>/dev/null || printf builtin)"
+    if [ -z "$_cf_domains" ]; then
         printf "  cf domain: not set\n"
     else
-        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
-        if [ "$_cf_commas" -eq 0 ]; then
-            printf "  cf domain: %s\n" "$CF_DOMAIN"
+        _cf_count="$(_cf_domain_count "$_cf_domains" 2>/dev/null || true)"
+        if [ "$_cf_source" = "custom" ] && [ "$_cf_count" = "1" ]; then
+            printf "  cf domain: %s\n" "$_cf_domains"
+        elif [ "$_cf_source" = "custom" ]; then
+            printf "  cf domain: %s custom domains\n" "$_cf_count"
         else
-            _cf_count=$((_cf_commas + 1))
-            printf "  cf domain: %d domains\n" "$_cf_count"
+            printf "  cf domain: built-in\n"
         fi
     fi
 }
@@ -2813,15 +3005,18 @@ show_telegram_settings_compact() {
     else
         cf_mode="ordered"
     fi
-    if [ -z "$CF_DOMAIN" ]; then
+    _cf_domains="$(resolved_cf_domains 2>/dev/null || true)"
+    _cf_source="$(resolved_cf_domain_source 2>/dev/null || printf builtin)"
+    if [ -z "$_cf_domains" ]; then
         cf_domain_part="domain:none"
     else
-        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
-        if [ "$_cf_commas" -eq 0 ]; then
-            cf_domain_part="domain:$CF_DOMAIN"
+        _cf_count="$(_cf_domain_count "$_cf_domains" 2>/dev/null || true)"
+        if [ "$_cf_source" = "custom" ] && [ "$_cf_count" = "1" ]; then
+            cf_domain_part="domain:$_cf_domains"
+        elif [ "$_cf_source" = "custom" ]; then
+            cf_domain_part="domain:${_cf_count} custom"
         else
-            _cf_count=$((_cf_commas + 1))
-            cf_domain_part="domain:${_cf_count} set"
+            cf_domain_part="domain:${_cf_count} built-in"
         fi
     fi
     printf "  CF      %s / %s / %s / %s\n" "$cf_on" "$cf_order" "$cf_mode" "$cf_domain_part"
@@ -3113,18 +3308,19 @@ choose_update_source_mode_numbered() {
     printf "Mode:\n" >&2
     printf "  1) release\n" >&2
     printf "  2) preview\n" >&2
-    printf "Select mode [1-2] (Enter for %s): " "$current" >&2
+    printf "  3) back\n" >&2
+    printf "Select mode [1-3] (Enter for back): " >&2
     IFS= read -r selected_mode
 
     case "$selected_mode" in
-        "")
-            selected_mode="$current"
-            ;;
         1|release)
             selected_mode="release"
             ;;
         2|preview)
             selected_mode="preview"
+            ;;
+        ""|3|back)
+            selected_mode="back"
             ;;
     esac
 
@@ -3269,11 +3465,9 @@ choose_update_source_mode() {
         choose_update_source_mode_numbered "$current"
         return 0
     else
-        printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+        printf "Mode [release/preview/back] (Enter for back): " >&2
         IFS= read -r selected_mode
-        if [ -z "$selected_mode" ]; then
-            selected_mode="$current"
-        fi
+        [ -n "$selected_mode" ] || selected_mode="back"
         printf "%s" "$selected_mode"
         return 0
     fi
@@ -4012,6 +4206,9 @@ configure_update_source() {
     new_channel="$(choose_update_source_mode "$(selected_update_channel 2>/dev/null || printf release)")"
 
     case "$new_channel" in
+        back)
+            return 0
+            ;;
         release)
             new_ref="$(choose_release_ref "$(selected_update_ref 2>/dev/null || printf latest)")" || {
                 pause
@@ -4093,47 +4290,91 @@ toggle_cf_balance() {
 configure_cf_domain() {
     show_header
     printf "%sCloudflare proxy domain%s\n" "$C_BOLD" "$C_RESET"
-    if [ -z "$CF_DOMAIN" ]; then
-        printf "  current: not set\n"
+    _cf_custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -z "$_cf_custom_domains" ]; then
+        printf "  current: built-in\n"
+        _cf_has_custom="0"
     else
-        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
-        if [ "$_cf_commas" -eq 0 ]; then
-            printf "  current: %s\n" "$CF_DOMAIN"
-        else
-            printf "  current: %s\n" "$CF_DOMAIN"
-        fi
+        printf "  current: %s\n" "$_cf_custom_domains"
+        _cf_has_custom="1"
     fi
+    printf "\nChoose what to do.\n"
+    printf "  1) enter your own domains\n"
+    printf "  2) keep current\n"
+    if [ "$_cf_has_custom" = "1" ]; then
+        printf "  3) use built-in domains\n"
+        printf "  4) back\n"
+        printf "Select [1-4] (Enter for 4): "
+    else
+        printf "  3) back\n"
+        printf "Select [1-3] (Enter for 3): "
+    fi
+    IFS= read -r _cf_action
+
+    if [ "$_cf_has_custom" = "1" ]; then
+        case "$_cf_action" in
+            3|builtin|built-in|clear)
+                CF_DOMAIN=""
+                write_settings_config || return 1
+                printf "\n%sCustom Cloudflare domains cleared; using the built-in pool%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                return 0
+                ;;
+            ""|4|back)
+                return 0
+                ;;
+            2|current|keep)
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+                ;;
+            1|enter|custom)
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
+    else
+        case "$_cf_action" in
+            ""|3|back)
+                return 0
+                ;;
+            2|current|keep)
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+                ;;
+            1|enter|custom)
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
+    fi
+
     printf "\nEnter your Cloudflare domain(s), comma-separated (e.g. domain1.com,domain2.com).\n"
     printf "DNS records kws1..kws5 and kws203 must point to Telegram DC IPs.\n"
     if [ "$CF_PROXY" != "1" ]; then
         printf "%sWarning:%s CF proxy is currently off. Saving a domain does not enable CF routing.\n" "$C_YELLOW" "$C_RESET"
     fi
-    printf "Use 'clear' to remove the domain.\n"
-    printf "CF domain(s) (empty to keep current): "
+    printf "CF domain(s): "
     IFS= read -r new_cf_domain
 
-    if [ -z "$new_cf_domain" ]; then
-        printf "\nNo changes made.\n"
+    CF_DOMAIN="$(normalize_cf_domain_list "$new_cf_domain" 2>/dev/null || true)"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "\n%sNo valid Cloudflare domains provided%s\n" "$C_RED" "$C_RESET"
         pause
-        return 0
+        return 1
     fi
-
-    case "$new_cf_domain" in
-        clear|CLEAR|Clear)
-            CF_DOMAIN=""
-            write_settings_config || return 1
-            printf "\n%sCloudflare domain cleared%s\n" "$C_GREEN" "$C_RESET"
-            prompt_restart_proxy_for_updated_settings
-            pause
-            return 0
-            ;;
-    esac
-
-    CF_DOMAIN="$new_cf_domain"
     write_settings_config || return 1
-    printf "\n%sCloudflare domain saved%s\n" "$C_GREEN" "$C_RESET"
+    printf "\n%sCustom Cloudflare domains saved%s\n" "$C_GREEN" "$C_RESET"
     if [ "$CF_PROXY" != "1" ]; then
-        printf "%sWarning:%s domain saved, but CF route is disabled until you turn on CF proxy.\n" "$C_YELLOW" "$C_RESET"
+        printf "%sWarning:%s domains saved, but CF route is disabled until you turn on CF proxy.\n" "$C_YELLOW" "$C_RESET"
     fi
     prompt_restart_proxy_for_updated_settings
     pause
@@ -4200,20 +4441,79 @@ check_cf_endpoint() {
 check_cf_domain() {
     show_header
     printf "%sCheck Cloudflare domain%s\n" "$C_BOLD" "$C_RESET"
-    if [ -z "$CF_DOMAIN" ]; then
-        printf "  current: not set\n"
+    _cf_custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$_cf_custom_domains" ]; then
+        _cf_has_custom="1"
+        printf "  current: your own domains\n"
+        printf "  domains: %s\n" "$_cf_custom_domains"
     else
-        printf "  current: %s\n" "$CF_DOMAIN"
+        _cf_has_custom="0"
+        printf "  current: built-in\n"
     fi
-    printf "\nEnter domain to check or press Enter to use current.\n"
-    printf "Domain: "
-    IFS= read -r check_domain
+    printf "\nChoose domains to test.\n"
+    if [ "$_cf_has_custom" = "1" ]; then
+        printf "  1) your own domains\n"
+        printf "  2) built-in domains\n"
+        printf "  3) enter domains manually\n"
+        printf "  4) back\n"
+        printf "Select [1-4] (Enter for 4): "
+    else
+        printf "  1) built-in domains\n"
+        printf "  2) enter domains manually\n"
+        printf "  3) back\n"
+        printf "Select [1-3] (Enter for 3): "
+    fi
+    IFS= read -r _cf_choice
 
-    if [ -z "$check_domain" ]; then
-        check_domain="$CF_DOMAIN"
+    if [ "$_cf_has_custom" = "1" ]; then
+        case "$_cf_choice" in
+            1|custom|own)
+                check_domain="$_cf_custom_domains"
+                _cf_selected_label="your own"
+                ;;
+            2|builtin|built-in)
+                check_domain="$(cf_builtin_domains)"
+                _cf_selected_label="built-in"
+                ;;
+            3|manual)
+                printf "Domain(s): "
+                IFS= read -r check_domain
+                _cf_selected_label="manual"
+                ;;
+            ""|4|back)
+                return 0
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
+    else
+        case "$_cf_choice" in
+            1|builtin|built-in)
+                check_domain="$(cf_builtin_domains)"
+                _cf_selected_label="built-in"
+                ;;
+            2|manual)
+                printf "Domain(s): "
+                IFS= read -r check_domain
+                _cf_selected_label="manual"
+                ;;
+            ""|3|back)
+                return 0
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
     fi
+
+    check_domain="$(normalize_cf_domain_list "$check_domain" 2>/dev/null || true)"
     if [ -z "$check_domain" ]; then
-        printf "\n%sNo Cloudflare domain set%s\n" "$C_RED" "$C_RESET"
+        printf "\n%sNo valid Cloudflare domains provided%s\n" "$C_RED" "$C_RESET"
         pause
         return 1
     fi
@@ -4245,12 +4545,19 @@ $_cf_domain_trimmed"
 
     _cf_col_w=6
     _cf_domain_count=0
+    _cf_mask_builtin_labels=0
+    [ "$_cf_selected_label" = "built-in" ] && _cf_mask_builtin_labels=1
     _cf_old_ifs="$IFS"
     IFS='
 '
     for _cf_domain_line in $_cf_domains; do
         [ -n "$_cf_domain_line" ] || continue
-        _cf_len=${#_cf_domain_line}
+        if [ "$_cf_mask_builtin_labels" = "1" ]; then
+            _cf_label="built-in"
+        else
+            _cf_label="$_cf_domain_line"
+        fi
+        _cf_len=${#_cf_label}
         [ "$_cf_len" -gt "$_cf_col_w" ] && _cf_col_w="$_cf_len"
         _cf_domain_count=$((_cf_domain_count + 1))
     done
@@ -4258,13 +4565,19 @@ $_cf_domain_trimmed"
     _cf_total_endpoints=$((_cf_domain_count * 6))
 
     printf "Domains:\n"
-    _cf_old_ifs="$IFS"
-    IFS='
+    printf "  source: %s\n" "$_cf_selected_label"
+    if [ "$_cf_selected_label" = "built-in" ]; then
+        printf "  built-in\n"
+    else
+        _cf_old_ifs="$IFS"
+        IFS='
 '
-    for _cf_domain_line in $_cf_domains; do
-        [ -n "$_cf_domain_line" ] || continue
-        printf "  %s\n" "$_cf_domain_line"
-    done
+        for _cf_domain_line in $_cf_domains; do
+            [ -n "$_cf_domain_line" ] || continue
+            printf "  %s\n" "$_cf_domain_line"
+        done
+        IFS="$_cf_old_ifs"
+    fi
     printf "\n"
     printf "Testing %d endpoints sequentially...\n\n" "$_cf_total_endpoints"
 
@@ -4282,20 +4595,32 @@ $_cf_domain_trimmed"
 '
     for _cf_domain_name in $_cf_domains; do
         [ -n "$_cf_domain_name" ] || continue
+        if [ "$_cf_mask_builtin_labels" = "1" ]; then
+            _cf_domain_label="built-in"
+            _cf_host_label="kws<built-in>"
+        else
+            _cf_domain_label="$_cf_domain_name"
+            _cf_host_label=""
+        fi
         for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
             if [ "$_cf_interrupted" = "1" ]; then
                 break
             fi
             _cf_host="$prefix.$_cf_domain_name"
+            if [ -n "$_cf_host_label" ]; then
+                _cf_display_host="$prefix.<built-in>"
+            else
+                _cf_display_host="$_cf_host"
+            fi
             _cf_checked=$((_cf_checked + 1))
-            printf "  [%d/%d] %-32s checking...\r" "$_cf_checked" "$_cf_total_endpoints" "$_cf_host"
+            printf "  [%d/%d] %-32s checking...\r" "$_cf_checked" "$_cf_total_endpoints" "$_cf_display_host"
             if check_cf_endpoint "$_cf_host"; then
                 _cf_result="ok"
             else
                 _cf_result="fail"
             fi
-            printf "  [%d/%d] %-32s %s\n" "$_cf_checked" "$_cf_total_endpoints" "$_cf_host" "$CHECK_CF_ENDPOINT_STATUS"
-            printf '%s|%s|%s|%s\n' "$_cf_domain_name" "$prefix" "$_cf_result" "$CHECK_CF_ENDPOINT_STATUS" >> "$_cf_results_file"
+            printf "  [%d/%d] %-32s %s\n" "$_cf_checked" "$_cf_total_endpoints" "$_cf_display_host" "$CHECK_CF_ENDPOINT_STATUS"
+            printf '%s|%s|%s|%s|%s\n' "$_cf_domain_name" "$_cf_domain_label" "$prefix" "$_cf_result" "$CHECK_CF_ENDPOINT_STATUS" >> "$_cf_results_file"
         done
         [ "$_cf_interrupted" = "0" ] || break
     done
@@ -4331,13 +4656,14 @@ BEGIN {
     ok_count = 0
 }
 {
-    key = $1 SUBSEP $2
-    result[key] = $3
-    status[key] = $4
+    key = $1 SUBSEP $3
+    display[$1] = $2
+    result[key] = $4
+    status[key] = $5
     if (!seen[$1]++) {
         order[++domain_count] = $1
     }
-    if ($3 == "ok") {
+    if ($4 == "ok") {
         row_ok[$1]++
         ok_count++
     }
@@ -4359,7 +4685,11 @@ END {
 
     for (i = 1; i <= domain_count; i++) {
         d = order[i]
-        row = rpad(d, colw) " "
+        shown = display[d]
+        if (shown == "") {
+            shown = d
+        }
+        row = rpad(shown, colw) " "
         row_pass = 0
         for (j = 1; j <= 6; j++) {
             p = prefixes[j]
