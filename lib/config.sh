@@ -1,9 +1,66 @@
+#!/bin/sh
 # config.sh
 
 read_config_value() {
     key="$1"
     [ -f "$PERSIST_CONFIG_FILE" ] || return 1
     sed -n "s/^${key}='\(.*\)'$/\1/p" "$PERSIST_CONFIG_FILE" 2>/dev/null | head -n 1
+}
+
+cf_builtin_domains() {
+    if [ -n "${CF_BUILTIN_DOMAINS:-}" ]; then
+        printf "%s" "$CF_BUILTIN_DOMAINS"
+        return 0
+    fi
+    printf '%b' "${CF_BUILTIN_DOMAINS_OBF:-}"
+}
+
+normalize_cf_domain_list() {
+    value="$1"
+    [ -n "$value" ] || return 1
+
+    awk -v input="$value" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        BEGIN {
+            count = split(input, parts, ",")
+            out = ""
+            for (i = 1; i <= count; i++) {
+                part = trim(parts[i])
+                if (part == "" || seen[part]++) {
+                    continue
+                }
+                out = (out == "" ? part : out "," part)
+            }
+            if (out == "") {
+                exit 1
+            }
+            print out
+        }
+    '
+}
+
+custom_cf_domains() {
+    normalize_cf_domain_list "${CF_DOMAIN:-}" 2>/dev/null
+}
+
+resolved_cf_domains() {
+    custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$custom_domains" ]; then
+        printf "%s" "$custom_domains"
+        return 0
+    fi
+    cf_builtin_domains
+}
+
+resolved_cf_domain_source() {
+    if [ -n "$(custom_cf_domains 2>/dev/null || true)" ]; then
+        printf "custom"
+        return 0
+    fi
+    printf "builtin"
 }
 
 normalize_dc_ip_list() {
@@ -58,7 +115,6 @@ write_settings_config() {
         fi
         printf "HOST='%s'\n" "$LISTEN_HOST"
         printf "PORT='%s'\n" "$LISTEN_PORT"
-        printf "PPROF_ADDR='%s'\n" "$PPROF_ADDR"
         printf "VERBOSE='%s'\n" "$VERBOSE"
         printf "POOL_SIZE='%s'\n" "$POOL_SIZE"
         printf "USERNAME='%s'\n" "$SOCKS_USERNAME"
@@ -86,10 +142,6 @@ load_saved_settings() {
     if [ -z "$LISTEN_PORT_FROM_ENV" ]; then
         port="$(read_config_value PORT 2>/dev/null || true)"
         [ -n "$port" ] && LISTEN_PORT="$port"
-    fi
-
-    if [ -z "$PPROF_ADDR_FROM_ENV" ]; then
-        PPROF_ADDR="$(read_config_value PPROF_ADDR 2>/dev/null || true)"
     fi
 
     if [ -z "$VERBOSE_FROM_ENV" ]; then
@@ -329,6 +381,23 @@ generate_mt_secret() {
 }
 
 # Returns 0 if HOST:PORT:SECRET entry is valid, 1 otherwise.
+# If secret contains non-hex chars (e.g. base64 from a Telegram proxy link),
+# decode it to hex. Handles both base64url (-_) and standard (+/) variants.
+normalize_upstream_proxy_entry() {
+    _nup_host="$(printf "%s" "$1" | cut -d: -f1)"
+    _nup_port="$(printf "%s" "$1" | cut -d: -f2)"
+    _nup_secret="$(printf "%s" "$1" | cut -d: -f3-)"
+    case "$_nup_secret" in
+        *[!0-9a-fA-F]*)
+            _nup_hex="$(printf "%s" "$_nup_secret" | tr -- '-_' '+/' | \
+                awk '{r=length($0)%4; if(r==2)print $0"=="; else if(r==3)print $0"="; else print $0}' | \
+                base64 -d 2>/dev/null | xxd -p 2>/dev/null | tr -d '\n')"
+            [ -n "$_nup_hex" ] && _nup_secret="$_nup_hex"
+            ;;
+    esac
+    printf "%s:%s:%s" "$_nup_host" "$_nup_port" "$_nup_secret"
+}
+
 validate_upstream_proxy_entry() {
     _vup_entry="$1"
     _vup_host="$(printf "%s" "$_vup_entry" | cut -d: -f1)"
@@ -350,6 +419,14 @@ validate_upstream_proxy_entry() {
         *)         [ "$_vup_slen" -eq 32 ]  || return 1 ;;
     esac
     return 0
+}
+
+upstream_secret_kind() {
+    case "$1" in
+        [eE][eE]*) printf "ee-faketls" ;;
+        [dD][dD]*) printf "dd-intermediate" ;;
+        *)         printf "plain" ;;
+    esac
 }
 
 mt_proxy_link() {

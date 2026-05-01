@@ -3,7 +3,7 @@ package telegram
 import "testing"
 
 func TestIsTelegramIP(t *testing.T) {
-	if !IsTelegramIP("149.154.167.220") {
+	if !IsTelegramIP(IPv4DC2) {
 		t.Fatal("expected telegram ip to be recognized")
 	}
 	if IsTelegramIP("8.8.8.8") {
@@ -12,7 +12,7 @@ func TestIsTelegramIP(t *testing.T) {
 }
 
 func TestLookupEndpoint(t *testing.T) {
-	ep, ok := LookupEndpoint("149.154.167.220")
+	ep, ok := LookupEndpoint(IPv4DC2)
 	if !ok {
 		t.Fatal("expected endpoint lookup to succeed")
 	}
@@ -22,7 +22,7 @@ func TestLookupEndpoint(t *testing.T) {
 }
 
 func TestLookupEndpointAdditionalDC2Host(t *testing.T) {
-	ep, ok := LookupEndpoint("149.154.167.35")
+	ep, ok := LookupEndpoint(IPv4DC2Alt)
 	if !ok {
 		t.Fatal("expected additional dc2 endpoint lookup to succeed")
 	}
@@ -37,8 +37,8 @@ func TestLookupEndpointAdditionalTelegramCallHosts(t *testing.T) {
 		dc   int
 		name string
 	}{
-		{ip: "149.154.167.255", dc: 2, name: "dc2 call host"},
-		{ip: "149.154.175.211", dc: 1, name: "dc1 call host"},
+		{ip: IPv4DC2Call, dc: 2, name: "dc2 call host"},
+		{ip: IPv4DC1Call, dc: 1, name: "dc1 call host"},
 	}
 
 	for _, tc := range testCases {

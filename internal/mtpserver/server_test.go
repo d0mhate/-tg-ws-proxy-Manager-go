@@ -30,7 +30,7 @@ func newTestServer(t *testing.T, cfg config.Config) *MTServer {
 
 func TestEffectiveDCUsesExplicitOverride(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 
 	srv := newTestServer(t, cfg)
 
@@ -75,7 +75,7 @@ func TestDialDirectWSIncludesDCInMissingTargetIPErrors(t *testing.T) {
 
 func TestDirectRouteCandidatesUseExplicitTargetWithNormalizedWSDomainForDC203(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 
 	srv := newTestServer(t, cfg)
 	routes := srv.directRouteCandidates(203)
@@ -83,17 +83,17 @@ func TestDirectRouteCandidatesUseExplicitTargetWithNormalizedWSDomainForDC203(t 
 	if len(routes) != 2 {
 		t.Fatalf("expected explicit and normalized direct routes for dc203, got %d", len(routes))
 	}
-	if routes[0].targetDC != 203 || routes[0].targetIP != "91.105.192.100" || routes[0].wsDomainDC != 2 {
+	if routes[0].targetDC != 203 || routes[0].targetIP != testIPv4DC203 || routes[0].wsDomainDC != 2 {
 		t.Fatalf("unexpected explicit direct route: %+v", routes[0])
 	}
-	if routes[1].targetDC != 2 || routes[1].targetIP != "149.154.167.220" || routes[1].wsDomainDC != 2 {
+	if routes[1].targetDC != 2 || routes[1].targetIP != testIPv4DC2 || routes[1].wsDomainDC != 2 {
 		t.Fatalf("unexpected normalized fallback route: %+v", routes[1])
 	}
 }
 
 func TestDirectRouteCandidatesDedupSameEndpointForDC203(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs[203] = "149.154.167.220"
+	cfg.DCIPs[203] = testIPv4DC2
 
 	srv := newTestServer(t, cfg)
 	routes := srv.directRouteCandidates(203)
@@ -101,7 +101,7 @@ func TestDirectRouteCandidatesDedupSameEndpointForDC203(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("expected identical dc203 and normalized routes to be deduplicated, got %d", len(routes))
 	}
-	if routes[0].targetDC != 203 || routes[0].targetIP != "149.154.167.220" || routes[0].wsDomainDC != 2 {
+	if routes[0].targetDC != 203 || routes[0].targetIP != testIPv4DC2 || routes[0].wsDomainDC != 2 {
 		t.Fatalf("unexpected deduplicated route: %+v", routes[0])
 	}
 }
@@ -116,7 +116,7 @@ func TestDirectRouteCandidatesFallbackToNormalizedTargetWithoutExplicitDC203(t *
 	if len(routes) != 1 {
 		t.Fatalf("expected one normalized route for dc203 without explicit override, got %d", len(routes))
 	}
-	if routes[0].targetDC != 2 || routes[0].targetIP != "149.154.167.220" || routes[0].wsDomainDC != 2 {
+	if routes[0].targetDC != 2 || routes[0].targetIP != testIPv4DC2 || routes[0].wsDomainDC != 2 {
 		t.Fatalf("unexpected normalized route: %+v", routes[0])
 	}
 }
@@ -193,11 +193,11 @@ func (c *blockingConn) isClosed() bool {
 	return c.closed
 }
 
-func (c *blockingConn) LocalAddr() net.Addr                { return dummyAddr("local") }
-func (c *blockingConn) RemoteAddr() net.Addr               { return dummyAddr("remote") }
-func (c *blockingConn) SetDeadline(time.Time) error        { return nil }
-func (c *blockingConn) SetReadDeadline(time.Time) error    { return nil }
-func (c *blockingConn) SetWriteDeadline(time.Time) error   { return nil }
+func (c *blockingConn) LocalAddr() net.Addr              { return dummyAddr("local") }
+func (c *blockingConn) RemoteAddr() net.Addr             { return dummyAddr("remote") }
+func (c *blockingConn) SetDeadline(time.Time) error      { return nil }
+func (c *blockingConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *blockingConn) SetWriteDeadline(time.Time) error { return nil }
 
 type dummyAddr string
 
@@ -228,7 +228,7 @@ func TestSingleRouteDoesNotEnterRedirectCooldown(t *testing.T) {
 		return nil, &wsbridge.HandshakeError{StatusCode: 302, StatusLine: "HTTP/1.1 302 Found"}
 	}
 
-	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"}
+	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: testIPv4DC2}
 	_, _, err := srv.dialDirectWSWithFallback(context.Background(), 2, false, []directRouteCandidate{route})
 	if err == nil {
 		t.Fatal("expected redirect error")
@@ -244,7 +244,7 @@ func TestSingleRouteDoesNotEnterCooldownOnBridgeFailure(t *testing.T) {
 	cfg := config.Default()
 	srv := newTestServer(t, cfg)
 
-	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"}
+	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: testIPv4DC2}
 	key := routeCooldownKey{requestDC: 2, targetDC: 2, isMedia: false}
 	srv.markDirectRouteBridgeFailure(2, false, route)
 
@@ -255,11 +255,11 @@ func TestSingleRouteDoesNotEnterCooldownOnBridgeFailure(t *testing.T) {
 
 func TestDC203FallbackRouteSkipsFailureCooldown(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 	srv := newTestServer(t, cfg)
 
-	fallbackRoute := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"}
-	explicitRoute := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"}
+	fallbackRoute := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: testIPv4DC2}
+	explicitRoute := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: testIPv4DC203}
 
 	srv.markDirectRouteFailure(203, false, fallbackRoute)
 	if srv.routeCooldowns.active(routeCooldownKey{requestDC: 203, targetDC: 2, isMedia: false}) {
@@ -275,10 +275,10 @@ func TestDC203FallbackRouteSkipsFailureCooldown(t *testing.T) {
 func TestDialDirectWSKeepsNormalTimeoutForInactiveMultiRouteCooldown(t *testing.T) {
 	cfg := config.Default()
 	cfg.DialTimeout = 10 * time.Second
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 	srv := newTestServer(t, cfg)
 
-	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"}
+	route := directRouteCandidate{targetDC: 2, wsDomainDC: 2, targetIP: testIPv4DC2}
 	srv.routeCooldowns.markFailure(routeCooldownKey{requestDC: 203, targetDC: 203, isMedia: false})
 
 	var seen []time.Duration
@@ -304,10 +304,10 @@ func TestDialDirectWSKeepsNormalTimeoutForInactiveMultiRouteCooldown(t *testing.
 func TestDialDirectWSUsesFailFastTimeoutForMultiRouteDC203(t *testing.T) {
 	cfg := config.Default()
 	cfg.DialTimeout = 10 * time.Second
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 	srv := newTestServer(t, cfg)
 
-	route := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"}
+	route := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: testIPv4DC203}
 	srv.routeCooldowns.markFailure(routeCooldownKey{requestDC: 203, targetDC: 203, isMedia: false})
 
 	var seen []time.Duration
@@ -424,11 +424,11 @@ func TestTCPFallbackTargetIPReturnsEmptyWithoutConfiguredRoute(t *testing.T) {
 
 func TestTCPFallbackTargetIPPrefersExplicitDC203Override(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs[203] = "91.105.192.100"
+	cfg.DCIPs[203] = testIPv4DC203
 	srv := newTestServer(t, cfg)
 
 	routes := srv.directRouteCandidates(203)
-	if got := srv.tcpFallbackTargetIP(203, routes); got != "91.105.192.100" {
+	if got := srv.tcpFallbackTargetIP(203, routes); got != testIPv4DC203 {
 		t.Fatalf("expected explicit dc203 tcp fallback ip, got %q", got)
 	}
 }
@@ -467,7 +467,7 @@ func TestDialDirectWSSuccessClearsRouteCooldown(t *testing.T) {
 	cfg := config.Default()
 	srv := newTestServer(t, cfg)
 
-	route := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"}
+	route := directRouteCandidate{targetDC: 203, wsDomainDC: 2, targetIP: testIPv4DC203}
 	key := routeCooldownKey{requestDC: 203, targetDC: 203, isMedia: false}
 	srv.routeCooldowns.markFailure(key)
 

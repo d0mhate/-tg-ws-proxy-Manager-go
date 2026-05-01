@@ -11,8 +11,8 @@ func TestPreferredFallbackRoutePrefersDCMatchingWSDomain(t *testing.T) {
 	srv := newTestServer(t, config.Default())
 
 	routes := []directRouteCandidate{
-		{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"},
-		{targetDC: 2, wsDomainDC: 2, targetIP: "149.154.167.220"},
+		{targetDC: 203, wsDomainDC: 2, targetIP: testIPv4DC203},
+		{targetDC: 2, wsDomainDC: 2, targetIP: testIPv4DC2},
 	}
 
 	preferred := srv.preferredFallbackRoute(routes)
@@ -25,7 +25,7 @@ func TestPreferredFallbackRouteFallsBackToFirstWhenNoneMatch(t *testing.T) {
 	srv := newTestServer(t, config.Default())
 
 	routes := []directRouteCandidate{
-		{targetDC: 203, wsDomainDC: 2, targetIP: "91.105.192.100"},
+		{targetDC: 203, wsDomainDC: 2, targetIP: testIPv4DC203},
 		{targetDC: 5, wsDomainDC: 3, targetIP: "1.2.3.4"},
 	}
 

@@ -1,3 +1,4 @@
+#!/bin/sh
 # platform.sh
 
 lan_ip() {
@@ -101,6 +102,11 @@ show_environment_checks() {
     fi
 
     printf "Release asset: %s\n" "$(resolved_binary_name)"
+
+    need_kb="$(required_tmp_runtime_install_kb 2>/dev/null || true)"
+    if [ -n "$need_kb" ]; then
+        printf "tmp need: %s KB\n" "$need_kb"
+    fi
 
     free_kb="$(tmp_available_kb)"
     if [ -n "$free_kb" ]; then

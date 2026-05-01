@@ -148,12 +148,12 @@ setup() {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
         CF_DOMAIN="cf.example.com"
-        configure_cf_domain 2>&1 <<< "clear"
+        configure_cf_domain 2>&1 <<< "3"
         printf "\nDOMAIN=%s\nRESTART=%s\n" "$CF_DOMAIN" "$TEST_RESTART_PROMPT_CALLED"
     '
 
     [ "$status" -eq 0 ]
-    [[ "$output" == *"Cloudflare domain cleared"* ]]
+    [[ "$output" == *"Custom Cloudflare domains cleared; using the built-in pool"* ]]
     [[ "$output" == *"DOMAIN="* ]]
     [[ "$output" == *"RESTART=1"* ]]
 }
@@ -162,13 +162,62 @@ setup() {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
         CF_PROXY="0"
-        configure_cf_domain 2>&1 <<< "a.example.com,b.example.com"
+        configure_cf_domain 2>&1 <<< $'\''1\na.example.com,b.example.com'\''
         printf "\nDOMAIN=%s\n" "$CF_DOMAIN"
     '
 
     [ "$status" -eq 0 ]
     [[ "$output" == *"CF proxy is currently off"* ]]
-    [[ "$output" == *"Cloudflare domain saved"* ]]
-    [[ "$output" == *"domain saved, but CF route is disabled"* ]]
+    [[ "$output" == *"Custom Cloudflare domains saved"* ]]
+    [[ "$output" == *"domains saved, but CF route is disabled"* ]]
     [[ "$output" == *"DOMAIN=a.example.com,b.example.com"* ]]
+}
+
+@test "configure_cf_domain normalizes comma separated domains" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        configure_cf_domain 2>&1 <<< $'\''1\n a.example.com , b.example.com , a.example.com '\''
+        printf "\nDOMAIN=%s\n" "$CF_DOMAIN"
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Custom Cloudflare domains saved"* ]]
+    [[ "$output" == *"DOMAIN=a.example.com,b.example.com"* ]]
+}
+
+@test "configure_cf_domain returns on back" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        CF_DOMAIN="kept.example.com"
+        configure_cf_domain 2>&1 <<< "4"
+        printf "\nDOMAIN=%s\n" "$CF_DOMAIN"
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"DOMAIN=kept.example.com"* ]]
+}
+
+@test "configure_cf_domain keeps current on default selection" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        CF_DOMAIN="kept.example.com"
+        configure_cf_domain 2>&1 <<< ""
+        printf "\nDOMAIN=%s\n" "$CF_DOMAIN"
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"DOMAIN=kept.example.com"* ]]
+}
+
+@test "configure_cf_domain keeps current on explicit selection" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        CF_DOMAIN="kept.example.com"
+        configure_cf_domain 2>&1 <<< "2"
+        printf "\nDOMAIN=%s\n" "$CF_DOMAIN"
+    '
+
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"No changes made."* ]]
+    [[ "$output" == *"DOMAIN=kept.example.com"* ]]
 }

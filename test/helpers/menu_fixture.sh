@@ -31,7 +31,9 @@ export DC_IPS=""
 export VERBOSE="0"
 export CF_PROXY="0"
 export CF_PROXY_FIRST="0"
+export CF_BALANCE="1"
 export CF_DOMAIN=""
+export CF_BUILTIN_DOMAINS="pclead.co.uk,offshor.co.uk,cakeisalie.co.uk,noskomnadzor.co.uk,lovetrue.co.uk,sorokdva.co.uk,pyatdesyatdva.co.uk,kartoshka.co.uk"
 export UPDATE_CHANNEL="release"
 export PREVIEW_BRANCH=""
 export PREVIEW_BRANCH_FROM_ENV=""
@@ -54,6 +56,7 @@ export TEST_DISABLE_AUTOSTART_CALLED=""
 export TEST_ADVANCED_MENU_CALLED=""
 export TEST_RESTART_PROXY_CALLED=""
 export TEST_REMOVE_ALL_CALLED=""
+export TEST_REMOVE_ALL_STATUS="0"
 export TEST_RESTART_PROMPT_CALLED=""
 export TEST_SYNC_AUTOSTART_CALLED=""
 
@@ -95,6 +98,53 @@ write_update_source_state() {
 
 write_settings_config() {
     printf "ok" > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/write_settings_called"
+}
+
+cf_builtin_domains() {
+    printf "%s" "$CF_BUILTIN_DOMAINS"
+}
+
+normalize_cf_domain_list() {
+    value="$1"
+    [ -n "$value" ] || return 1
+    awk -v input="$value" '
+        function trim(s) {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+            return s
+        }
+        BEGIN {
+            count = split(input, parts, ",")
+            out = ""
+            for (i = 1; i <= count; i++) {
+                part = trim(parts[i])
+                if (part == "" || seen[part]++) continue
+                out = (out == "" ? part : out "," part)
+            }
+            if (out == "") exit 1
+            print out
+        }
+    '
+}
+
+custom_cf_domains() {
+    normalize_cf_domain_list "${CF_DOMAIN:-}" 2>/dev/null
+}
+
+resolved_cf_domains() {
+    custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$custom_domains" ]; then
+        printf "%s" "$custom_domains"
+        return 0
+    fi
+    cf_builtin_domains
+}
+
+resolved_cf_domain_source() {
+    if [ -n "$(custom_cf_domains 2>/dev/null || true)" ]; then
+        printf "custom"
+    else
+        printf "builtin"
+    fi
 }
 
 normalize_dc_ip_list() {
@@ -215,6 +265,14 @@ validate_upstream_proxy_entry() {
     esac
 }
 
+upstream_secret_kind() {
+    case "$1" in
+        [eE][eE]*) printf "ee-faketls" ;;
+        [dD][dD]*) printf "dd-intermediate" ;;
+        *) printf "plain" ;;
+    esac
+}
+
 show_telegram_settings_compact() { :; }
 show_menu_summary() { :; }
 menu_proxy_action_label() {
@@ -241,6 +299,10 @@ show_status() { TEST_SHOW_STATUS_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_T
 show_telegram_only() { TEST_SHOW_TELEGRAM_ONLY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/show_telegram_only_called"; }
 show_quick_only() { TEST_SHOW_QUICK_ONLY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/show_quick_only_called"; }
 restart_proxy() { TEST_RESTART_PROXY_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/restart_proxy_called"; }
-remove_all() { TEST_REMOVE_ALL_CALLED="1"; : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/remove_all_called"; }
+remove_all() {
+    TEST_REMOVE_ALL_CALLED="1"
+    : > "${MENU_FIXTURE_TMPDIR:-$BATS_TEST_TMPDIR}/remove_all_called"
+    return "${TEST_REMOVE_ALL_STATUS:-0}"
+}
 
 . "$MENU_LIB_DIR/menu.sh"

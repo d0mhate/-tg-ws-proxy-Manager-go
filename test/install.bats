@@ -117,6 +117,19 @@ has_persistent_install() { return 1; }
     [ -d "$TEST_DIR/out/lib" ]
 }
 
+@test "copy_manager_bundle skips missing lib dir for standalone script" {
+    src="$TEST_DIR/standalone.sh"
+    dest="$TEST_DIR/out/standalone.sh"
+
+    echo ok > "$src"
+
+    run copy_manager_bundle "$src" "$dest"
+
+    [ "$status" -eq 0 ]
+    [ -f "$dest" ]
+    [ ! -e "$TEST_DIR/out/lib" ]
+}
+
 # ---- install_from_source ----
 
 @test "install_from_source copies binary" {
@@ -172,6 +185,14 @@ has_persistent_install() { return 1; }
     release_url_reachable() { return 1; }
 
     run ensure_source_binary_current
+
+    [ "$status" -ne 0 ]
+}
+
+@test "check_tmp_space uses explicit required size when provided" {
+    tmp_available_kb() { echo 150; }
+
+    run check_tmp_space 200
 
     [ "$status" -ne 0 ]
 }

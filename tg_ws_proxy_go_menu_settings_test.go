@@ -15,7 +15,7 @@ func TestManagerConfigureDCIPMappingViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n12\n203:91.105.192.100, 2:149.154.167.220\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n12\n203:"+testIPv4DC203+", 2:"+testIPv4DC2+"\n\n\n")
 	if err != nil {
 		t.Fatalf("configure dc mapping failed: %v\n%s", err, out)
 	}
@@ -24,13 +24,13 @@ func TestManagerConfigureDCIPMappingViaAdvancedMenu(t *testing.T) {
 	}
 
 	config := readTrimmed(t, configPath)
-	if !strings.Contains(config, "DC_IPS='203:91.105.192.100, 2:149.154.167.220'") {
+	if !strings.Contains(config, "DC_IPS='203:"+testIPv4DC203+", 2:"+testIPv4DC2+"'") {
 		t.Fatalf("expected dc mapping to be persisted, got:\n%s", config)
 	}
 }
 
 func TestManagerConfigureDCIPMappingCanResetToDefaults(t *testing.T) {
-	env := append(managerEnv(t), "DC_IPS=203:91.105.192.100")
+	env := append(managerEnv(t), "DC_IPS=203:"+testIPv4DC203)
 	configPath := envValue(env, "PERSIST_CONFIG_FILE")
 	if configPath == "" {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
@@ -61,11 +61,11 @@ func TestManagerCFDomainPersistedViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n9\nexample.com\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n9\n1\nexample.com\n\n\n")
 	if err != nil {
 		t.Fatalf("configure cf domain failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Cloudflare domain saved") {
+	if !strings.Contains(out, "Custom Cloudflare domains saved") {
 		t.Fatalf("expected success message, got:\n%s", out)
 	}
 
@@ -118,7 +118,7 @@ func TestManagerCFSettingsShownInTelegramSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("show settings failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "cf proxy : on") || !strings.Contains(out, "cf order : fallback") || !strings.Contains(out, "cf domain: example.com") {
+	if !strings.Contains(out, "cf proxy : on") || !strings.Contains(out, "cf order : fallback") || !strings.Contains(out, "cf mode  : balance") || !strings.Contains(out, "cf domain: example.com") {
 		t.Fatalf("expected cf settings in telegram screen, got:\n%s", out)
 	}
 }
@@ -136,6 +136,9 @@ func TestManagerCFSettingsShownInSummary(t *testing.T) {
 	if !strings.Contains(out, "fallback") {
 		t.Fatalf("expected CF order in main menu summary, got:\n%s", out)
 	}
+	if !strings.Contains(out, "balance") || !strings.Contains(out, "8 built-in") {
+		t.Fatalf("expected built-in CF pool in main menu summary, got:\n%s", out)
+	}
 }
 
 func TestManagerCFDomainClearViaAdvancedMenu(t *testing.T) {
@@ -145,11 +148,11 @@ func TestManagerCFDomainClearViaAdvancedMenu(t *testing.T) {
 		t.Fatal("PERSIST_CONFIG_FILE not found in env")
 	}
 
-	out, err := runManagerMenu(t, env, "4\n9\nclear\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n9\n3\n\n\n")
 	if err != nil {
 		t.Fatalf("clear cf domain failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Cloudflare domain cleared") {
+	if !strings.Contains(out, "Custom Cloudflare domains cleared; using the built-in pool") {
 		t.Fatalf("expected cleared confirmation, got:\n%s", out)
 	}
 
@@ -172,7 +175,7 @@ func TestManagerCFSettingsLoadedFromConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("telegram command failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "cf proxy : on") || !strings.Contains(out, "cf order : fallback") || !strings.Contains(out, "saved.example.com") {
+	if !strings.Contains(out, "cf proxy : on") || !strings.Contains(out, "cf order : fallback") || !strings.Contains(out, "cf mode  : balance") || !strings.Contains(out, "saved.example.com") {
 		t.Fatalf("expected cf settings loaded from config, got:\n%s", out)
 	}
 }
@@ -184,15 +187,18 @@ func TestManagerCheckCFDomainViaAdvancedMenu(t *testing.T) {
 	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
 	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
 
-	out, err := runManagerMenu(t, env, "4\n10\n\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n10\n1\n\n\n")
 	if err != nil {
 		t.Fatalf("check cf domain failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Checking example.com") ||
-		!strings.Contains(out, "kws1.example.com") ||
-		!strings.Contains(out, "kws203.example.com") ||
+	if !strings.Contains(out, "your own domains") ||
+		!strings.Contains(out, "Checking Cloudflare websocket endpoints") ||
+		!strings.Contains(out, "domain") ||
+		!strings.Contains(out, "kws203") ||
+		!strings.Contains(out, "example.com") ||
 		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") ||
-		!strings.Contains(out, "tcp ok | tls ok | ws upgrade ok") {
+		!strings.Contains(out, "tls/ws ok") ||
+		!strings.Contains(out, "6/6 ok") {
 		t.Fatalf("unexpected cf domain check output:\n%s", out)
 	}
 }
@@ -219,16 +225,122 @@ func TestManagerCheckCFDomainViaCurlFallback(t *testing.T) {
 	}
 	env = setEnvValue(env, "PATH", fakeBinDir+":"+strings.Join(filteredDirs, ":"))
 
-	out, err := runManagerMenu(t, env, "4\n10\n\n\n\n")
+	out, err := runManagerMenu(t, env, "4\n10\n1\n\n\n")
 	if err != nil {
 		t.Fatalf("check cf domain (curl fallback) failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "Checking example.com") ||
-		!strings.Contains(out, "kws1.example.com") ||
-		!strings.Contains(out, "kws203.example.com") ||
+	if !strings.Contains(out, "your own domains") ||
+		!strings.Contains(out, "Checking Cloudflare websocket endpoints") ||
+		!strings.Contains(out, "domain") ||
+		!strings.Contains(out, "kws203") ||
+		!strings.Contains(out, "example.com") ||
 		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") ||
-		!strings.Contains(out, "tcp ok | tls ok | ws upgrade ok") {
+		!strings.Contains(out, "tls/ws ok") ||
+		!strings.Contains(out, "6/6 ok") {
 		t.Fatalf("unexpected cf domain check output (curl fallback):\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainSplitsCommaSeparatedDomains(t *testing.T) {
+	env := append(managerEnv(t), "CF_DOMAIN=one.example.com,two.example.com")
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
+
+	out, err := runManagerMenu(t, env, "4\n10\n1\n\n\n")
+	if err != nil {
+		t.Fatalf("check cf domain with csv failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "your own domains") ||
+		!strings.Contains(out, "one.example.com") ||
+		!strings.Contains(out, "two.example.com") ||
+		strings.Contains(out, "kws1.one.example.com,two.example.com") ||
+		!strings.Contains(out, "Cloudflare proxy: all tested hosts support websocket upgrade") {
+		t.Fatalf("unexpected csv cf domain check output:\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainCanUseBuiltInPool(t *testing.T) {
+	env := managerEnv(t)
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
+
+	out, err := runManagerMenu(t, env, "4\n10\n1\n\n\n")
+	if err != nil {
+		t.Fatalf("check built-in cf domains failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "source: built-in") ||
+		!strings.Contains(out, "current: built-in") ||
+		!strings.Contains(out, "kws1.<built-in>") ||
+		strings.Contains(out, "pclead.co.uk") ||
+		strings.Contains(out, "kartoshka.co.uk") ||
+		!strings.Contains(out, "Domains: all 8 alive") {
+		t.Fatalf("unexpected built-in cf domain check output:\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainCanUseManualDomains(t *testing.T) {
+	env := managerEnv(t)
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
+
+	out, err := runManagerMenu(t, env, "4\n10\n2\nmanual-one.example.com, manual-two.example.com\n\n\n")
+	if err != nil {
+		t.Fatalf("check manual cf domains failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "source: manual") ||
+		!strings.Contains(out, "manual-one.example.com") ||
+		!strings.Contains(out, "manual-two.example.com") ||
+		strings.Contains(out, "kws1.manual-one.example.com, manual-two.example.com") ||
+		!strings.Contains(out, "Domains: all 2 alive") {
+		t.Fatalf("unexpected manual cf domain check output:\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainCanGoBack(t *testing.T) {
+	env := managerEnv(t)
+
+	out, err := runManagerMenu(t, env, "4\n10\n3\n\n\n")
+	if err != nil {
+		t.Fatalf("check cf domain back failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "Check Cloudflare domain") || !strings.Contains(out, "Advanced") {
+		t.Fatalf("expected back flow in cf domain check, got:\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainCanUseBuiltInPoolWhenCustomDomainsExist(t *testing.T) {
+	env := append(managerEnv(t), "CF_DOMAIN=example.com")
+
+	fakeBinDir := t.TempDir()
+	writeFile(t, filepath.Join(fakeBinDir, "openssl"), "#!/bin/sh\nprintf 'HTTP/1.1 101 Switching Protocols\\r\\n\\r\\n'\n", 0o755)
+	env = setEnvValue(env, "PATH", fakeBinDir+":"+envValue(env, "PATH"))
+
+	out, err := runManagerMenu(t, env, "4\n10\n2\n\n\n")
+	if err != nil {
+		t.Fatalf("check built-in cf domains with custom set failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "current: your own domains") ||
+		!strings.Contains(out, "source: built-in") ||
+		!strings.Contains(out, "kws1.<built-in>") {
+		t.Fatalf("unexpected built-in selection when custom domains exist:\n%s", out)
+	}
+}
+
+func TestManagerCheckCFDomainCanGoBackWhenCustomDomainsExist(t *testing.T) {
+	env := append(managerEnv(t), "CF_DOMAIN=example.com")
+
+	out, err := runManagerMenu(t, env, "4\n10\n4\n\n\n")
+	if err != nil {
+		t.Fatalf("check cf domain back with custom domains failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "your own domains") || !strings.Contains(out, "Advanced") {
+		t.Fatalf("expected back flow with custom domains, got:\n%s", out)
 	}
 }
 

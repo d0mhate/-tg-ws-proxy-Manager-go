@@ -12,11 +12,11 @@ func TestAggLoggerFlushStopsPendingTimerAndPrintsImmediately(t *testing.T) {
 	var buf bytes.Buffer
 	agg := newAggLogger(log.New(&buf, "", 0), time.Second)
 
-	agg.Printf("mtproto: route cooldown active dc=%d target-dc=%d via %s", 2, 2, "149.154.167.220")
+	agg.Printf("mtproto: route cooldown active dc=%d target-dc=%d via %s", 2, 2, testIPv4DC2)
 	agg.Flush()
 
 	got := strings.TrimSpace(buf.String())
-	want := "mtproto: route cooldown active dc=2 target-dc=2 via 149.154.167.220"
+	want := "mtproto: route cooldown active dc=2 target-dc=2 via " + testIPv4DC2
 	if got != want {
 		t.Fatalf("unexpected flush output: got %q want %q", got, want)
 	}

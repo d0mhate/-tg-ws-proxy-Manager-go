@@ -1,3 +1,4 @@
+#!/bin/sh
 # colors.sh
 
 if [ -t 1 ]; then

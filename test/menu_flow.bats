@@ -38,11 +38,35 @@ setup() {
 @test "advanced_menu routes remove binary action" {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
+        confirm_yn() { return 0; }
         advanced_menu >/dev/null <<< "18"
     '
 
     [ "$status" -eq 0 ]
     [ -f "$BATS_TEST_TMPDIR/remove_all_called" ]
+}
+
+@test "advanced_menu returns session-close code after full remove" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        confirm_yn() { return 0; }
+        TEST_REMOVE_ALL_STATUS="20"
+        advanced_menu >/dev/null <<< "18"
+    '
+
+    [ "$status" -eq 20 ]
+    [ -f "$BATS_TEST_TMPDIR/remove_all_called" ]
+}
+
+@test "advanced_menu does not remove binary when user declines" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        confirm_yn() { return 1; }
+        advanced_menu >/dev/null <<< "18\n"
+    '
+
+    [ "$status" -eq 0 ]
+    [ ! -f "$BATS_TEST_TMPDIR/remove_all_called" ]
 }
 
 @test "menu runs update when setup selected and confirmed" {
@@ -124,4 +148,14 @@ setup() {
 
     [ "$status" -eq 0 ]
     [ -f "$BATS_TEST_TMPDIR/advanced_menu_called" ]
+}
+
+@test "menu exits cleanly after full remove" {
+    run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
+        source ./test/helpers/menu_fixture.sh
+        advanced_menu() { return 20; }
+        menu >/dev/null <<< "4"
+    '
+
+    [ "$status" -eq 0 ]
 }

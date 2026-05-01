@@ -31,7 +31,7 @@ Telegram app / Telegram Desktop
 > берет на себя ответственность за состояние роутера или сети.
 
 | | Python manager | This port |
-|---|---|---|
+| --- | --- | --- |
 | Runtime | нужен Python | один статический бинарник |
 | Размер | зависит от Python-пакетов | OpenWrt binary около `5 MB` |
 | OpenWrt | больше места и зависимостей | скачать и запустить |
@@ -54,6 +54,10 @@ wget -O /tmp/tg-ws-proxy-go.sh https://github.com/d0mhate/-tg-ws-proxy-Manager-g
 2. `Start proxy` -> выбрать `t` для запуска в терминале или `b` для фона
 3. `Enable autostart`, если нужен запуск после перезагрузки
 
+После `Setup / Update` меню покажет предупреждение. Это нормально: нужно выйти
+из текущей menu-сессии и снова запустить `tgm`, чтобы менеджер работал уже на
+обновленном script state.
+
 Скрипт создает короткую команду `tgm`. Через нее можно снова открыть меню или
 выполнить команды вроде `tgm stop`, `tgm status`, `tgm remove`.
 
@@ -73,6 +77,10 @@ sh /tmp/tg-ws-proxy-go.sh start-background
 
 Готовые бинарники лежат в [Releases](../../releases). Меню-скрипт сам выбирает
 подходящий asset по архитектуре роутера.
+
+Для обычных release manager script дополнительно сверяет SHA256 скачанного
+бинарника с digest из GitHub release API. Для preview-веток эта проверка не
+выполняется.
 
 ![OpenWrt](https://img.shields.io/badge/OpenWrt-mipsel__24kc%20%7C%20mips__24kc%20%7C%20armv7%20%7C%20aarch64%20%7C%20x86__64-blue)
 ![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20aarch64%20%7C%20armv7%20%7C%20armv6%20%7C%20386%20%7C%20riscv64%20%7C%20loong64-orange)
@@ -108,7 +116,7 @@ sh /tmp/tg-ws-proxy-go.sh start-background
 Если прокси запущен на роутере, в Telegram укажите:
 
 | Field | Value |
-|---|---|
+| --- | --- |
 | Type | `SOCKS5` |
 | Host | IP роутера |
 | Port | `1080` |
@@ -124,12 +132,12 @@ SOCKS5 auth включается в меню: `Advanced -> SOCKS5 auth`.
 MTProto включается через меню:
 
 1. `Advanced`
-2. `18) Mode` -> `mtproto`
-3. `19) Secret` -> сгенерировать secret или вставить свой
-4. `14) Public IP` -> указать публичный IP сервера
+2. `19) Mode` -> `mtproto`
+3. `20) Secret` -> сгенерировать secret или вставить свой
+4. `15) Public IP` -> указать публичный IP сервера
 
 После этого меню покажет готовую ссылку `tg://proxy?...`. Ее можно открыть в
-Telegram или вывести QR-код через `15) Show QR code`.
+Telegram или вывести QR-код через `16) Show QR code`.
 
 ## Usage
 
@@ -140,11 +148,10 @@ Telegram или вывести QR-код через `15) Show QR code`.
 ```
 
 | Flag | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `--mode <socks5\|mtproto>` | `socks5` | Режим работы прокси |
 | `--host <IP>` | `127.0.0.1` | Адрес, на котором слушает сервер |
 | `--port <PORT>` | `1080` | Порт, на котором слушает сервер |
-| `--pprof-addr <ADDR>` | пусто | Включить `pprof` HTTP endpoint, например `127.0.0.1:6060` |
 | `--username <NAME>` | пусто | Логин для SOCKS5 auth |
 | `--password <PASS>` | пусто | Пароль для SOCKS5 auth |
 | `--verbose` | `off` | Подробные логи |
@@ -177,9 +184,6 @@ Telegram или вывести QR-код через `15) Show QR code`.
 
 # SOCKS5 с Cloudflare route
 ./tg-ws-proxy --mode socks5 --cf-proxy --cf-domain yourdomain.com
-
-# Включить pprof на localhost:6060
-./tg-ws-proxy --mode socks5 --pprof-addr 127.0.0.1:6060
 
 # MTProto
 ./tg-ws-proxy --mode mtproto --secret dda1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4 --port 1080 --link-ip 1.2.3.4
@@ -233,14 +237,14 @@ Advanced:
 - `Quick commands` - готовые команды для скрипта
 - `Toggle verbose` - подробные логи
 - `Restart proxy` - перезапуск с текущими настройками
-- `Toggle proxy` / `Toggle order` - Cloudflare route и порядок попыток
-- `Set domain` / `Check domain` - домен Cloudflare и проверка `kws1..kws5`, `kws203`
+- `Toggle proxy` / `Toggle order` / `Toggle balance` - Cloudflare route, порядок попыток и балансировка
+- `Set domain` / `Check domain` - built-in или свои Cloudflare домены и проверка `kws1..kws5`, `kws203`
 - `SOCKS5 auth` - логин и пароль
 - `DC mapping` - ручная карта `DC:IP`
 - `Port` / `Pool size` / `Public IP` - порт, пул соединений, IP для ссылки
 - `Show QR code` - QR-код для подключения
 - `Update source` - `release/latest`, конкретный тег или preview-ветка
-- `Remove binary` - удаление установки
+- `Remove binary` - удаление установки с подтверждением
 - `Mode` / `Secret` / `Upstream proxies` - MTProto-режим
 
 ### Как переключиться на тестовую ветку
@@ -251,7 +255,7 @@ Advanced:
 2. Перейдите в `Advanced`
 3. Выберите `Update source`
 4. Выберите режим `preview`
-5. Укажите имя тестовой ветки, например `dev` или другую ветку, которую вам дали
+5. Выберите ветку из списка или введите имя вручную
 6. После сохранения вернитесь в главное меню и запустите `Setup / Update`
 
 После этого менеджер будет обновляться из выбранной preview-ветки, а не из обычных release-тегов.
@@ -260,15 +264,23 @@ Advanced:
 
 1. Снова откройте `Advanced -> Update source`
 2. Выберите режим `release`
-3. Оставьте `latest` или укажите конкретный тег
+3. Оставьте `latest`, выберите тег из списка или введите его вручную
 4. Запустите `Setup / Update`
 
 Если у вас уже включен автозапуск, источник обновлений тоже будет сохранён.
 
+Текущий UX `Update source`:
+
+- на первом экране доступны `release`, `preview` и `back`
+- пустой Enter на первом экране делает `back`
+- для `release` показывается `latest`, список недавних тегов и ручной ввод
+- для `preview` показывается список доступных preview-веток и ручной ввод
+
 ## Cloudflare Proxy
 
 Cloudflare route нужен, если прямой путь до Telegram нестабилен.
-Для работы нужен свой домен с поддержкой WebSocket.
+Можно использовать built-in пул доменов или указать свои домены с поддержкой
+WebSocket.
 
 Полная инструкция по настройке домена: [CF-proxy](https://github.com/Flowseal/tg-ws-proxy/blob/main/docs/CfProxy.md)
 
@@ -276,22 +288,42 @@ Cloudflare route нужен, если прямой путь до Telegram нес
 
 1. `Advanced`
 2. `6) Toggle proxy` -> включить Cloudflare route
-3. `8) Set domain` -> указать домен или список доменов через запятую
-4. `9) Check domain` -> проверить доступность `kws1..kws5` и `kws203`
+3. `8) Toggle balance` -> включить или выключить round-robin между несколькими доменами
+4. `9) Set domain` -> оставить built-in пул или указать свои домены через запятую
+5. `10) Check domain` -> проверить built-in, свои или вручную введенные домены
+
+Пункты `9` и `10` в `Advanced` были переработаны:
+
+- `9) Set domain` теперь работает через numbered menu:
+  - `enter your own domains`
+  - `keep current`
+  - `use built-in domains`, если свои домены уже заданы
+  - `back`
+- `10) Check domain` теперь тоже работает через numbered menu:
+  - `your own domains`, если они заданы
+  - `built-in domains`
+  - `enter domains manually`
+  - `back`
+
+Пустой Enter в этих экранах теперь по умолчанию делает `back`, а не сохраняет
+что-то неявно.
 
 Порядок маршрутов:
 
 | Order | Meaning |
-|---|---|
+| --- | --- |
 | `fallback` | сначала direct route, потом Cloudflare |
 | `first` | сначала Cloudflare, потом direct route |
 
 Через переменные окружения:
 
 ```bash
+CF_PROXY=1 CF_DOMAIN='' tgm start
 CF_PROXY=1 CF_DOMAIN=yourdomain.com tgm start
 CF_PROXY=1 CF_PROXY_FIRST=1 CF_DOMAIN=yourdomain.com tgm start
 ```
+
+Для manager script `CF_BALANCE=1` используется по умолчанию.
 
 Прямой запуск бинарника:
 
@@ -310,12 +342,12 @@ SOCKS5.
 В меню:
 
 1. `Advanced`
-2. `18) Mode` -> `mtproto`
-3. `19) Secret` -> сгенерировать secret или вставить свой
-4. `14) Public IP` -> указать IP для ссылки подключения
+2. `19) Mode` -> `mtproto`
+3. `20) Secret` -> сгенерировать secret или вставить свой
+4. `15) Public IP` -> указать IP для ссылки подключения
 
 После этого прокси покажет `tg://proxy?...` ссылку. Ее можно открыть в Telegram
-или вывести QR-код через `15) Show QR code`.
+или вывести QR-код через `16) Show QR code`.
 
 Через переменные окружения:
 
@@ -366,6 +398,11 @@ tgm remove
 ```
 
 Или через меню: `Advanced -> Remove binary`.
+
+После удаления текущая menu-сессия закрывается, потому что manager script уже
+удален с диска.
+
+Перед удалением меню просит подтверждение.
 
 Команда останавливает прокси, отключает автозапуск и удаляет:
 

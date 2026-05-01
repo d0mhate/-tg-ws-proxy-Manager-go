@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
 	"os"
@@ -402,9 +404,13 @@ func TestManagerUpdateUsesPersistedPreviewBranch(t *testing.T) {
 	writeFile(t, sourceBin, "#!/bin/sh\necho stale\n", 0o755)
 	writeFile(t, updateChannelPath, "preview\n", 0o644)
 	writeFile(t, previewBranchPath, "feature/auth-flow\n", 0o644)
+	wrongDigest := sha256.Sum256([]byte("release-binary-from-another-source"))
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/release.json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte("{\"tag_name\":\"v9.9.9\",\"assets\":[{\"name\":\"tg-ws-proxy-openwrt-mipsel_24kc\",\"digest\":\"sha256:" + hex.EncodeToString(wrongDigest[:]) + "\"}]}\n"))
 		case "/preview/feature/auth-flow/tg-ws-proxy-openwrt-mipsel_24kc":
 			_, _ = w.Write([]byte("#!/bin/sh\necho preview-asset\n"))
 		case "/preview/feature/auth-flow/tg-ws-proxy-go.sh":
@@ -432,7 +438,10 @@ func TestManagerUpdateUsesPersistedPreviewBranch(t *testing.T) {
 	serverURL := "http://" + listener.Addr().String()
 
 	env = unsetEnvValue(env, "RELEASE_URL")
-	env = append(env, "PREVIEW_BASE_URL="+serverURL+"/preview")
+	env = append(env,
+		"PREVIEW_BASE_URL="+serverURL+"/preview",
+		"RELEASE_API_URL="+serverURL+"/release.json",
+	)
 
 	out, err := runManager(t, env, "update")
 	if err != nil {

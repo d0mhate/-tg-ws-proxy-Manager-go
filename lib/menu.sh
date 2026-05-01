@@ -1,3 +1,4 @@
+#!/bin/sh
 # menu.sh
 
 can_use_arrow_update_source_picker() {
@@ -19,6 +20,23 @@ can_use_numbered_update_source_picker() {
     [ -t 0 ] || return 1
     [ -t 2 ] || return 1
     [ "${TERM:-}" != "dumb" ] || return 1
+}
+
+MENU_TTY_RESTORE_STATE=""
+
+arm_tty_restore_trap() {
+    MENU_TTY_RESTORE_STATE="$1"
+    [ -n "$MENU_TTY_RESTORE_STATE" ] || return 0
+    [ "$MENU_TTY_RESTORE_STATE" = "forced" ] && return 0
+    trap 'if [ -n "${MENU_TTY_RESTORE_STATE:-}" ]; then stty "$MENU_TTY_RESTORE_STATE" 2>/dev/null || true; fi' INT TERM EXIT
+}
+
+disarm_tty_restore_trap() {
+    if [ -n "${MENU_TTY_RESTORE_STATE:-}" ] && [ "$MENU_TTY_RESTORE_STATE" != "forced" ]; then
+        stty "$MENU_TTY_RESTORE_STATE" 2>/dev/null || true
+    fi
+    MENU_TTY_RESTORE_STATE=""
+    trap - INT TERM EXIT
 }
 
 confirm_yn() {
@@ -72,18 +90,19 @@ choose_update_source_mode_numbered() {
     printf "Mode:\n" >&2
     printf "  1) release\n" >&2
     printf "  2) preview\n" >&2
-    printf "Select mode [1-2] (Enter for %s): " "$current" >&2
+    printf "  3) back\n" >&2
+    printf "Select mode [1-3] (Enter for back): " >&2
     IFS= read -r selected_mode
 
     case "$selected_mode" in
-        "")
-            selected_mode="$current"
-            ;;
         1|release)
             selected_mode="release"
             ;;
         2|preview)
             selected_mode="preview"
+            ;;
+        ""|3|back)
+            selected_mode="back"
             ;;
     esac
 
@@ -224,70 +243,16 @@ choose_release_ref() {
 choose_update_source_mode() {
     current="${1:-release}"
 
-    if can_use_arrow_update_source_picker; then
-        :
-    elif can_use_numbered_update_source_picker; then
+    if can_use_numbered_update_source_picker; then
         choose_update_source_mode_numbered "$current"
         return 0
     else
-        printf "Mode [release/preview] (Enter for %s): " "$current" >&2
+        printf "Mode [release/preview/back] (Enter for back): " >&2
         IFS= read -r selected_mode
-        if [ -z "$selected_mode" ]; then
-            selected_mode="$current"
-        fi
+        [ -n "$selected_mode" ] || selected_mode="back"
         printf "%s" "$selected_mode"
         return 0
     fi
-
-    restore_stty=""
-    if [ -z "$FORCE_ARROW_UPDATE_SOURCE_PICKER" ]; then
-        restore_stty="$(stty -g 2>/dev/null || true)"
-        if [ -z "$restore_stty" ]; then
-            printf "Mode [release/preview] (Enter for %s): " "$current" >&2
-            IFS= read -r selected_mode
-            if [ -z "$selected_mode" ]; then
-                selected_mode="$current"
-            fi
-            printf "%s" "$selected_mode"
-            return 0
-        fi
-        stty -echo -icanon min 1 time 0 2>/dev/null || true
-    fi
-
-    redraw="0"
-    while true; do
-        if [ "$redraw" = "1" ]; then
-            printf '\033[3A\033[J' >&2
-        fi
-        draw_update_source_picker "$current"
-        redraw="1"
-
-        first_hex="$(read_picker_hex_byte)"
-        case "$first_hex" in
-            0a|0d)
-                break
-                ;;
-            1b)
-                second_hex="$(read_picker_hex_byte)"
-                third_hex="$(read_picker_hex_byte)"
-                case "$second_hex$third_hex" in
-                    5b41|5b44)
-                        current="release"
-                        ;;
-                    5b42|5b43)
-                        current="preview"
-                        ;;
-                esac
-                ;;
-        esac
-    done
-
-    if [ -n "$restore_stty" ]; then
-        stty "$restore_stty" 2>/dev/null || true
-    fi
-
-    printf "\n" >&2
-    printf "%s" "$current"
 }
 
 configure_proxy_mode() {
@@ -360,6 +325,7 @@ configure_mt_secret() {
             restore_stty="$(stty -g 2>/dev/null || true)"
             if [ -n "$restore_stty" ]; then
                 stty -echo -icanon min 1 time 0 2>/dev/null || true
+                arm_tty_restore_trap "$restore_stty"
             fi
         else
             restore_stty="forced"
@@ -401,7 +367,7 @@ configure_mt_secret() {
                 esac
             done
             if [ "$restore_stty" != "forced" ]; then
-                stty "$restore_stty" 2>/dev/null || true
+                disarm_tty_restore_trap
             fi
             printf "\n" >&2
         fi
@@ -895,6 +861,126 @@ configure_dc_ip_mapping() {
     pause
 }
 
+choose_preview_branch_numbered() {
+    _cpbn_current="${1:-}"
+    _cpbn_branches="$(list_preview_branches 20 2>/dev/null || true)"
+
+    if [ -n "$_cpbn_current" ] && ! printf "%s\n" "$_cpbn_branches" | grep -Fx "$_cpbn_current" >/dev/null 2>&1; then
+        if [ -n "$_cpbn_branches" ]; then
+            _cpbn_branches="$(printf '%s\n%s' "$_cpbn_current" "$_cpbn_branches")"
+        else
+            _cpbn_branches="$_cpbn_current"
+        fi
+    fi
+
+    if [ -z "$_cpbn_branches" ]; then
+        if [ -n "$_cpbn_current" ]; then
+            printf "Preview branch (Enter to keep %s): " "$_cpbn_current" >&2
+        else
+            printf "Preview branch (for example: preview-channel): " >&2
+        fi
+        IFS= read -r _cpbn_typed
+        if [ -z "$_cpbn_typed" ]; then
+            if [ -n "$_cpbn_current" ]; then
+                printf "%s" "$_cpbn_current"
+                return 0
+            fi
+            printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+            return 1
+        fi
+        printf "%s" "$_cpbn_typed"
+        return 0
+    fi
+
+    printf "Preview branch:\n" >&2
+    _cpbn_count=0
+    _cpbn_old_ifs="$IFS"
+    IFS='
+'
+    for _cpbn_b in $_cpbn_branches; do
+        [ -n "$_cpbn_b" ] || continue
+        _cpbn_count=$((_cpbn_count + 1))
+        printf "  %s) %s\n" "$_cpbn_count" "$_cpbn_b" >&2
+    done
+    IFS="$_cpbn_old_ifs"
+
+    _cpbn_manual=$((_cpbn_count + 1))
+    printf "  %s) enter branch manually\n" "$_cpbn_manual" >&2
+    if [ -n "$_cpbn_current" ]; then
+        printf "Select branch [1-%s] (Enter for %s): " "$_cpbn_manual" "$_cpbn_current" >&2
+    else
+        printf "Select branch [1-%s]: " "$_cpbn_manual" >&2
+    fi
+    IFS= read -r _cpbn_sel
+
+    case "$_cpbn_sel" in
+        "")
+            if [ -n "$_cpbn_current" ]; then
+                printf "%s" "$_cpbn_current"
+                return 0
+            fi
+            printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+            return 1
+            ;;
+        "$_cpbn_manual"|m|M|manual)
+            if [ -n "$_cpbn_current" ]; then
+                printf "Preview branch (Enter to keep %s): " "$_cpbn_current" >&2
+            else
+                printf "Preview branch: " >&2
+            fi
+            IFS= read -r _cpbn_typed
+            if [ -z "$_cpbn_typed" ]; then
+                if [ -n "$_cpbn_current" ]; then
+                    printf "%s" "$_cpbn_current"
+                    return 0
+                fi
+                printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+                return 1
+            fi
+            printf "%s" "$_cpbn_typed"
+            return 0
+            ;;
+        *[!0-9]*)
+            printf "%s" "$_cpbn_sel"
+            return 0
+            ;;
+    esac
+
+    _cpbn_chosen="$(printf "%s\n" "$_cpbn_branches" | sed -n "${_cpbn_sel}p" 2>/dev/null || true)"
+    if [ -z "$_cpbn_chosen" ]; then
+        printf "\n%sUnknown branch selection%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+    printf "%s" "$_cpbn_chosen"
+    return 0
+}
+
+choose_preview_branch() {
+    _cpb_current="${1:-}"
+
+    if can_use_numbered_update_source_picker; then
+        choose_preview_branch_numbered "$_cpb_current"
+        return $?
+    fi
+
+    if [ -n "$_cpb_current" ]; then
+        printf "Preview branch (Enter to keep %s): " "$_cpb_current" >&2
+    else
+        printf "Preview branch (for example: preview-channel): " >&2
+    fi
+    IFS= read -r _cpb_typed
+    if [ -z "$_cpb_typed" ]; then
+        if [ -n "$_cpb_current" ]; then
+            printf "%s" "$_cpb_current"
+            return 0
+        fi
+        printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+        return 1
+    fi
+    printf "%s" "$_cpb_typed"
+    return 0
+}
+
 configure_update_source() {
     show_header
     show_update_source_settings
@@ -902,6 +988,9 @@ configure_update_source() {
     new_channel="$(choose_update_source_mode "$(selected_update_channel 2>/dev/null || printf release)")"
 
     case "$new_channel" in
+        back)
+            return 0
+            ;;
         release)
             new_ref="$(choose_release_ref "$(selected_update_ref 2>/dev/null || printf latest)")" || {
                 pause
@@ -920,21 +1009,10 @@ configure_update_source() {
             ;;
         preview)
             current_preview_branch="$(selected_preview_branch_value 2>/dev/null || true)"
-            if [ -n "$current_preview_branch" ]; then
-                printf "Preview branch name (Enter to keep %s): " "$current_preview_branch"
-            else
-                printf "Preview branch name (for example: preview-channel): "
-            fi
-            IFS= read -r new_ref
-            if [ -z "$new_ref" ]; then
-                if [ -n "$current_preview_branch" ]; then
-                    new_ref="$current_preview_branch"
-                else
-                    printf "\n%sPreview branch cannot be empty%s\n" "$C_RED" "$C_RESET"
-                    pause
-                    return 1
-                fi
-            fi
+            new_ref="$(choose_preview_branch "$current_preview_branch")" || {
+                pause
+                return 1
+            }
 
             UPDATE_CHANNEL="preview"
             PREVIEW_BRANCH="$new_ref"
@@ -994,47 +1072,91 @@ toggle_cf_balance() {
 configure_cf_domain() {
     show_header
     printf "%sCloudflare proxy domain%s\n" "$C_BOLD" "$C_RESET"
-    if [ -z "$CF_DOMAIN" ]; then
-        printf "  current: not set\n"
+    _cf_custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -z "$_cf_custom_domains" ]; then
+        printf "  current: built-in\n"
+        _cf_has_custom="0"
     else
-        _cf_commas=$(printf '%s' "$CF_DOMAIN" | tr -cd ',' | wc -c | tr -d ' ')
-        if [ "$_cf_commas" -eq 0 ]; then
-            printf "  current: %s\n" "$CF_DOMAIN"
-        else
-            printf "  current: %s\n" "$CF_DOMAIN"
-        fi
+        printf "  current: %s\n" "$_cf_custom_domains"
+        _cf_has_custom="1"
     fi
+    printf "\nChoose what to do.\n"
+    printf "  1) enter your own domains\n"
+    printf "  2) keep current\n"
+    if [ "$_cf_has_custom" = "1" ]; then
+        printf "  3) use built-in domains\n"
+        printf "  4) back\n"
+        printf "Select [1-4] (Enter for 4): "
+    else
+        printf "  3) back\n"
+        printf "Select [1-3] (Enter for 3): "
+    fi
+    IFS= read -r _cf_action
+
+    if [ "$_cf_has_custom" = "1" ]; then
+        case "$_cf_action" in
+            3|builtin|built-in|clear)
+                CF_DOMAIN=""
+                write_settings_config || return 1
+                printf "\n%sCustom Cloudflare domains cleared; using the built-in pool%s\n" "$C_GREEN" "$C_RESET"
+                prompt_restart_proxy_for_updated_settings
+                pause
+                return 0
+                ;;
+            ""|4|back)
+                return 0
+                ;;
+            2|current|keep)
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+                ;;
+            1|enter|custom)
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
+    else
+        case "$_cf_action" in
+            ""|3|back)
+                return 0
+                ;;
+            2|current|keep)
+                printf "\nNo changes made.\n"
+                pause
+                return 0
+                ;;
+            1|enter|custom)
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
+    fi
+
     printf "\nEnter your Cloudflare domain(s), comma-separated (e.g. domain1.com,domain2.com).\n"
     printf "DNS records kws1..kws5 and kws203 must point to Telegram DC IPs.\n"
     if [ "$CF_PROXY" != "1" ]; then
         printf "%sWarning:%s CF proxy is currently off. Saving a domain does not enable CF routing.\n" "$C_YELLOW" "$C_RESET"
     fi
-    printf "Use 'clear' to remove the domain.\n"
-    printf "CF domain(s) (empty to keep current): "
+    printf "CF domain(s): "
     IFS= read -r new_cf_domain
 
-    if [ -z "$new_cf_domain" ]; then
-        printf "\nNo changes made.\n"
+    CF_DOMAIN="$(normalize_cf_domain_list "$new_cf_domain" 2>/dev/null || true)"
+    if [ -z "$CF_DOMAIN" ]; then
+        printf "\n%sNo valid Cloudflare domains provided%s\n" "$C_RED" "$C_RESET"
         pause
-        return 0
+        return 1
     fi
-
-    case "$new_cf_domain" in
-        clear|CLEAR|Clear)
-            CF_DOMAIN=""
-            write_settings_config || return 1
-            printf "\n%sCloudflare domain cleared%s\n" "$C_GREEN" "$C_RESET"
-            prompt_restart_proxy_for_updated_settings
-            pause
-            return 0
-            ;;
-    esac
-
-    CF_DOMAIN="$new_cf_domain"
     write_settings_config || return 1
-    printf "\n%sCloudflare domain saved%s\n" "$C_GREEN" "$C_RESET"
+    printf "\n%sCustom Cloudflare domains saved%s\n" "$C_GREEN" "$C_RESET"
     if [ "$CF_PROXY" != "1" ]; then
-        printf "%sWarning:%s domain saved, but CF route is disabled until you turn on CF proxy.\n" "$C_YELLOW" "$C_RESET"
+        printf "%sWarning:%s domains saved, but CF route is disabled until you turn on CF proxy.\n" "$C_YELLOW" "$C_RESET"
     fi
     prompt_restart_proxy_for_updated_settings
     pause
@@ -1042,6 +1164,7 @@ configure_cf_domain() {
 
 check_cf_endpoint() {
     host="$1"
+    CHECK_CF_ENDPOINT_STATUS=""
 
     if command -v openssl >/dev/null 2>&1; then
         if command -v timeout >/dev/null 2>&1; then
@@ -1070,7 +1193,7 @@ check_cf_endpoint() {
             -D - -o /dev/null \
             "https://$host/apiws" 2>/dev/null || true)"
     else
-        printf "  %-24s failed            openssl or curl not found\n" "$host"
+        CHECK_CF_ENDPOINT_STATUS="no tool"
         return 1
     fi
 
@@ -1078,88 +1201,372 @@ check_cf_endpoint() {
     if [ -n "$status_line" ]; then
         case "$status_line" in
             *"101 Switching Protocols"*)
-                printf "  %-24s tcp ok | tls ok | ws upgrade ok\n" "$host"
+                CHECK_CF_ENDPOINT_STATUS="tls/ws ok"
                 return 0
                 ;;
             *)
-                printf "  %-24s tcp ok | tls ok | ws upgrade failed\n" "$host"
+                CHECK_CF_ENDPOINT_STATUS="tls/ws fail"
                 return 1
                 ;;
         esac
     fi
 
     if printf "%s" "$output" | grep -E "CONNECTED|Verification: OK|SSL handshake has read|depth=" >/dev/null 2>&1; then
-        printf "  %-24s failed            no HTTP response after tcp/tls connect\n" "$host"
+        CHECK_CF_ENDPOINT_STATUS="tls/no http"
         return 1
     fi
 
-    printf "  %-24s failed            connection error\n" "$host"
+    CHECK_CF_ENDPOINT_STATUS="conn err"
     return 1
 }
 
 check_cf_domain() {
     show_header
     printf "%sCheck Cloudflare domain%s\n" "$C_BOLD" "$C_RESET"
-    if [ -z "$CF_DOMAIN" ]; then
-        printf "  current: not set\n"
+    _cf_custom_domains="$(custom_cf_domains 2>/dev/null || true)"
+    if [ -n "$_cf_custom_domains" ]; then
+        _cf_has_custom="1"
+        printf "  current: your own domains\n"
+        printf "  domains: %s\n" "$_cf_custom_domains"
     else
-        printf "  current: %s\n" "$CF_DOMAIN"
+        _cf_has_custom="0"
+        printf "  current: built-in\n"
     fi
-    printf "\nEnter domain to check or press Enter to use current.\n"
-    printf "Domain: "
-    IFS= read -r check_domain
+    printf "\nChoose domains to test.\n"
+    if [ "$_cf_has_custom" = "1" ]; then
+        printf "  1) your own domains\n"
+        printf "  2) built-in domains\n"
+        printf "  3) enter domains manually\n"
+        printf "  4) back\n"
+        printf "Select [1-4] (Enter for 4): "
+    else
+        printf "  1) built-in domains\n"
+        printf "  2) enter domains manually\n"
+        printf "  3) back\n"
+        printf "Select [1-3] (Enter for 3): "
+    fi
+    IFS= read -r _cf_choice
 
-    if [ -z "$check_domain" ]; then
-        check_domain="$CF_DOMAIN"
+    if [ "$_cf_has_custom" = "1" ]; then
+        case "$_cf_choice" in
+            1|custom|own)
+                check_domain="$_cf_custom_domains"
+                _cf_selected_label="your own"
+                ;;
+            2|builtin|built-in)
+                check_domain="$(cf_builtin_domains)"
+                _cf_selected_label="built-in"
+                ;;
+            3|manual)
+                printf "Domain(s): "
+                IFS= read -r check_domain
+                _cf_selected_label="manual"
+                ;;
+            ""|4|back)
+                return 0
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
+    else
+        case "$_cf_choice" in
+            1|builtin|built-in)
+                check_domain="$(cf_builtin_domains)"
+                _cf_selected_label="built-in"
+                ;;
+            2|manual)
+                printf "Domain(s): "
+                IFS= read -r check_domain
+                _cf_selected_label="manual"
+                ;;
+            ""|3|back)
+                return 0
+                ;;
+            *)
+                printf "\n%sUnknown selection%s\n" "$C_RED" "$C_RESET"
+                pause
+                return 1
+                ;;
+        esac
     fi
+
+    check_domain="$(normalize_cf_domain_list "$check_domain" 2>/dev/null || true)"
     if [ -z "$check_domain" ]; then
-        printf "\n%sNo Cloudflare domain set%s\n" "$C_RED" "$C_RESET"
+        printf "\n%sNo valid Cloudflare domains provided%s\n" "$C_RED" "$C_RESET"
         pause
         return 1
     fi
 
-    printf "\nChecking %s\n\n" "$check_domain"
-    printf "Requests:\n"
-    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
-        printf "  WS GET https://%s.%s/apiws\n" "$prefix" "$check_domain"
-    done
-    printf "\nResults:\n"
+    printf "\nChecking Cloudflare websocket endpoints\n\n"
     ok_count=0
-    ok_hosts=""
+    total_hosts=0
     _cf_interrupted=0
-    trap '_cf_interrupted=1' INT
-    for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
-        [ "$_cf_interrupted" = "0" ] || break
-        host="$prefix.$check_domain"
-        printf "  %-24s checking...\n" "$host"
-        if check_cf_endpoint "$host"; then
-            ok_count=$((ok_count + 1))
-            if [ -z "$ok_hosts" ]; then
-                ok_hosts="$host"
-            else
-                ok_hosts="$ok_hosts\\n$host"
-            fi
+    _cf_domains=""
+    _cf_old_ifs="$IFS"
+    IFS=','
+    for _cf_domain_raw in $check_domain; do
+        _cf_domain_trimmed="$(printf "%s" "$_cf_domain_raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -n "$_cf_domain_trimmed" ] || continue
+        if [ -z "$_cf_domains" ]; then
+            _cf_domains="$_cf_domain_trimmed"
+        else
+            _cf_domains="$_cf_domains
+$_cf_domain_trimmed"
         fi
     done
+    IFS="$_cf_old_ifs"
+
+    if [ -z "$_cf_domains" ]; then
+        printf "%sNo valid Cloudflare domains provided%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    _cf_col_w=6
+    _cf_domain_count=0
+    _cf_mask_builtin_labels=0
+    [ "$_cf_selected_label" = "built-in" ] && _cf_mask_builtin_labels=1
+    _cf_old_ifs="$IFS"
+    IFS='
+'
+    for _cf_domain_line in $_cf_domains; do
+        [ -n "$_cf_domain_line" ] || continue
+        if [ "$_cf_mask_builtin_labels" = "1" ]; then
+            _cf_label="built-in"
+        else
+            _cf_label="$_cf_domain_line"
+        fi
+        _cf_len=${#_cf_label}
+        [ "$_cf_len" -gt "$_cf_col_w" ] && _cf_col_w="$_cf_len"
+        _cf_domain_count=$((_cf_domain_count + 1))
+    done
+    IFS="$_cf_old_ifs"
+    _cf_total_endpoints=$((_cf_domain_count * 6))
+
+    printf "Domains:\n"
+    printf "  source: %s\n" "$_cf_selected_label"
+    if [ "$_cf_selected_label" = "built-in" ]; then
+        printf "  built-in\n"
+    else
+        _cf_old_ifs="$IFS"
+        IFS='
+'
+        for _cf_domain_line in $_cf_domains; do
+            [ -n "$_cf_domain_line" ] || continue
+            printf "  %s\n" "$_cf_domain_line"
+        done
+        IFS="$_cf_old_ifs"
+    fi
+    printf "\n"
+    printf "Testing %d endpoints sequentially...\n\n" "$_cf_total_endpoints"
+
+    _cf_results_file="/tmp/tg-ws-proxy-cf-check.$$"
+    if ! : > "$_cf_results_file" 2>/dev/null; then
+        printf "%sCould not create a temporary file for results%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
+    fi
+
+    trap '_cf_interrupted=1' INT
+    _cf_checked=0
+    _cf_old_ifs="$IFS"
+    IFS='
+'
+    for _cf_domain_name in $_cf_domains; do
+        [ -n "$_cf_domain_name" ] || continue
+        if [ "$_cf_mask_builtin_labels" = "1" ]; then
+            _cf_domain_label="built-in"
+            _cf_host_label="kws<built-in>"
+        else
+            _cf_domain_label="$_cf_domain_name"
+            _cf_host_label=""
+        fi
+        for prefix in kws1 kws2 kws3 kws4 kws5 kws203; do
+            if [ "$_cf_interrupted" = "1" ]; then
+                break
+            fi
+            _cf_host="$prefix.$_cf_domain_name"
+            if [ -n "$_cf_host_label" ]; then
+                _cf_display_host="$prefix.<built-in>"
+            else
+                _cf_display_host="$_cf_host"
+            fi
+            _cf_checked=$((_cf_checked + 1))
+            printf "  [%d/%d] %-32s checking...\r" "$_cf_checked" "$_cf_total_endpoints" "$_cf_display_host"
+            if check_cf_endpoint "$_cf_host"; then
+                _cf_result="ok"
+            else
+                _cf_result="fail"
+            fi
+            printf "  [%d/%d] %-32s %s\n" "$_cf_checked" "$_cf_total_endpoints" "$_cf_display_host" "$CHECK_CF_ENDPOINT_STATUS"
+            printf '%s|%s|%s|%s|%s\n' "$_cf_domain_name" "$_cf_domain_label" "$prefix" "$_cf_result" "$CHECK_CF_ENDPOINT_STATUS" >> "$_cf_results_file"
+        done
+        [ "$_cf_interrupted" = "0" ] || break
+    done
     trap - INT
+    IFS="$_cf_old_ifs"
 
     if [ "$_cf_interrupted" = "1" ]; then
+        rm -f "$_cf_results_file"
         printf "\nCancelled.\n"
         pause
         return 0
     fi
 
     printf "\n"
-    if [ "$ok_count" -eq 6 ]; then
-        printf "%sCloudflare proxy: all tested hosts support websocket upgrade%s\n" "$C_GREEN" "$C_RESET"
-    elif [ "$ok_count" -eq 0 ]; then
-        printf "%sCloudflare proxy: none of the tested hosts support websocket upgrade%s\n" "$C_RED" "$C_RESET"
-    else
-        printf "%sCloudflare proxy: partially works (%s/%s hosts passed websocket upgrade)%s\n" "$C_YELLOW" "$ok_count" "6" "$C_RESET"
+    awk -F'|' \
+        -v colw="$_cf_col_w" \
+        -v cgreen="$C_GREEN" \
+        -v cyellow="$C_YELLOW" \
+        -v cred="$C_RED" \
+        -v creset="$C_RESET" \
+        -v total_hosts="$_cf_total_endpoints" '
+function rpad(value, width,    out, need, i) {
+    out = value
+    need = width - length(value)
+    for (i = 0; i < need; i++) {
+        out = out " "
+    }
+    return out
+}
+BEGIN {
+    split("kws1 kws2 kws3 kws4 kws5 kws203", prefixes, " ")
+    domain_count = 0
+    ok_count = 0
+}
+{
+    key = $1 SUBSEP $3
+    display[$1] = $2
+    result[key] = $4
+    status[key] = $5
+    if (!seen[$1]++) {
+        order[++domain_count] = $1
+    }
+    if ($4 == "ok") {
+        row_ok[$1]++
+        ok_count++
+    }
+}
+END {
+    sep = ""
+    for (i = 0; i < colw; i++) {
+        sep = sep "-"
+    }
+
+    printf "%s | %-12s | %-12s | %-12s | %-12s | %-12s | %-12s | %-9s\n", \
+        rpad("domain", colw), "kws1", "kws2", "kws3", "kws4", "kws5", "kws203", "summary"
+    printf "%s-|-%s-|-%s-|-%s-|-%s-|-%s-|-%s-|-%s\n", \
+        sep, "------------", "------------", "------------", \
+        "------------", "------------", "------------", "---------"
+
+    domains_alive = 0
+    domains_dead = 0
+
+    for (i = 1; i <= domain_count; i++) {
+        d = order[i]
+        shown = display[d]
+        if (shown == "") {
+            shown = d
+        }
+        row = rpad(shown, colw) " "
+        row_pass = 0
+        for (j = 1; j <= 6; j++) {
+            p = prefixes[j]
+            key = d SUBSEP p
+            st = status[key]
+            if (st == "") {
+                st = "no data"
+            }
+            if (result[key] == "ok") {
+                color = cgreen
+                row_pass++
+            } else if (st == "tls/ws fail") {
+                color = cyellow
+            } else {
+                color = cred
+            }
+            row = row sprintf("| %s%-12s%s ", color, st, creset)
+        }
+        row = row sprintf("| %d/6 ok", row_pass)
+        print row
+        if (row_pass > 0) {
+            domains_alive++
+        } else {
+            domains_dead++
+        }
+    }
+
+    print ""
+    if (domain_count > 1) {
+        if (domains_dead == 0) {
+            printf "%sDomains: all %d alive%s\n", cgreen, domain_count, creset
+        } else if (domains_alive == 0) {
+            printf "%sDomains: all %d dead%s\n", cred, domain_count, creset
+        } else {
+            printf "%sDomains: %d/%d alive, %d dead%s\n", cyellow, domains_alive, domain_count, domains_dead, creset
+        }
+    }
+    if (ok_count == total_hosts) {
+        printf "%sCloudflare proxy: all tested hosts support websocket upgrade%s\n", cgreen, creset
+    } else if (ok_count == 0) {
+        printf "%sCloudflare proxy: none of the tested hosts support websocket upgrade%s\n", cred, creset
+    } else {
+        printf "%sCloudflare proxy: partially works (%d/%d hosts passed websocket upgrade)%s\n", cyellow, ok_count, total_hosts, creset
+    }
+}' "$_cf_results_file"
+    rm -f "$_cf_results_file"
+    pause
+}
+
+check_mt_upstream_proxies() {
+    show_header
+    printf "%sTest MTProto upstream proxies%s\n\n" "$C_BOLD" "$C_RESET"
+    _cmu_bin="$(runtime_bin_path 2>/dev/null || true)"
+    if [ ! -x "$_cmu_bin" ]; then
+        printf "%sProxy binary not found - cannot run test.%s\n" "$C_RED" "$C_RESET"
+        pause
+        return 1
     fi
-    if [ -n "$ok_hosts" ]; then
-        printf "Working hosts:\n"
-        printf "  %b\n" "$ok_hosts"
+    _cmu_ok=0
+    _cmu_total=0
+    _cmu_interrupted=0
+    trap '_cmu_interrupted=1' INT
+    _cmu_old_ifs="$IFS"
+    IFS=','
+    for _cmu_e in $MT_UPSTREAM_PROXIES; do
+        _cmu_e="$(printf "%s" "$_cmu_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+        [ -n "$_cmu_e" ] || continue
+        [ "$_cmu_interrupted" = "0" ] || break
+        _cmu_host="$(printf "%s" "$_cmu_e" | cut -d: -f1)"
+        _cmu_port="$(printf "%s" "$_cmu_e" | cut -d: -f2)"
+        _cmu_label="${_cmu_host}:${_cmu_port}"
+        _cmu_total=$((_cmu_total + 1))
+        printf "  %-28s checking...\r" "$_cmu_label"
+        _cmu_line="$("$_cmu_bin" probe-upstream "${_cmu_host}:${_cmu_port}" 2>/dev/null || true)"
+        _cmu_status="$(printf "%s" "$_cmu_line" | cut -d' ' -f2)"
+        _cmu_detail="$(printf "%s" "$_cmu_line" | cut -d' ' -f3)"
+        case "$_cmu_status" in
+            ok)
+                printf "  %-28s %stcp ok | %s%s\n" "$_cmu_label" "$C_GREEN" "$_cmu_detail" "$C_RESET"
+                _cmu_ok=$((_cmu_ok + 1))
+                ;;
+            fail)
+                printf "  %-28s %sfailed | %s%s\n" "$_cmu_label" "$C_RED" "$_cmu_detail" "$C_RESET"
+                ;;
+            *)
+                printf "  %-28s %sunknown error%s\n" "$_cmu_label" "$C_RED" "$C_RESET"
+                ;;
+        esac
+    done
+    IFS="$_cmu_old_ifs"
+    trap - INT
+    if [ "$_cmu_interrupted" = "1" ]; then
+        printf "\nCancelled.\n"
+    else
+        printf "\n%d of %d reachable.\n" "$_cmu_ok" "$_cmu_total"
     fi
     pause
 }
@@ -1179,7 +1586,10 @@ configure_mt_upstream_proxies() {
                 _up_e="$(printf "%s" "$_up_e" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
                 [ -n "$_up_e" ] || continue
                 _up_count=$((_up_count + 1))
-                printf "  %d. %s\n" "$_up_count" "$_up_e"
+                _up_host="$(printf "%s" "$_up_e" | cut -d: -f1)"
+                _up_port="$(printf "%s" "$_up_e" | cut -d: -f2)"
+                _up_sec="$(printf "%s" "$_up_e" | cut -d: -f3-)"
+                printf "  %d. %s:%s  [%s]\n" "$_up_count" "$_up_host" "$_up_port" "$(upstream_secret_kind "$_up_sec")"
             done
             IFS="$_up_old_ifs"
         fi
@@ -1189,8 +1599,9 @@ configure_mt_upstream_proxies() {
 
         printf "\n  1) Add proxy\n"
         if [ "$_up_count" -gt 0 ]; then
-            printf "  2) Remove proxy\n"
-            printf "  3) Clear all\n"
+            printf "  2) Test\n"
+            printf "  3) Remove proxy\n"
+            printf "  4) Clear all\n"
         fi
         printf "  Enter) Back\n\n"
         printf "%sSelect:%s " "$C_CYAN" "$C_RESET"
@@ -1199,12 +1610,37 @@ configure_mt_upstream_proxies() {
         case "$_up_choice" in
             1|add)
                 printf "\nEnter HOST:PORT:SECRET\n"
-                printf "Example: proxy.example.com:443:ddf0e1d2c3b4a5968778695a4b3c2d1e0f\n"
-                printf "Entry: "
+                printf "  %sexample:%s proxy.example.com:443:ddf0e1d2c3b4a5968778695a4b3c2d1e0f\n" "$C_DIM" "$C_RESET"
+                printf "\n%sTip:%s you can also paste a block directly from a proxy channel:\n" "$C_BOLD" "$C_RESET"
+                printf "  %sServer: proxy.example.com\n" "$C_DIM"
+                printf "  Port: 443\n"
+                printf "  Secret: ddf0e1d2c3b4a5968778695a4b3c2d1e0f%s\n" "$C_RESET"
+                printf "\nEntry: "
                 IFS= read -r _up_new
                 if [ -z "$_up_new" ]; then
                     continue
                 fi
+                case "$_up_new" in
+                    [Ss]erver:*)
+                        _up_srv="$(printf "%s" "$_up_new" | sed 's/^[^:]*:[[:space:]]*//')"
+                        _up_prt=""
+                        _up_sec=""
+                        IFS= read -r _up_l2
+                        case "$_up_l2" in
+                            [Pp]ort:*)
+                                _up_prt="$(printf "%s" "$_up_l2" | sed 's/^[^:]*:[[:space:]]*//')" ;;
+                        esac
+                        IFS= read -r _up_l3
+                        case "$_up_l3" in
+                            [Ss]ecret:*|[Kk]ey:*)
+                                _up_sec="$(printf "%s" "$_up_l3" | sed 's/^[^:]*:[[:space:]]*//')" ;;
+                        esac
+                        if [ -n "$_up_srv" ] && [ -n "$_up_prt" ] && [ -n "$_up_sec" ]; then
+                            _up_new="${_up_srv}:${_up_prt}:${_up_sec}"
+                        fi
+                        ;;
+                esac
+                _up_new="$(normalize_upstream_proxy_entry "$_up_new")"
                 if ! validate_upstream_proxy_entry "$_up_new" 2>/dev/null; then
                     printf "\n%sInvalid entry. Expected HOST:PORT:SECRET\n" "$C_RED"
                     printf "SECRET: 32 hex (plain) | 34 hex dd-prefix | 34+ hex ee-prefix%s\n" "$C_RESET"
@@ -1221,7 +1657,11 @@ configure_mt_upstream_proxies() {
                 prompt_restart_proxy_for_updated_settings
                 pause
                 ;;
-            2|remove)
+            2|test)
+                [ "$_up_count" -gt 0 ] || continue
+                check_mt_upstream_proxies
+                ;;
+            3|remove)
                 [ "$_up_count" -gt 0 ] || continue
                 if [ "$_up_count" -eq 1 ]; then
                     MT_UPSTREAM_PROXIES=""
@@ -1257,7 +1697,7 @@ configure_mt_upstream_proxies() {
                 prompt_restart_proxy_for_updated_settings
                 pause
                 ;;
-            3|clear)
+            4|clear)
                 [ "$_up_count" -gt 0 ] || continue
                 MT_UPSTREAM_PROXIES=""
                 write_settings_config || { pause; continue; }
@@ -1404,7 +1844,13 @@ advanced_menu() {
                 configure_update_source
                 ;;
             18)
-                remove_all
+                if confirm_yn "  Remove binary launcher autostart and downloaded files?"; then
+                    remove_all
+                    _rm_rc=$?
+                    if [ "$_rm_rc" -eq 20 ]; then
+                        return 20
+                    fi
+                fi
                 ;;
             19)
                 configure_proxy_mode
@@ -1475,7 +1921,13 @@ menu() {
                 enable_autostart
             fi
             ;;
-        4) advanced_menu ;;
+        4)
+            advanced_menu
+            _adv_rc=$?
+            if [ "$_adv_rc" -eq 20 ]; then
+                exit 0
+            fi
+            ;;
         *) exit 0 ;;
     esac
 }

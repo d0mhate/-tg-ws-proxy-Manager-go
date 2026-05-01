@@ -46,15 +46,15 @@ func (s *Server) websocketDialConfig(dc int, isMedia bool, key routeKey) config.
 func (s *Server) dialWebsocketDomains(ctx context.Context, dialCfg config.Config, key routeKey, targetIP string, dc int, isMedia bool, domains []string) wsDialAttemptResult {
 	result := wsDialAttemptResult{allRedirects: true}
 	for _, domain := range domains {
-		s.debugf("ws dial attempt: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, domain)
+		s.debugf("ws dial attempt: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, config.MaskCFDomainForLog(domain))
 		ws, err := s.wsDialFunc(ctx, dialCfg, targetIP, domain)
 		if err == nil {
 			s.clearWSFailure(key)
-			s.debugf("ws dial success: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, domain)
+			s.debugf("ws dial success: dc=%d media=%v target=%s domain=%s", dc, isMedia, targetIP, config.MaskCFDomainForLog(domain))
 			result.ws = ws
 			return result
 		}
-		s.debugf("ws dial failed: dc=%d media=%v target=%s domain=%s err=%v", dc, isMedia, targetIP, domain, err)
+		s.debugf("ws dial failed: dc=%d media=%v target=%s domain=%s err=%v", dc, isMedia, targetIP, config.MaskCFDomainForLog(domain), err)
 		s.stats.incWSErrors()
 		var hErr *wsbridge.HandshakeError
 		if errors.As(err, &hErr) && hErr.IsRedirect() {

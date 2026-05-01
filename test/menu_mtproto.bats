@@ -133,7 +133,7 @@ setup() {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
         MT_UPSTREAM_PROXIES="one:443:aa,two:443:bb"
-        configure_mt_upstream_proxies 2>&1 <<< $'"'"'"'"'"'"'"'2\n1\n'"'"'"'"'"'"'"'
+        configure_mt_upstream_proxies 2>&1 <<< $'"'"'"'"'"'"'"'3\n1\n'"'"'"'"'"'"'"'
         printf "\nLIST=%s\n" "$MT_UPSTREAM_PROXIES"
     '
 
@@ -144,7 +144,7 @@ setup() {
     run env MENU_FIXTURE_TMPDIR="$BATS_TEST_TMPDIR" bash -c '
         source ./test/helpers/menu_fixture.sh
         MT_UPSTREAM_PROXIES="one:443:aa"
-        configure_mt_upstream_proxies 2>&1 <<< "3"
+        configure_mt_upstream_proxies 2>&1 <<< "4"
         printf "\nLIST=%s\n" "$MT_UPSTREAM_PROXIES"
     '
 

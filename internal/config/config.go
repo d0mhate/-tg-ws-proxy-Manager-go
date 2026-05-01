@@ -3,10 +3,13 @@ package config
 import (
 	"fmt"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"tg-ws-proxy/internal/telegram"
 )
 
 // upstream proxy for fallback when websocket to tg fails.
@@ -58,8 +61,8 @@ func Default() Config {
 		ConnectWSPath:   "/apiws",
 		CFDomains:       nil,
 		DCIPs: map[int]string{
-			2: "149.154.167.220",
-			4: "149.154.167.220",
+			2: telegram.IPv4DC2,
+			4: telegram.IPv4DC2,
 		},
 	}
 }
@@ -120,4 +123,33 @@ func FormatDCIPMap(dcIPs map[int]string) string {
 		parts = append(parts, fmt.Sprintf("%d:%s", dc, dcIPs[dc]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func CFDomainSource() string {
+	switch strings.TrimSpace(os.Getenv("TG_WS_PROXY_CF_DOMAIN_SOURCE")) {
+	case "builtin", "built-in":
+		return "built-in"
+	case "custom":
+		return "custom"
+	default:
+		return ""
+	}
+}
+
+func BuiltinCFDomainsInUse() bool {
+	return CFDomainSource() == "built-in"
+}
+
+func MaskCFDomainForLog(domain string) string {
+	if BuiltinCFDomainsInUse() {
+		return "built-in"
+	}
+	return domain
+}
+
+func MaskCFDomainsForLog(domains []string) string {
+	if BuiltinCFDomainsInUse() {
+		return "built-in"
+	}
+	return strings.Join(domains, ",")
 }

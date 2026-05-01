@@ -12,10 +12,10 @@ import (
 func TestDCIPFlagsSetAndString(t *testing.T) {
 	var flags dcIPFlags
 
-	if err := flags.Set("2:149.154.167.220"); err != nil {
+	if err := flags.Set("2:" + testIPv4DC2); err != nil {
 		t.Fatalf("Set returned error: %v", err)
 	}
-	if err := flags.Set("4:149.154.167.220"); err != nil {
+	if err := flags.Set("4:" + testIPv4DC2); err != nil {
 		t.Fatalf("Set returned error: %v", err)
 	}
 
@@ -23,7 +23,7 @@ func TestDCIPFlagsSetAndString(t *testing.T) {
 		t.Fatalf("unexpected number of flag values: got %d want %d", got, want)
 	}
 
-	if got := flags.String(); got != "[2:149.154.167.220 4:149.154.167.220]" {
+	if got := flags.String(); got != "[2:"+testIPv4DC2+" 4:"+testIPv4DC2+"]" {
 		t.Fatalf("unexpected String output: %q", got)
 	}
 }
@@ -62,17 +62,6 @@ func TestParseArgsOverridesHostAndPort(t *testing.T) {
 	}
 	if pa.cfg.Port != 19080 {
 		t.Fatalf("unexpected overridden port: %d", pa.cfg.Port)
-	}
-}
-
-func TestParseArgsPprofAddr(t *testing.T) {
-	pa, err := parseArgs([]string{"--pprof-addr", "127.0.0.1:6060"})
-	if err != nil {
-		t.Fatalf("parseArgs returned error: %v", err)
-	}
-
-	if pa.cfg.PprofAddr != "127.0.0.1:6060" {
-		t.Fatalf("unexpected pprof addr: %q", pa.cfg.PprofAddr)
 	}
 }
 
@@ -265,6 +254,27 @@ func TestStartupSummaryIncludesCFBalanceForSocks5(t *testing.T) {
 	}
 }
 
+func TestStartupSummaryMasksBuiltinCFDomainsInLogs(t *testing.T) {
+	t.Setenv("TG_WS_PROXY_CF_DOMAIN_SOURCE", "built-in")
+
+	pa, err := parseArgs([]string{
+		"--cf-proxy",
+		"--cf-balance",
+		"--cf-domain", "a.example.com,b.example.com",
+	})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+
+	got := startupSummary(pa)
+	if !strings.Contains(got, "cf_domains=2") || !strings.Contains(got, "cf_domain_list=built-in") {
+		t.Fatalf("expected built-in CF domains to be masked in startup summary, got: %s", got)
+	}
+	if strings.Contains(got, "a.example.com") || strings.Contains(got, "b.example.com") {
+		t.Fatalf("did not expect built-in CF domains to be exposed in startup summary: %s", got)
+	}
+}
+
 func TestStartupSummaryIncludesMTProtoSecretKind(t *testing.T) {
 	pa, err := parseArgs([]string{
 		"--mode", "mtproto",
@@ -295,7 +305,7 @@ func TestStartupSummaryIncludesMTProtoSecretKind(t *testing.T) {
 }
 
 func TestStartupSummaryCanBeLogged(t *testing.T) {
-	pa, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com", "--pprof-addr", "127.0.0.1:6060"})
+	pa, err := parseArgs([]string{"--cf-proxy", "--cf-domain", "example.com"})
 	if err != nil {
 		t.Fatalf("parseArgs returned error: %v", err)
 	}
@@ -306,9 +316,6 @@ func TestStartupSummaryCanBeLogged(t *testing.T) {
 
 	if !strings.Contains(buf.String(), "mode=socks5") {
 		t.Fatalf("expected startup summary to be loggable, got %q", buf.String())
-	}
-	if !strings.Contains(buf.String(), "pprof_addr=127.0.0.1:6060") {
-		t.Fatalf("expected startup summary to include pprof addr, got %q", buf.String())
 	}
 }
 

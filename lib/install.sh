@@ -1,3 +1,4 @@
+#!/bin/sh
 # install.sh
 
 select_persistent_dir() {
@@ -215,9 +216,10 @@ ensure_source_binary_current() {
 }
 
 check_tmp_space() {
+    required_kb="${1:-$REQUIRED_TMP_KB}"
     free_kb="$(tmp_available_kb)"
     [ -n "$free_kb" ] || return 0
-    [ "$free_kb" -ge "$REQUIRED_TMP_KB" ]
+    [ "$free_kb" -ge "$required_kb" ]
 }
 
 install_binary() {
@@ -225,10 +227,11 @@ install_binary() {
     show_environment_checks
     printf "\n"
 
-    if ! check_tmp_space; then
+    need_kb="$(required_tmp_runtime_install_kb)"
+    if ! check_tmp_space "$need_kb"; then
         free_kb="$(tmp_available_kb)"
         printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Required: %s KB\n" "$need_kb"
         printf "Available: %s KB\n" "${free_kb:-unknown}"
         pause
         return 1
@@ -289,10 +292,11 @@ update_binary() {
     show_environment_checks
     printf "\n"
 
-    if ! check_tmp_space; then
+    need_kb="$(required_tmp_runtime_install_kb)"
+    if ! check_tmp_space "$need_kb"; then
         free_kb="$(tmp_available_kb)"
         printf "%sNot enough free space in /tmp%s\n\n" "$C_RED" "$C_RESET"
-        printf "Required: %s KB\n" "$REQUIRED_TMP_KB"
+        printf "Required: %s KB\n" "$need_kb"
         printf "Available: %s KB\n" "${free_kb:-unknown}"
         pause
         return 1
@@ -377,12 +381,25 @@ update_binary() {
         printf "\nLauncher:\n  %s\n" "$launcher_path"
     fi
     if [ "$COMMAND_MODE" = "0" ]; then
-        printf "\n%sRestarting menu...%s\n" "$C_GREEN" "$C_RESET"
-        sleep 1
-        exec "$0" 2>/dev/null || {
-            printf "%sPlease restart the menu manually.%s\n" "$C_YELLOW" "$C_RESET"
-            pause
-        }
+        printf "\n%sWARNING:%s exit this menu and run %s again to load the updated manager.\n" \
+            "$C_RED" "$C_RESET" "$LAUNCHER_NAME"
+        printf "%sThe current menu session is still using the old script state.%s\n" \
+            "$C_RED" "$C_RESET"
+        _restart_wait="${MENU_RESTART_WARNING_DELAY_SEC:-5}"
+        case "$_restart_wait" in
+            ''|*[!0-9]*)
+                _restart_wait=5
+                ;;
+        esac
+        if [ "$_restart_wait" -gt 0 ] 2>/dev/null; then
+            while [ "$_restart_wait" -gt 0 ]; do
+                printf "\rPress Enter will be available in %s second(s)... " "$_restart_wait"
+                sleep 1
+                _restart_wait=$((_restart_wait - 1))
+            done
+            printf "\rPress Enter is now available.                    \n"
+        fi
+        pause
     else
         pause
     fi
@@ -409,5 +426,9 @@ remove_all() {
 
     show_header
     printf "%sBinary launcher autostart and downloaded files removed%s\n" "$C_GREEN" "$C_RESET"
+    if [ "$COMMAND_MODE" = "0" ]; then
+        printf "Menu session closed because manager files were removed.\n"
+        return 20
+    fi
     pause
 }

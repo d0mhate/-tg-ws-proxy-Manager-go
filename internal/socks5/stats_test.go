@@ -206,14 +206,14 @@ func TestVerboseDebugEventsAggregateByNormalizedMessage(t *testing.T) {
 	cfg.Verbose = true
 	srv := NewServer(cfg, log.New(&logs, "", 0))
 
-	srv.debugf("[%s] socks connect request to %s:%d", "192.168.1.10:12345", "91.105.192.100", 443)
-	srv.debugf("[%s] socks connect request to %s:%d", "192.168.1.11:23456", "91.105.192.100", 443)
+	srv.debugf("[%s] socks connect request to %s:%d", "192.168.1.10:12345", testIPv4DC203, 443)
+	srv.debugf("[%s] socks connect request to %s:%d", "192.168.1.11:23456", testIPv4DC203, 443)
 	srv.debugf("accepted connection from %s", "192.168.1.10:12345")
 	srv.debugf("accepted connection from %s", "192.168.1.11:23456")
 	srv.flushVerboseDebugSummary()
 
 	out := logs.String()
-	if !strings.Contains(out, "socks connect request to 91.105.192.100:443 x2 in 5s") {
+	if !strings.Contains(out, "socks connect request to "+testIPv4DC203+":443 x2 in 5s") {
 		t.Fatalf("expected normalized socks request aggregation, got:\n%s", out)
 	}
 	if !strings.Contains(out, "accepted connection from <client> x2 in 5s") {

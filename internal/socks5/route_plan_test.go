@@ -64,13 +64,13 @@ func TestClassifyInitialRoute(t *testing.T) {
 
 func TestBuildTelegramRoutePlanInfersDCFromDestination(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs = map[int]string{2: "149.154.167.40"}
+	cfg.DCIPs = map[int]string{2: testIPv4DC2AltRoute}
 	srv := NewServer(cfg, log.New(io.Discard, "", 0))
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 0)
 
 	plan := srv.buildTelegramRoutePlan(request{
-		DstHost: "149.154.167.220",
+		DstHost: testIPv4DC2,
 		DstPort: 443,
 	}, init, false, false, "client")
 
@@ -80,7 +80,7 @@ func TestBuildTelegramRoutePlanInfersDCFromDestination(t *testing.T) {
 	if plan.effectiveDC != 2 {
 		t.Fatalf("expected effective dc=2, got %d", plan.effectiveDC)
 	}
-	if plan.targetIP != "149.154.167.40" {
+	if plan.targetIP != testIPv4DC2AltRoute {
 		t.Fatalf("unexpected target ip: %q", plan.targetIP)
 	}
 	if !plan.inferredFromDestination {
@@ -93,7 +93,7 @@ func TestBuildTelegramRoutePlanInfersDCFromDestination(t *testing.T) {
 
 func TestBuildTelegramRoutePlanUsesTargetAsFallbackForInitOnlyRoute(t *testing.T) {
 	cfg := config.Default()
-	cfg.DCIPs = map[int]string{2: "149.154.167.220"}
+	cfg.DCIPs = map[int]string{2: testIPv4DC2}
 	srv := NewServer(cfg, log.New(io.Discard, "", 0))
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
@@ -105,7 +105,7 @@ func TestBuildTelegramRoutePlanUsesTargetAsFallbackForInitOnlyRoute(t *testing.T
 	if !plan.routeByInitOnly {
 		t.Fatal("expected routeByInitOnly to be preserved")
 	}
-	if plan.fallbackHost != "149.154.167.220" {
+	if plan.fallbackHost != testIPv4DC2 {
 		t.Fatalf("expected fallback host to use dc target, got %q", plan.fallbackHost)
 	}
 }
@@ -115,11 +115,11 @@ func TestBuildTelegramRoutePlanKeepsOriginalFallbackHostForDirectTelegramRoute(t
 
 	init := makeMTProtoInitPacket(t, mtproto.ProtoIntermediate, 2)
 	plan := srv.buildTelegramRoutePlan(request{
-		DstHost: "149.154.167.220",
+		DstHost: testIPv4DC2,
 		DstPort: 443,
 	}, init, false, false, "client")
 
-	if plan.fallbackHost != "149.154.167.220" {
+	if plan.fallbackHost != testIPv4DC2 {
 		t.Fatalf("expected original destination as fallback host, got %q", plan.fallbackHost)
 	}
 }
@@ -191,8 +191,8 @@ func TestDecideTelegramWSRoute(t *testing.T) {
 		{
 			name: "disabled dc falls back to target host",
 			cfg:  config.Default(),
-			plan: telegramRoutePlan{targetIP: "149.154.175.211", fallbackHost: "149.154.175.211", wsDomainDC: 1},
-			want: telegramWSRouteDecision{action: telegramWSRouteTCPFallbackWSDisabled, fallbackHost: "149.154.175.211"},
+			plan: telegramRoutePlan{targetIP: testIPv4DC1Call, fallbackHost: testIPv4DC1Call, wsDomainDC: 1},
+			want: telegramWSRouteDecision{action: telegramWSRouteTCPFallbackWSDisabled, fallbackHost: testIPv4DC1Call},
 		},
 		{
 			name: "cloudflare only still attempts websocket route",
@@ -206,8 +206,8 @@ func TestDecideTelegramWSRoute(t *testing.T) {
 		{
 			name: "telegram websocket allowed for enabled dc",
 			cfg:  config.Default(),
-			plan: telegramRoutePlan{targetIP: "149.154.167.220", fallbackHost: "149.154.167.220", wsDomainDC: 2},
-			want: telegramWSRouteDecision{action: telegramWSRouteConnect, allowTelegramWS: true, fallbackHost: "149.154.167.220"},
+			plan: telegramRoutePlan{targetIP: testIPv4DC2, fallbackHost: testIPv4DC2, wsDomainDC: 2},
+			want: telegramWSRouteDecision{action: telegramWSRouteConnect, allowTelegramWS: true, fallbackHost: testIPv4DC2},
 		},
 	}
 

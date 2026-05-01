@@ -25,6 +25,10 @@ setup() {
         echo "resolved-bin"
     }
 
+    required_tmp_runtime_install_kb() {
+        echo "23456"
+    }
+
     source "$SCRIPT"
 }
 
@@ -166,5 +170,6 @@ setup() {
     [[ "$output" == *"OpenWrt detected"* ]]
     [[ "$output" == *"Arch detected"* ]]
     [[ "$output" == *"Release asset: resolved-bin"* ]]
+    [[ "$output" == *"tmp need: 23456 KB"* ]]
     [[ "$output" == *"tmp free: 12345 KB"* ]]
 }

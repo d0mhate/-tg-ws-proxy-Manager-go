@@ -9,8 +9,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
-	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,10 +17,11 @@ import (
 	"time"
 	"unicode"
 
-	"rsc.io/qr"
 	"tg-ws-proxy/internal/config"
 	"tg-ws-proxy/internal/mtpserver"
+	"tg-ws-proxy/internal/release"
 	"tg-ws-proxy/internal/socks5"
+	"tg-ws-proxy/internal/telegram"
 )
 
 type dcIPFlags []string
@@ -77,7 +76,7 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs := flag.NewFlagSet("tg-ws-proxy", flag.ContinueOnError)
 	fs.StringVar(&cfg.Host, "host", cfg.Host, "listen host")
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "listen port")
-	fs.StringVar(&cfg.PprofAddr, "pprof-addr", cfg.PprofAddr, "enable pprof HTTP server on this address, for example 127.0.0.1:6060")
+	registerPprofFlag(fs, &cfg)
 	fs.StringVar(&cfg.Username, "username", cfg.Username, "SOCKS5 username auth")
 	fs.StringVar(&cfg.Password, "password", cfg.Password, "SOCKS5 password auth")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
@@ -87,7 +86,7 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs.DurationVar(&cfg.PoolRefillDelay, "pool-refill-delay", cfg.PoolRefillDelay, "delay between opening pooled WebSocket connections while refilling a bucket")
 	fs.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP dial timeout")
 	fs.DurationVar(&cfg.InitTimeout, "init-timeout", cfg.InitTimeout, "client MTProto init timeout")
-	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:149.154.167.220")
+	fs.Var(&dcIPs, "dc-ip", "Target IP for a DC, for example --dc-ip 2:"+telegram.IPv4DC2)
 	var cfDomainFlag string
 	fs.BoolVar(&cfg.UseCFProxy, "cf-proxy", cfg.UseCFProxy, "enable Cloudflare proxy mode for websocket routing")
 	fs.BoolVar(&cfg.UseCFProxyFirst, "cf-proxy-first", cfg.UseCFProxyFirst, "try Cloudflare websocket routing before direct Telegram websocket routing")
@@ -273,7 +272,7 @@ func startupSummary(pa parsedArgs) string {
 		pa.cfg.UseCFProxy, cfOrder, cfMode, len(pa.cfg.CFDomains),
 	)
 	if len(pa.cfg.CFDomains) > 0 {
-		fmt.Fprintf(&b, " cf_domain_list=%s", strings.Join(pa.cfg.CFDomains, ","))
+		fmt.Fprintf(&b, " cf_domain_list=%s", config.MaskCFDomainsForLog(pa.cfg.CFDomains))
 	}
 
 	fmt.Fprintf(&b, " dc_overrides=%d upstream_mtproto=%d", len(pa.cfg.DCIPs), len(pa.cfg.UpstreamProxies))
@@ -291,79 +290,124 @@ func currentBinaryPath() string {
 	return exe
 }
 
-func startPprofServer(ctx context.Context, addr string, logger *log.Logger) error {
-	if addr == "" {
-		return nil
+func classifyDialErr(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	if strings.Contains(err.Error(), "connection refused") {
+		return "refused"
+	}
+	return "error"
+}
+
+func probeUpstream(targets []string) int {
+	if len(targets) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: tg-ws-proxy probe-upstream HOST:PORT [HOST:PORT ...]")
+		return 2
+	}
+	const dialTimeout = 5 * time.Second
+	allOK := true
+	for _, target := range targets {
+		if _, _, err := net.SplitHostPort(target); err != nil {
+			fmt.Printf("%s fail invalid\n", target)
+			allOK = false
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+		start := time.Now()
+		conn, err := new(net.Dialer).DialContext(ctx, "tcp", target)
+		elapsed := time.Since(start).Round(time.Millisecond)
+		cancel()
+		if err != nil {
+			fmt.Printf("%s fail %s\n", target, classifyDialErr(err))
+			allOK = false
+			continue
+		}
+		_ = conn.Close()
+		fmt.Printf("%s ok %s\n", target, elapsed)
+	}
+	if allOK {
+		return 0
+	}
+	return 1
+}
+
+// Exit codes for verify-asset: 0=ok, 1=mismatch, 2=no digest, 3=error.
+const (
+	exitVerifyOK       = 0
+	exitVerifyMismatch = 1
+	exitVerifyNoDigest = 2
+	exitVerifyError    = 3
+)
+
+func verifyAsset(args []string) int {
+	fs := flag.NewFlagSet("verify-asset", flag.ContinueOnError)
+	var apiURL, assetName string
+	fs.StringVar(&apiURL, "api-url", "", "GitHub releases/latest API URL")
+	fs.StringVar(&assetName, "asset-name", "", "release asset filename to look up")
+	if err := fs.Parse(args); err != nil {
+		return exitVerifyError
+	}
+	filePath := fs.Arg(0)
+	if apiURL == "" || assetName == "" || filePath == "" {
+		fmt.Fprintln(os.Stderr, "usage: tg-ws-proxy verify-asset --api-url <url> --asset-name <name> <file>")
+		return exitVerifyError
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	ln, err := net.Listen("tcp", addr)
+	rel, err := release.FetchLatest(ctx, apiURL)
 	if err != nil {
-		return fmt.Errorf("listen pprof on %s: %w", addr, err)
+		fmt.Fprintf(os.Stderr, "verify-asset: fetch: %v\n", err)
+		return exitVerifyError
 	}
 
-	srv := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       30 * time.Second,
+	asset, ok := rel.AssetByName(assetName)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "verify-asset: asset %q not found in release %s\n", assetName, rel.Tag)
+		return exitVerifyError
 	}
 
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
-			logger.Printf("pprof shutdown error: %v", err)
-		}
-	}()
+	if asset.Digest == "" {
+		return exitVerifyNoDigest
+	}
 
-	go func() {
-		logger.Printf("pprof listening on http://%s/debug/pprof/", addr)
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Printf("pprof server stopped with error: %v", err)
-		}
-	}()
+	want, err := release.ParseDigest(asset.Digest)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "verify-asset: %v\n", err)
+		return exitVerifyError
+	}
 
-	return nil
+	got, err := release.SHA256File(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "verify-asset: read file: %v\n", err)
+		return exitVerifyError
+	}
+
+	if got != want {
+		fmt.Fprintf(os.Stderr, "verify-asset: SHA256 mismatch\n  want: %s\n  got:  %s\n", want, got)
+		return exitVerifyMismatch
+	}
+
+	fmt.Printf("verify-asset: ok %s %s\n", rel.Tag, assetName)
+	return exitVerifyOK
 }
 
 func main() {
-	if len(os.Args) >= 2 && os.Args[1] == "qr" {
-		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: tg-ws-proxy qr <link>")
-			os.Exit(1)
-		}
-		code, err := qr.Encode(os.Args[2], qr.L)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		size := code.Size
-		blk := func(x, y int) bool {
-			return x >= 0 && x < size && y >= 0 && y < size && code.Black(x, y)
-		}
-		for y := -2; y < size+2; y += 2 {
-			for x := -2; x < size+2; x++ {
-				t, b := blk(x, y), blk(x, y+1)
-				switch {
-				case t && b:
-					fmt.Fprint(os.Stdout, "█")
-				case t:
-					fmt.Fprint(os.Stdout, "▀")
-				case b:
-					fmt.Fprint(os.Stdout, "▄")
-				default:
-					fmt.Fprint(os.Stdout, " ")
-				}
-			}
-			fmt.Fprintln(os.Stdout)
-		}
+	if len(os.Args) >= 2 && os.Args[1] == "verify-asset" {
+		os.Exit(verifyAsset(os.Args[2:]))
+	}
+
+	if len(os.Args) >= 2 && os.Args[1] == "probe-upstream" {
+		os.Exit(probeUpstream(os.Args[2:]))
+	}
+
+	if handleQRCommand(os.Args[1:]) {
 		return
 	}
 
