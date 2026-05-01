@@ -29,7 +29,46 @@ binary_supports_flag() {
     [ -x "$bin_path" ] || return 1
     [ -n "$flag_name" ] || return 1
 
-    "$bin_path" --help 2>&1 | grep -F -- "  ${flag_name}" >/dev/null 2>&1
+    help_output_file="${TMPDIR:-/tmp}/tg-ws-proxy-help.$$.$RANDOM"
+    : > "$help_output_file" 2>/dev/null || return 1
+
+    "$bin_path" --help </dev/null >"$help_output_file" 2>&1 &
+    help_pid="$!"
+    help_wait_i=0
+    help_wait_max=20
+    help_sleep_mode="sleep"
+
+    if command -v usleep >/dev/null 2>&1; then
+        help_sleep_mode="usleep"
+    else
+        help_wait_max=2
+    fi
+
+    while [ "$help_wait_i" -lt "$help_wait_max" ]; do
+        if ! kill -0 "$help_pid" 2>/dev/null; then
+            break
+        fi
+        help_wait_i=$((help_wait_i + 1))
+        if [ "$help_sleep_mode" = "usleep" ]; then
+            usleep 100000
+        else
+            sleep 1
+        fi
+    done
+
+    if kill -0 "$help_pid" 2>/dev/null; then
+        kill "$help_pid" 2>/dev/null || true
+        sleep 1
+        kill -9 "$help_pid" 2>/dev/null || true
+        rm -f "$help_output_file"
+        return 1
+    fi
+
+    wait "$help_pid" 2>/dev/null || true
+    grep -F -- "  ${flag_name}" "$help_output_file" >/dev/null 2>&1
+    help_rc="$?"
+    rm -f "$help_output_file"
+    return "$help_rc"
 }
 
 pid_matches_binary() {
@@ -53,8 +92,11 @@ pid_matches_binary() {
     fi
 
     if command -v ps >/dev/null 2>&1; then
-        ps -p "$pid" -o command= 2>/dev/null | grep -F -- "$path" >/dev/null 2>&1
-        return $?
+        proc_cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        if [ -n "$proc_cmd" ]; then
+            printf "%s\n" "$proc_cmd" | grep -F -- "$path" >/dev/null 2>&1 && return 0
+            printf "%s\n" "$proc_cmd" | grep -F -- "$(basename "$path")" >/dev/null 2>&1 && return 0
+        fi
     fi
 
     kill -0 "$pid" 2>/dev/null
@@ -244,7 +286,8 @@ stop_running() {
 
 # _run_proxy_cmd fg|bg
 # Builds the full proxy command from current settings and executes it.
-# fg: runs directly (blocking). bg: runs in background, prints PID to stdout.
+# fg: runs directly (blocking). bg: runs in background and stores PID in
+# RUN_PROXY_BACKGROUND_PID.
 _run_proxy_cmd() {
     _rpc_mode="$1"
     _rpc_bin="$(runtime_bin_path 2>/dev/null || true)"
@@ -278,8 +321,11 @@ _run_proxy_cmd() {
         IFS="$_rpc_old_ifs"
     fi
 
-    if [ "$CF_PROXY" = "1" ] && [ -n "$CF_DOMAIN" ]; then
-        set -- "$@" --cf-proxy --cf-domain "$CF_DOMAIN"
+    _rpc_cf_domains="$(resolved_cf_domains 2>/dev/null || true)"
+    _rpc_cf_source=""
+    if [ "$CF_PROXY" = "1" ] && [ -n "$_rpc_cf_domains" ]; then
+        _rpc_cf_source="$(resolved_cf_domain_source 2>/dev/null || true)"
+        set -- "$@" --cf-proxy --cf-domain "$_rpc_cf_domains"
         if [ "$CF_PROXY_FIRST" = "1" ]; then
             set -- "$@" --cf-proxy-first
         fi
@@ -302,14 +348,14 @@ _run_proxy_cmd() {
     case "$_rpc_mode" in
         bg)
             if command -v nohup >/dev/null 2>&1; then
-                nohup "$@" >/dev/null 2>&1 &
+                TG_WS_PROXY_CF_DOMAIN_SOURCE="$_rpc_cf_source" nohup "$@" </dev/null >/dev/null 2>&1 &
             else
-                "$@" >/dev/null 2>&1 &
+                TG_WS_PROXY_CF_DOMAIN_SOURCE="$_rpc_cf_source" "$@" </dev/null >/dev/null 2>&1 &
             fi
-            printf "%s" "$!"
+            RUN_PROXY_BACKGROUND_PID="$!"
             ;;
         *)
-            "$@"
+            env TG_WS_PROXY_CF_DOMAIN_SOURCE="$_rpc_cf_source" "$@"
             ;;
     esac
 }
@@ -319,6 +365,7 @@ run_binary() {
 }
 
 run_binary_background() {
+    RUN_PROXY_BACKGROUND_PID=""
     _run_proxy_cmd bg
 }
 
@@ -405,13 +452,18 @@ start_proxy_background() {
     printf "Logs will not be printed in this session.\n"
     printf "Bind: %s:%s\n\n" "$LISTEN_HOST" "$LISTEN_PORT"
 
-    child_pid="$(run_binary_background)" || return 1
+    run_binary_background || return 1
+    child_pid="$RUN_PROXY_BACKGROUND_PID"
+    [ -n "$child_pid" ] || return 1
     mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
     printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
     sleep 1
 
     if kill -0 "$child_pid" 2>/dev/null; then
         printf "Background process pid:\n  %s\n" "$child_pid"
+        if [ "$COMMAND_MODE" = "1" ]; then
+            return 0
+        fi
         pause
         return 0
     fi
@@ -490,7 +542,9 @@ restart_running_proxy_for_updated_settings() {
     fi
 
     stop_running >/dev/null 2>&1 || true
-    child_pid="$(run_binary_background)" || return 1
+    run_binary_background || return 1
+    child_pid="$RUN_PROXY_BACKGROUND_PID"
+    [ -n "$child_pid" ] || return 1
     mkdir -p "$(dirname "$PID_FILE")" >/dev/null 2>&1 || true
     printf "%s\n" "$child_pid" > "$PID_FILE" 2>/dev/null || true
 
