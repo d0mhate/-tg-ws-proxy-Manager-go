@@ -124,7 +124,7 @@ func TestConnectWSCFDialsHostname(t *testing.T) {
 		return nil, io.EOF
 	}
 
-	_, _ = srv.connectWSCF(context.Background(), 2, false, srv.cfDomainsForConn())
+	_, _ = srv.connectWSCF(context.Background(), 2, false, srv.cfDomainsForConn(2))
 	if seenTarget != "kws2.cf.example.com" {
 		t.Fatalf("unexpected CF dial target: %q", seenTarget)
 	}
@@ -133,25 +133,25 @@ func TestConnectWSCFDialsHostname(t *testing.T) {
 	}
 }
 
-func TestCFDomainsForConnBalancesRoundRobin(t *testing.T) {
+func TestCFDomainsForConnIsStickyPerDC(t *testing.T) {
 	srv := NewServer(config.Config{
 		UseCFProxy:   true,
 		UseCFBalance: true,
 		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
 	}, log.New(io.Discard, "", 0))
 
-	got1 := srv.cfDomainsForConn()
-	got2 := srv.cfDomainsForConn()
-	got3 := srv.cfDomainsForConn()
+	got1 := srv.cfDomainsForConn(2)
+	got2 := srv.cfDomainsForConn(2)
+	got3 := srv.cfDomainsForConn(2)
 
 	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !reflect.DeepEqual(got1, want) {
 		t.Fatalf("unexpected first domain order: got %v want %v", got1, want)
 	}
-	if want := []string{"d2.example.com", "d3.example.com", "d1.example.com"}; !reflect.DeepEqual(got2, want) {
-		t.Fatalf("unexpected second domain order: got %v want %v", got2, want)
+	if !reflect.DeepEqual(got2, got1) {
+		t.Fatalf("expected sticky domain order for same dc, got %v then %v", got1, got2)
 	}
-	if want := []string{"d3.example.com", "d1.example.com", "d2.example.com"}; !reflect.DeepEqual(got3, want) {
-		t.Fatalf("unexpected third domain order: got %v want %v", got3, want)
+	if !reflect.DeepEqual(got3, got1) {
+		t.Fatalf("expected sticky domain order for same dc, got %v then %v", got1, got3)
 	}
 }
 
@@ -169,7 +169,7 @@ func TestConnectWSCFUsesBalancedDomainOrder(t *testing.T) {
 		return nil, io.EOF
 	}
 
-	_, err := srv.connectWSCF(context.Background(), 2, false, srv.cfDomainsForConn())
+	_, err := srv.connectWSCF(context.Background(), 2, false, srv.cfDomainsForConn(2))
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("expected dial error, got %v", err)
 	}
@@ -184,6 +184,24 @@ func TestConnectWSCFUsesBalancedDomainOrder(t *testing.T) {
 	}
 }
 
+func TestCFDomainsForConnAssignsDifferentDCsIndependently(t *testing.T) {
+	srv := NewServer(config.Config{
+		UseCFProxy:   true,
+		UseCFBalance: true,
+		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
+	}, log.New(io.Discard, "", 0))
+
+	got2 := srv.cfDomainsForConn(2)
+	got4 := srv.cfDomainsForConn(4)
+
+	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !reflect.DeepEqual(got2, want) {
+		t.Fatalf("unexpected dc2 domain order: got %v want %v", got2, want)
+	}
+	if want := []string{"d2.example.com", "d1.example.com", "d3.example.com"}; !reflect.DeepEqual(got4, want) {
+		t.Fatalf("unexpected dc4 domain order: got %v want %v", got4, want)
+	}
+}
+
 func TestCFDomainsForConnUsesPerServerState(t *testing.T) {
 	cfg := config.Config{
 		UseCFProxy:   true,
@@ -193,8 +211,8 @@ func TestCFDomainsForConnUsesPerServerState(t *testing.T) {
 	first := NewServer(cfg, log.New(io.Discard, "", 0))
 	second := NewServer(cfg, log.New(io.Discard, "", 0))
 
-	_ = first.cfDomainsForConn()
-	got := second.cfDomainsForConn()
+	_ = first.cfDomainsForConn(2)
+	got := second.cfDomainsForConn(2)
 
 	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected independent domain order: got %v want %v", got, want)

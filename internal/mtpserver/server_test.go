@@ -362,25 +362,43 @@ func TestDialDirectWSKeepsNormalTimeoutForDefaultSingleRouteDCs(t *testing.T) {
 	}
 }
 
-func TestCFDomainsForConnBalancesRoundRobin(t *testing.T) {
+func TestCFDomainsForConnIsStickyPerDC(t *testing.T) {
 	srv := newTestServer(t, config.Config{
 		UseCFProxy:   true,
 		UseCFBalance: true,
 		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
 	})
 
-	got1 := srv.cfDomainsForConn()
-	got2 := srv.cfDomainsForConn()
-	got3 := srv.cfDomainsForConn()
+	got1 := srv.cfDomainsForConn(2)
+	got2 := srv.cfDomainsForConn(2)
+	got3 := srv.cfDomainsForConn(2)
 
 	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !equalStrings(got1, want) {
 		t.Fatalf("unexpected first CF domain order: got %v want %v", got1, want)
 	}
-	if want := []string{"d2.example.com", "d3.example.com", "d1.example.com"}; !equalStrings(got2, want) {
-		t.Fatalf("unexpected second CF domain order: got %v want %v", got2, want)
+	if !equalStrings(got2, got1) {
+		t.Fatalf("expected sticky CF domain order for same dc, got %v then %v", got1, got2)
 	}
-	if want := []string{"d3.example.com", "d1.example.com", "d2.example.com"}; !equalStrings(got3, want) {
-		t.Fatalf("unexpected third CF domain order: got %v want %v", got3, want)
+	if !equalStrings(got3, got1) {
+		t.Fatalf("expected sticky CF domain order for same dc, got %v then %v", got1, got3)
+	}
+}
+
+func TestCFDomainsForConnAssignsDifferentDCsIndependently(t *testing.T) {
+	srv := newTestServer(t, config.Config{
+		UseCFProxy:   true,
+		UseCFBalance: true,
+		CFDomains:    []string{"d1.example.com", "d2.example.com", "d3.example.com"},
+	})
+
+	got2 := srv.cfDomainsForConn(2)
+	got4 := srv.cfDomainsForConn(4)
+
+	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !equalStrings(got2, want) {
+		t.Fatalf("unexpected dc2 CF domain order: got %v want %v", got2, want)
+	}
+	if want := []string{"d2.example.com", "d1.example.com", "d3.example.com"}; !equalStrings(got4, want) {
+		t.Fatalf("unexpected dc4 CF domain order: got %v want %v", got4, want)
 	}
 }
 
@@ -393,8 +411,8 @@ func TestCFDomainsForConnUsesPerServerState(t *testing.T) {
 	first := newTestServer(t, cfg)
 	second := newTestServer(t, cfg)
 
-	_ = first.cfDomainsForConn()
-	got := second.cfDomainsForConn()
+	_ = first.cfDomainsForConn(2)
+	got := second.cfDomainsForConn(2)
 
 	if want := []string{"d1.example.com", "d2.example.com", "d3.example.com"}; !equalStrings(got, want) {
 		t.Fatalf("unexpected independent CF domain order: got %v want %v", got, want)

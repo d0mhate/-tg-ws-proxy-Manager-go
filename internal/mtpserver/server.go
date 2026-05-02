@@ -65,8 +65,8 @@ func (s *MTServer) isFakeTLS() bool {
 	return len(s.secret) >= 17 && s.secret[0] == 0xee
 }
 
-func (s *MTServer) cfDomainsForConn() []string {
-	return s.cfBalancer.Domains(s.cfg.CFDomains, s.cfg.UseCFBalance)
+func (s *MTServer) cfDomainsForConn(dc int) []string {
+	return s.cfBalancer.DomainsForDC(dc, s.cfg.CFDomains, s.cfg.UseCFBalance)
 }
 
 func (s *MTServer) Run(ctx context.Context) error {

@@ -232,7 +232,7 @@ func (s *Server) connectWS(ctx context.Context, targetIP string, dc int, isMedia
 
 func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr string, dc int, effectiveDC int, isMedia bool, targetIP string, allowTelegramWS bool) (*wsbridge.Client, error) {
 	tryCloudflare := s.cfg.UseCFProxy && len(s.cfg.CFDomains) > 0
-	cfDomains := s.cfDomainsForConn()
+	cfDomains := s.cfDomainsForConn(effectiveDC)
 	var lastErr error
 
 	tryBridgeCF := func() (*wsbridge.Client, error) {
@@ -288,8 +288,8 @@ func (s *Server) connectTelegramThenCloudflareWS(ctx context.Context, clientAddr
 	return nil, lastErr
 }
 
-func (s *Server) cfDomainsForConn() []string {
-	return s.cfBalancer.Domains(s.cfg.CFDomains, s.cfg.UseCFBalance)
+func (s *Server) cfDomainsForConn(dc int) []string {
+	return s.cfBalancer.DomainsForDC(dc, s.cfg.CFDomains, s.cfg.UseCFBalance)
 }
 
 func (s *Server) connectWSCF(ctx context.Context, dc int, isMedia bool, domains []string) (*wsbridge.Client, error) {

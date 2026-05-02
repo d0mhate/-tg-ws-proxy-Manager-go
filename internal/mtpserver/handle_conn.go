@@ -352,7 +352,7 @@ func (s *MTServer) webSocketDialOrder(hasDirect, hasCloudflare bool) []websocket
 func (s *MTServer) dialCloudflareWS(ctx context.Context, dc int) (*wsbridge.Client, error) {
 	attempts := make([]string, 0, len(s.cfg.CFDomains))
 	var lastErr error
-	for _, cfDomain := range s.cfDomainsForConn() {
+	for _, cfDomain := range s.cfDomainsForConn(dc) {
 		cfHost := cfWSHost(cfDomain, dc)
 		if s.cfg.Verbose {
 			s.agg.Printf("mtproto: CF dial dc=%d → %s", dc, config.MaskCFDomainForLog(cfHost))
