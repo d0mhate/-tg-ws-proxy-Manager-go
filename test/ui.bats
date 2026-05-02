@@ -30,7 +30,7 @@ setup() {
     export CF_PROXY_FIRST="0"
     export CF_BALANCE="1"
     export CF_DOMAIN=""
-    export CF_BUILTIN_DOMAINS="pclead.co.uk,offshor.co.uk,cakeisalie.co.uk,noskomnadzor.co.uk,lovetrue.co.uk,sorokdva.co.uk,pyatdesyatdva.co.uk,kartoshka.co.uk"
+    export CF_BUILTIN_DOMAINS_OBF='\160\143\154\145\141\144\056\143\157\056\165\153\054\157\146\146\163\150\157\162\056\143\157\056\165\153\054\143\141\153\145\151\163\141\154\151\145\056\143\157\056\165\153\054\156\157\163\153\157\155\156\141\144\172\157\162\056\143\157\056\165\153\054\154\157\166\145\164\162\165\145\056\143\157\056\165\153\054\163\157\162\157\153\144\166\141\056\143\157\056\165\153\054\160\171\141\164\144\145\163\171\141\164\144\166\141\056\143\157\056\165\153\054\153\141\162\164\157\163\150\153\141\056\143\157\056\165\153'
 
     export BIN_PATH="$TEST_DIR/tg-ws-proxy"
     export SOURCE_BIN="$TEST_DIR/source-bin"
@@ -104,7 +104,11 @@ socks5_proxy_link() {
 }
 
 cf_builtin_domains() {
-    printf "%s" "$CF_BUILTIN_DOMAINS"
+    if [ -n "${CF_BUILTIN_DOMAINS:-}" ]; then
+        printf "%s" "$CF_BUILTIN_DOMAINS"
+        return 0
+    fi
+    printf '%b' "${CF_BUILTIN_DOMAINS_OBF:-}"
 }
 
 normalize_cf_domain_list() {

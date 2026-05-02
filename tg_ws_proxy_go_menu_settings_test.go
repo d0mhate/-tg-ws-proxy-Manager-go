@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"tg-ws-proxy/internal/config"
 )
 
 func TestManagerConfigureDCIPMappingViaAdvancedMenu(t *testing.T) {
@@ -275,10 +277,13 @@ func TestManagerCheckCFDomainCanUseBuiltInPool(t *testing.T) {
 	if !strings.Contains(out, "source: built-in") ||
 		!strings.Contains(out, "current: built-in") ||
 		!strings.Contains(out, "kws1.<built-in>") ||
-		strings.Contains(out, "pclead.co.uk") ||
-		strings.Contains(out, "kartoshka.co.uk") ||
 		!strings.Contains(out, "Domains: all 8 alive") {
 		t.Fatalf("unexpected built-in cf domain check output:\n%s", out)
+	}
+	for _, domain := range config.BuiltinCFDomains() {
+		if strings.Contains(out, domain) {
+			t.Fatalf("did not expect built-in cf domains to be exposed in output: %s", out)
+		}
 	}
 }
 
