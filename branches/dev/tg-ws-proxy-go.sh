@@ -191,7 +191,13 @@ lan_ip() {
 }
 
 is_openwrt() {
-    [ -f "$OPENWRT_RELEASE_FILE" ] && grep -q "OpenWrt" "$OPENWRT_RELEASE_FILE" 2>/dev/null
+    [ -f "$OPENWRT_RELEASE_FILE" ] || return 1
+
+    if grep -q "OpenWrt" "$OPENWRT_RELEASE_FILE" 2>/dev/null; then
+        return 0
+    fi
+
+    grep -q "^DISTRIB_ARCH='" "$OPENWRT_RELEASE_FILE" 2>/dev/null
 }
 
 openwrt_arch() {
