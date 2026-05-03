@@ -42,6 +42,15 @@ setup() {
     [ "$status" -eq 0 ]
 }
 
+@test "is_openwrt true for OpenWrt forks with custom distrib id" {
+    cat > "$OPENWRT_RELEASE_FILE" <<'EOF'
+DISTRIB_ID='RouteRich'
+DISTRIB_ARCH='aarch64_cortex-a53'
+EOF
+    run is_openwrt
+    [ "$status" -eq 0 ]
+}
+
 @test "is_openwrt false" {
     rm -f "$OPENWRT_RELEASE_FILE"
     run is_openwrt
@@ -172,4 +181,25 @@ setup() {
     [[ "$output" == *"Release asset: resolved-bin"* ]]
     [[ "$output" == *"tmp need: 23456 KB"* ]]
     [[ "$output" == *"tmp free: 12345 KB"* ]]
+}
+
+@test "show_environment_checks reports OpenWrt for custom distrib id" {
+    cat > "$OPENWRT_RELEASE_FILE" <<'EOF'
+DISTRIB_ID='RouteRich'
+DISTRIB_ARCH='aarch64_cortex-a53'
+EOF
+
+    C_GREEN=""
+    C_RESET=""
+    C_YELLOW=""
+
+    resolved_binary_name() {
+        echo "tg-ws-proxy-openwrt-aarch64"
+    }
+
+    run show_environment_checks
+
+    [[ "$output" == *"OpenWrt detected"* ]]
+    [[ "$output" == *"Arch detected: aarch64_cortex-a53"* ]]
+    [[ "$output" == *"Release asset: tg-ws-proxy-openwrt-aarch64"* ]]
 }
