@@ -137,14 +137,17 @@ func TestManagerUpdatePromptsForManualMenuRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("menu update flow failed: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "WARNING:") {
-		t.Fatalf("expected warning prefix, got:\n%s", out)
+	if !strings.Contains(out, "Update installed:") {
+		t.Fatalf("expected update installed prefix, got:\n%s", out)
 	}
-	if !strings.Contains(out, "exit this menu and run tgm again to load the updated manager.") {
+	if !strings.Contains(out, "restart this menu to use the new manager.") {
 		t.Fatalf("expected manual restart message, got:\n%s", out)
 	}
-	if !strings.Contains(out, "The current menu session is still using the old script state.") {
-		t.Fatalf("expected stale-session warning after update, got:\n%s", out)
+	if !strings.Contains(out, "Nothing is broken. Press Ctrl+C, or press Enter a few times until the menu closes.") {
+		t.Fatalf("expected friendly stale-session note after update, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Then run tgm again.") {
+		t.Fatalf("expected rerun instruction after update, got:\n%s", out)
 	}
 }
 
