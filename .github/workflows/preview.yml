@@ -89,8 +89,6 @@ jobs:
           GOOS=linux GOARCH=riscv64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-linux-riscv64 ./cmd/tg-ws-proxy
           GOOS=linux GOARCH=arm GOARM=6 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-linux-armv6 ./cmd/tg-ws-proxy
           GOOS=linux GOARCH=loong64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-linux-loong64 ./cmd/tg-ws-proxy
-          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-windows-amd64.exe ./cmd/tg-ws-proxy
-          GOOS=windows GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-windows-arm64.exe ./cmd/tg-ws-proxy
           GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-darwin-amd64 ./cmd/tg-ws-proxy
           GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-darwin-arm64 ./cmd/tg-ws-proxy
           GOOS=freebsd GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o build/tg-ws-proxy-freebsd-amd64 ./cmd/tg-ws-proxy
@@ -144,8 +142,6 @@ jobs:
           cp build/tg-ws-proxy-linux-riscv64 "$target_dir/"
           cp build/tg-ws-proxy-linux-armv6 "$target_dir/"
           cp build/tg-ws-proxy-linux-loong64 "$target_dir/"
-          cp build/tg-ws-proxy-windows-amd64.exe "$target_dir/"
-          cp build/tg-ws-proxy-windows-arm64.exe "$target_dir/"
           cp build/tg-ws-proxy-darwin-amd64 "$target_dir/"
           cp build/tg-ws-proxy-darwin-arm64 "$target_dir/"
           cp build/tg-ws-proxy-darwin-universal "$target_dir/"

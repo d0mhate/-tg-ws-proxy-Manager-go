@@ -120,16 +120,6 @@ jobs:
             goos: linux
             goarch: loong64
             file_match: "LoongArch"
-          - asset: tg-ws-proxy-windows-amd64.exe
-            goos: windows
-            goarch: amd64
-            file_match: "PE32"
-            elf_check: false
-          - asset: tg-ws-proxy-windows-arm64.exe
-            goos: windows
-            goarch: arm64
-            file_match: "PE32"
-            elf_check: false
           - asset: tg-ws-proxy-darwin-amd64
             goos: darwin
             goarch: amd64
@@ -240,8 +230,6 @@ jobs:
           test -f build/tg-ws-proxy-linux-riscv64/tg-ws-proxy-linux-riscv64
           test -f build/tg-ws-proxy-linux-armv6/tg-ws-proxy-linux-armv6
           test -f build/tg-ws-proxy-linux-loong64/tg-ws-proxy-linux-loong64
-          test -f build/tg-ws-proxy-windows-amd64.exe/tg-ws-proxy-windows-amd64.exe
-          test -f build/tg-ws-proxy-windows-arm64.exe/tg-ws-proxy-windows-arm64.exe
           test -f build/tg-ws-proxy-darwin-amd64/tg-ws-proxy-darwin-amd64
           test -f build/tg-ws-proxy-darwin-arm64/tg-ws-proxy-darwin-arm64
           test -f build/tg-ws-proxy-darwin-universal/tg-ws-proxy-darwin-universal
