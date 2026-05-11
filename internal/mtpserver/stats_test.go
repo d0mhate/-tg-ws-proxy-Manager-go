@@ -1,6 +1,7 @@
 package mtpserver
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -140,5 +141,45 @@ func TestStatsRunStopsOnChannelClose(t *testing.T) {
 	}
 	if logLines == 0 {
 		t.Fatal("expected at least one stats log line before stop")
+	}
+}
+
+func TestStatsLogAggregatorStacksRepeatedLinesUntilWindow(t *testing.T) {
+	var logs []string
+	agg := newStatsLogAggregator(time.Minute, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	now := time.Unix(0, 0)
+
+	agg.Add("mtproto: stats dc=2 hits=1", now)
+	agg.Add("mtproto: stats dc=2 hits=1", now.Add(15*time.Second))
+	if len(logs) != 0 {
+		t.Fatalf("expected repeated stats to stay buffered before window, got %q", logs)
+	}
+
+	agg.Add("mtproto: stats dc=2 hits=1", now.Add(time.Minute))
+	if len(logs) != 1 || logs[0] != "3x: mtproto: stats dc=2 hits=1" {
+		t.Fatalf("unexpected aggregated stats output: %q", logs)
+	}
+}
+
+func TestStatsLogAggregatorFlushesOnChangedLine(t *testing.T) {
+	var logs []string
+	agg := newStatsLogAggregator(time.Minute, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	now := time.Unix(0, 0)
+
+	agg.Add("mtproto: stats dc=2 hits=1", now)
+	agg.Add("mtproto: stats dc=2 hits=1", now.Add(15*time.Second))
+	agg.Add("mtproto: stats dc=2 hits=2", now.Add(30*time.Second))
+	agg.Flush()
+
+	want := []string{
+		"2x: mtproto: stats dc=2 hits=1",
+		"mtproto: stats dc=2 hits=2",
+	}
+	if strings.Join(logs, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected changed stats output: got %q want %q", logs, want)
 	}
 }

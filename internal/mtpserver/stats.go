@@ -27,6 +27,8 @@ type statsCollector struct {
 	perDC map[int]dcStats
 }
 
+const statsAggregateWindow = 2 * time.Minute
+
 func newStatsCollector() *statsCollector {
 	return &statsCollector{
 		perDC: make(map[int]dcStats),
@@ -129,6 +131,9 @@ func (s *statsCollector) run(stop <-chan struct{}, cooldowns *routeCooldowns, in
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	agg := newStatsLogAggregator(statsAggregateWindow, logf)
+	defer agg.Flush()
+
 	for {
 		select {
 		case <-stop:
@@ -138,9 +143,63 @@ func (s *statsCollector) run(stop <-chan struct{}, cooldowns *routeCooldowns, in
 			if line == "" {
 				continue
 			}
-			logf("mtproto: stats %s", line)
+			agg.Add(fmt.Sprintf("mtproto: stats %s", line), time.Now())
 		}
 	}
+}
+
+type statsLogAggregator struct {
+	window time.Duration
+	logf   func(string, ...any)
+
+	msg     string
+	count   int
+	firstAt time.Time
+}
+
+func newStatsLogAggregator(window time.Duration, logf func(string, ...any)) *statsLogAggregator {
+	return &statsLogAggregator{
+		window: window,
+		logf:   logf,
+	}
+}
+
+func (a *statsLogAggregator) Add(msg string, now time.Time) {
+	if a == nil || a.logf == nil {
+		return
+	}
+	if a.count == 0 {
+		a.msg = msg
+		a.count = 1
+		a.firstAt = now
+		return
+	}
+	if msg != a.msg {
+		a.Flush()
+		a.msg = msg
+		a.count = 1
+		a.firstAt = now
+		return
+	}
+
+	a.count++
+	if a.window > 0 && !a.firstAt.IsZero() && now.Sub(a.firstAt) >= a.window {
+		a.Flush()
+	}
+}
+
+func (a *statsLogAggregator) Flush() {
+	if a == nil || a.logf == nil || a.count == 0 {
+		return
+	}
+	if a.count == 1 {
+		a.logf("%s", a.msg)
+	} else {
+		a.logf("%dx: %s", a.count, a.msg)
+	}
+	a.msg = ""
+	a.count = 0
+	a.firstAt = time.Time{}
 }
 
 func (s statsSnapshot) format() string {
