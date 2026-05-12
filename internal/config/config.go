@@ -30,6 +30,7 @@ type Config struct {
 	Username        string
 	Password        string
 	Verbose         bool
+	Quiet           bool
 	BufferKB        int
 	PoolSize        int
 	PoolMaxAge      time.Duration

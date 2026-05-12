@@ -254,6 +254,16 @@ func TestParseArgsRejectsUnknownMode(t *testing.T) {
 	}
 }
 
+func TestParseArgsQuietFlag(t *testing.T) {
+	pa, err := parseArgs([]string{"--quiet"})
+	if err != nil {
+		t.Fatalf("parseArgs returned error: %v", err)
+	}
+	if !pa.cfg.Quiet {
+		t.Fatal("expected --quiet to enable quiet logging")
+	}
+}
+
 func TestStartupSummaryIncludesCFBalanceForSocks5(t *testing.T) {
 	pa, err := parseArgs([]string{
 		"--verbose",

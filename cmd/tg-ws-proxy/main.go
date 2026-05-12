@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -80,6 +81,7 @@ func parseArgs(args []string) (parsedArgs, error) {
 	fs.StringVar(&cfg.Username, "username", cfg.Username, "SOCKS5 username auth")
 	fs.StringVar(&cfg.Password, "password", cfg.Password, "SOCKS5 password auth")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "enable verbose logging")
+	fs.BoolVar(&cfg.Quiet, "quiet", cfg.Quiet, "disable proxy logs")
 	fs.IntVar(&cfg.BufferKB, "buf-kb", cfg.BufferKB, "socket buffer size in KB")
 	fs.IntVar(&cfg.PoolSize, "pool-size", cfg.PoolSize, "number of pre-opened idle WebSocket connections per active DC bucket")
 	fs.DurationVar(&cfg.PoolMaxAge, "pool-max-age", cfg.PoolMaxAge, "maximum age of an idle pooled WebSocket connection before it is discarded")
@@ -427,7 +429,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	logger := log.New(os.Stdout, "tg-ws-proxy ", log.LstdFlags)
+	logOutput := io.Writer(os.Stdout)
+	if pa.cfg.Quiet {
+		logOutput = io.Discard
+	}
+	logger := log.New(logOutput, "tg-ws-proxy ", log.LstdFlags)
 	logger.Printf("binary path: %s", currentBinaryPath())
 	logger.Printf("%s", startupSummary(pa))
 

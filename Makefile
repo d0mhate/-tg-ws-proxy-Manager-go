@@ -29,6 +29,8 @@ CF_FIRST ?= $(CF_PROXY_FIRST)
 ifeq ($(strip $(value CF_BALANCE)),)
 CF_BALANCE := 0
 endif
+VERBOSE_FLAG := $(if $(filter 1,$(strip $(VERBOSE))),--verbose,)
+QUIET_FLAG := $(if $(filter 1,$(strip $(QUIET))),--quiet,)
 MT_PLAIN_SECRET ?= $(MT_SECRET)
 MT_DD_SECRET ?= dd$(MT_PLAIN_SECRET)
 MT_EE_DOMAIN_HEX ?= 676f6f676c652e636f6d
@@ -68,7 +70,8 @@ BIN_FLAGS = \
 	$(if $(CF_FIRST),--cf-proxy-first,) \
 	$(if $(CF_BALANCE),--cf-balance,) \
 	$(if $(CF_DOMAIN),--cf-domain $(CF_DOMAIN),) \
-	$(if $(VERBOSE),--verbose,)
+	$(VERBOSE_FLAG) \
+	$(QUIET_FLAG)
 
 .PHONY: help build bundle menu menu-safe menu-safe-clean start start-bg stop restart status run profile-pprof profile-pprof-leakcheck test test-go test-go-leak test-go-compile test-shell test-shell-verbose test-shell-ci-local test-shell-file fmt-shell lint-shell lint-md fmt-md clean install-git-hooks \
 	socks5-auth socks5-noauth socks5-auth-nocf socks5-noauth-nocf \
@@ -91,6 +94,7 @@ help:
 		'make restart      - manager restart' \
 		'make status       - manager status' \
 		'make run          - run binary directly without menu' \
+		'make run QUIET=1 - run binary directly without proxy logs' \
 		'make run PPROF_ADDR=127.0.0.1:6060 - run binary with pprof enabled' \
 		'make profile-pprof PPROF_ADDR=127.0.0.1:6060 STEPS=3 LABELS=baseline,load,after_restart - capture and compare pprof steps' \
 		'make profile-pprof PPROF_ADDR=127.0.0.1:6060 STEPS=5 LABELS=baseline,load,cooldown,restart,after_restart_cooldown STRICT_EXIT=1 - fail on likely leak candidate' \

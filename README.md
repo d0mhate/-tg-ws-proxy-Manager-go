@@ -155,6 +155,7 @@ Telegram или вывести QR-код через `16) Show QR code`.
 | `--username <NAME>` | пусто | Логин для SOCKS5 auth |
 | `--password <PASS>` | пусто | Пароль для SOCKS5 auth |
 | `--verbose` | `off` | Подробные логи |
+| `--quiet` | `off` | Не писать логи прокси в консоль |
 | `--buf-kb <KB>` | `256` | Размер буфера сокета |
 | `--pool-size <N>` | `4` | Размер пула заранее открытых WebSocket соединений |
 | `--pool-max-age <DURATION>` | `55s` | Максимальный возраст idle WebSocket в пуле |
@@ -178,6 +179,9 @@ Telegram или вывести QR-код через `16) Show QR code`.
 
 # SOCKS5 для устройств в локальной сети
 ./tg-ws-proxy --mode socks5 --host 0.0.0.0 --port 1080
+
+# SOCKS5 без вывода логов в консоль
+./tg-ws-proxy --mode socks5 --host 0.0.0.0 --port 1080 --quiet
 
 # SOCKS5 с логином и паролем
 ./tg-ws-proxy --mode socks5 --host 0.0.0.0 --port 1080 --username alice --password secret
