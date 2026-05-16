@@ -2703,10 +2703,12 @@ update_binary() {
         printf "\nLauncher:\n  %s\n" "$launcher_path"
     fi
     if [ "$COMMAND_MODE" = "0" ]; then
-        printf "\n%sWARNING:%s exit this menu and run %s again to load the updated manager.\n" \
-            "$C_RED" "$C_RESET" "$LAUNCHER_NAME"
-        printf "%sThe current menu session is still using the old script state.%s\n" \
-            "$C_RED" "$C_RESET"
+        printf "\n%sUpdate installed:%s restart this menu to use the new manager.\n" \
+            "$C_GREEN" "$C_RESET"
+        printf "%sNothing is broken. Press Ctrl+C, or press Enter a few times until the menu closes.%s\n" \
+            "$C_YELLOW" "$C_RESET"
+        printf "%sThen run %s again.%s\n" \
+            "$C_YELLOW" "$LAUNCHER_NAME" "$C_RESET"
         _restart_wait="${MENU_RESTART_WARNING_DELAY_SEC:-5}"
         case "$_restart_wait" in
             ''|*[!0-9]*)
