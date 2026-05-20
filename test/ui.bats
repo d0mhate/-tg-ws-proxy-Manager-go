@@ -389,6 +389,24 @@ pause() {
 # Header
 # --------------------------
 
+@test "menu_clear_screen_sequence clears visible screen and scrollback" {
+    expected="$(printf '\033[H\033[2J\033[3J')"
+
+    run menu_clear_screen_sequence
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "$expected" ]
+}
+
+@test "clear_menu_screen is silent outside interactive menu" {
+    COMMAND_MODE="1"
+
+    run clear_menu_screen
+
+    [ "$status" -eq 0 ]
+    [ "$output" = "" ]
+}
+
 @test "show_header uses installed version and shows update notice" {
     TEST_INSTALLED_VERSION_SET="1"
     TEST_INSTALLED_VERSION="1.0.0"

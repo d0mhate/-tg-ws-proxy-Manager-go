@@ -76,10 +76,24 @@ _header_box_line() {
         "$C_BLUE" "$C_RESET" "$2" "$inner" "$C_RESET" "" "$C_BLUE" "$C_RESET"
 }
 
+menu_clear_screen_sequence() {
+    printf '\033[H\033[2J\033[3J'
+}
+
+clear_menu_screen() {
+    [ "$COMMAND_MODE" = "0" ] || return 0
+    [ -t 1 ] || return 0
+    case "${TERM:-}" in
+        ""|dumb)
+            return 0
+            ;;
+    esac
+
+    menu_clear_screen_sequence
+}
+
 show_header() {
-    if [ "$COMMAND_MODE" = "0" ] && [ -t 1 ]; then
-        clear
-    fi
+    clear_menu_screen
     version="$(installed_version 2>/dev/null || true)"
     if [ -z "$version" ]; then
         version="$(persistent_installed_version 2>/dev/null || true)"
